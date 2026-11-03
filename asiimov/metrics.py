@@ -5,9 +5,10 @@ from .events import Event
 from .sim import TICKS_PER_DAY
 
 
-def icc1(groups: dict[int, list[float]]) -> float:
-    """One-way ICC(1): share of variance that is between agents (character) vs within (noise)."""
-    groups = {k: v for k, v in groups.items() if len(v) >= 2}
+def icc1(groups: dict[int, list[float]], min_k: int = 2) -> float:
+    """One-way ICC(1): share of variance that is between agents (character) vs within (noise).
+    Uses agents with at least min_k observations, truncated to a common k."""
+    groups = {k: v for k, v in groups.items() if len(v) >= max(2, min_k)}
     if len(groups) < 2:
         return float("nan")
     k = min(len(v) for v in groups.values())

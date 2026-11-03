@@ -21,3 +21,4 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
 ## Run
     python -m pytest -q
     python -m asiimov.run --agents 100 --days 7 --seed 1 --fire 3@1 --out runs/demo
+    python -m asiimov.scorecard --mind stub --out runs/scorecard-stub   # variety tests, plan/variety-scorecard.md
