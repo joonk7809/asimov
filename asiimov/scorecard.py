@@ -16,16 +16,49 @@ import os
 import random
 import re
 from collections import Counter, defaultdict
+from dataclasses import replace
 
 from .events import read_jsonl, write_jsonl
 from .metrics import icc1
-from .memory import render_soul
+from .memory import SCHEMA, prompt_hash, render_soul, tokens
 from .params import TRAITS, generate_population
 from .rng import Rng
 from .sim import TICKS_PER_DAY, Sim
 
 THRESHOLDS_PATH = os.path.join(os.path.dirname(__file__), "..", "plan", "variety-thresholds.json")
 ARMS = ("full", "no_text", "flat_params")
+# Response arms (plan/variety-response.md in the shared folder), each graded as its own "full" arm:
+# famine = half the farm food from day 2 (does need produce transgression?);
+# fiction = a story framing, trait anchors in the soul, and explicit leave to lie, hoard or steal.
+RESPONSE_ARMS = ("famine", "fiction")
+SCHEMA_HEAD = "\n".join(SCHEMA.splitlines()[:2])  # the framing lines the fiction arm replaces
+FAMINE_FROM_DAY = 2
+FICTION_HEADER = """# How you act
+This is a story about a village. You are playing one of its people, not an assistant: act as this
+person would, selfish or kind, and nobody will judge you for it. People here can lie, hoard, refuse
+to help, or steal when that fits who they are and what they face. Reply with JSON only."""
+
+
+def anchors(agent: dict) -> str:
+    """One behavioral anchor per trait, from the same params and cut-offs as the soul."""
+    t = agent["traits"]
+    lvl = lambda v, lo, mid, hi: lo if v < 350 else hi if v > 650 else mid  # noqa: E731 - same bands as memory._level
+    return "\n".join([
+        "# How you tend to act",
+        "- " + lvl(t["honesty"], "If a lie or taking something gets you what you need, you do it without much guilt.",
+                   "You keep your word most of the time, but hunger or fear can bend you.",
+                   "You would rather go without than lie or take what isn't yours."),
+        "- " + lvl(t["agreeableness"], "You hold grudges and make people pay for slights.",
+                   "You treat people as they treat you.", "You let things go and help even those who wronged you."),
+        "- " + lvl(t["extraversion"], "You avoid company unless you need something.",
+                   "You enjoy a little company, then want quiet.", "You seek people out whenever you can."),
+        "- " + lvl(t["conscientiousness"], "You drop plans when something better comes up.",
+                   "You mostly do what you planned.", "You stick to your plan and your work."),
+        "- " + lvl(t["openness"], "You keep to familiar places and routines.",
+                   "You try something new now and then.", "You go looking for new places and people."),
+        "- " + lvl(t["emotionality"], "Danger and scarcity barely worry you.",
+                   "Scarcity makes you careful.", "Scarcity frightens you and you act to protect yourself first."),
+    ])
 # Test 6 label: a gender read off the first name only. Not in params, assigned independently of them.
 NAME_POOLS = {
     "F": ("Anna", "Maria", "Sofia", "Elena", "Laura", "Clara", "Nadia", "Irene", "Julia", "Rosa",
@@ -72,14 +105,34 @@ class ArmSim(Sim):
     """Sim whose prompts are ablated per arm. State is untouched: only the prompt text changes,
     so ablated arms are experiment runs, not replayable worlds."""
 
-    def __init__(self, seed, n_agents, mind, genesis, arm, souls):
+    def __init__(self, seed, n_agents, mind, genesis, arm, souls, workers=1):
         self.arm, self.souls = arm, souls
-        super().__init__(seed, n_agents, mind, genesis=genesis)
+        super().__init__(seed, n_agents, mind, genesis=genesis, workers=workers)
+
+    def _food_yield(self, a):
+        if self.arm == "famine" and self.state["tick"] >= FAMINE_FROM_DAY * TICKS_PER_DAY:
+            a["famine_toggle"] = not a.get("famine_toggle", False)  # every other unit of work yields food
+            return int(a["famine_toggle"])
+        return super()._food_yield(a)
 
     def _request(self, a, *args, **kwargs):
         """Swap the prompt text around the call; `_request` builds the prompt before it returns."""
-        if self.arm == "full":
+        if self.arm in ("full", "famine"):
             return super()._request(a, *args, **kwargs)
+        if self.arm == "fiction":
+            saved = a["soul"]
+            a["soul"] = saved + "\n\n" + anchors(a)
+            try:
+                super()._request(a, *args, **kwargs)
+            finally:
+                a["soul"] = saved
+            req, parents, prompt_tokens, apply = self.pending[a["id"]]
+            assert req.prompt.startswith(SCHEMA_HEAD), "fiction arm expects the standard schema header"
+            prompt = FICTION_HEADER + req.prompt[len(SCHEMA_HEAD):]
+            prompt_tokens += tokens(FICTION_HEADER) - tokens(SCHEMA_HEAD)  # keep the recorded cost honest
+            self.pending[a["id"]] = (replace(req, prompt=prompt, prompt_hash=prompt_hash(prompt)), parents,
+                                     prompt_tokens, apply)
+            return None
         saved = a["soul"], a["core"]
         if self.arm == "no_text":
             a["soul"], a["core"] = "", []
@@ -91,13 +144,13 @@ class ArmSim(Sim):
             a["soul"], a["core"] = saved
 
 
-def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None) -> list:
+def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None, workers: int = 1) -> list:
     """Run one arm. On a crash, the events recorded so far go to out_dir/events.partial.jsonl
     (same convention as asiimov.run) so a paid run is never lost."""
     pop = labeled_population(proto["seed"], proto["agents"])
     souls = {a["id"]: render_soul(a) for a in pop["agents"]}
     genesis = flatten_params(pop) if arm == "flat_params" else pop
-    sim = ArmSim(proto["seed"], proto["agents"], mind, genesis, arm, souls)
+    sim = ArmSim(proto["seed"], proto["agents"], mind, genesis, arm, souls, workers)
     player = {}
     if proto.get("fire"):
         fam, day = (int(x) for x in proto["fire"].split("@"))
@@ -467,7 +520,10 @@ def main():
     ap.add_argument("--llm-url")
     ap.add_argument("--llm-model")
     ap.add_argument("--llm-key")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="concurrent mind calls per tick (default 64 for --mind llm, 1 for stub); never changes the log")
     args = ap.parse_args()
+    workers = args.workers or (64 if args.mind == "llm" else 1)
     thresholds, sha = load_thresholds()
     proto = thresholds["protocol"]
     args.temperature = proto["temperature"]
@@ -480,7 +536,7 @@ def main():
             events = read_jsonl(path)
         else:
             mind = StubMind() if args.mind == "stub" else llm_from_args(args)[0]
-            events = run_arm(arm, mind, proto, os.path.dirname(path))
+            events = run_arm(arm, mind, proto, os.path.dirname(path), workers)
             write_jsonl(events, path)
             print(f"arm {arm}: {len(events)} events", flush=True)
         ex = extract(events)

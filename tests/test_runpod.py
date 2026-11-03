@@ -38,3 +38,15 @@ def test_down_keeps_going_after_a_failed_delete_and_exits_nonzero(monkeypatch):
     with pytest.raises(SystemExit, match="a"):
         rp.down(SimpleNamespace(all=True, pod=None))
     assert deleted == ["b"]
+
+
+def test_ttl_cmd_is_a_background_prefix_carrying_the_terminate_script():
+    import base64
+    import subprocess
+    cmd = rp.ttl_cmd(1793750000)
+    assert cmd.startswith("(sleep $((1793750000 - $(date +%s)));") and cmd.rstrip().endswith("&")
+    script = base64.b64decode(cmd.split("echo ")[1].split(" |")[0]).decode()
+    assert script == rp.TTL_SCRIPT
+    compile(script, "ttl", "exec")
+    # Valid shell when followed by the server command it prefixes.
+    assert subprocess.run(["bash", "-n", "-c", cmd + "exec vllm serve x"]).returncode == 0
