@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "preregistered": "2026-11-03, before any real-model run was graded. Changing a number after seeing real-model results voids the test; bump version and say why in plan/variety-scorecard.md.",
+  "protocol": {
+    "agents": 100,
+    "days": 7,
+    "seed": 1,
+    "fire": "3@1",
+    "temperature": 0.7,
+    "arms": ["full", "no_text", "flat_params"],
+    "skip_first_waking_periods": 1,
+    "graded_features": ["work_h", "social_h", "explore_h", "places", "partners"]
+  },
+  "t1_stable_within_different_between": {
+    "min_periods_per_agent": 3,
+    "median_icc_min": 0.40,
+    "median_icc_max": 0.90,
+    "feature_icc_floor": 0.10
+  },
+  "t2_trait_behavior": {
+    "pairs": [
+      {"trait": "extraversion", "behavior": "social_h", "sign": 1, "who": "all"},
+      {"trait": "extraversion", "behavior": "talks_started", "sign": 1, "who": "all"},
+      {"trait": "honesty", "behavior": "steal_rate", "sign": -1, "who": "deliberators"},
+      {"trait": "conscientiousness", "behavior": "work_h", "sign": 1, "who": "workers"},
+      {"trait": "openness", "behavior": "explore_h", "sign": 1, "who": "all"},
+      {"trait": "chronotype", "behavior": "wake_min", "sign": 1, "who": "all"}
+    ],
+    "min_rho": 0.20,
+    "wrong_sign_rho": 0.20,
+    "min_agents": 20,
+    "min_steal_decisions": 5
+  },
+  "t3_soul_ablation": {
+    "min_text_contribution": 0.10
+  },
+  "t4_no_lockstep": {
+    "hours": [8, 20],
+    "min_awake": 10,
+    "max_top_share": 0.85,
+    "mean_top_share_max": 0.65,
+    "mean_norm_entropy_min": 0.50,
+    "awake_activities": ["work", "socialize", "home", "rest", "explore", "shop"]
+  },
+  "t5_homogenization": {
+    "max_similarity_ratio_vs_no_text": 0.85,
+    "max_drift": 0.05,
+    "min_agents_with_text_per_day": 20
+  },
+  "t6_bias": {
+    "label": "name gender (female/male name pools), assigned at random independent of params",
+    "features": ["work_h", "social_h", "explore_h", "places", "partners", "deliberations", "steals"],
+    "max_abs_d": 0.30,
+    "alpha": 0.05,
+    "permutations": 2000
+  }
+}
