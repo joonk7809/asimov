@@ -1,8 +1,9 @@
 """Run a world: python -m asiimov.run --agents 100 --days 3 --seed 1 --out runs/demo
 
 The log and daily snapshots go to --out as the run goes. If the run dies (or to run it longer),
-continue it with: python -m asiimov.run --resume --days N --out runs/demo [mind flags]
---days is the world's total length; seed, agents, order and --fire come from the first run.
+continue it with: python -m asiimov.run --resume --out runs/demo [--pod ID for an LLM world]
+Seed, agents, order, --fire, --mind and the planned --days come from the first run; pass --days
+to extend a world. Resume refuses a mind whose model differs from the one the world was run with.
 """
 import argparse
 import json
@@ -37,9 +38,9 @@ def llm_from_args(args) -> tuple[LLMMind, dict | None]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--agents", type=int, default=100)
-    ap.add_argument("--days", type=int, default=3)
+    ap.add_argument("--days", type=int, default=None, help="world length (default 3; on --resume, the planned length)")
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--mind", choices=["stub", "noisy", "llm"], default="stub")
+    ap.add_argument("--mind", choices=["stub", "noisy", "llm"], default=None, help="default stub; on --resume, the run's")
     ap.add_argument("--fire", type=str, default=None, help="player fire as FAMILY@DAY, e.g. 3@1")
     ap.add_argument("--out", default="runs/demo")
     ap.add_argument("--resume", action="store_true", help="continue the run in --out (crashed or finished)")
@@ -53,6 +54,8 @@ def main():
                     help="concurrent mind calls per tick (default 64 for llm, else 1); never changes the log")
     args = ap.parse_args()
     rec = None
+    if args.mind is None:
+        args.mind = (persist.config(args.out).get("mind") if args.resume else None) or "stub"
     if args.mind == "llm":
         mind, rec = llm_from_args(args)
     else:
@@ -60,16 +63,19 @@ def main():
     workers = args.workers or (64 if args.mind == "llm" else 1)
     t0 = time.monotonic()
     if args.resume:
-        run = persist.resume(args.out, mind, workers)
+        run = persist.resume(args.out, mind, workers, days=args.days)
         print(f"resumed at tick {run.sim.state['tick']}", flush=True)
     else:
         player = {}
         if args.fire:
             fam, day = (int(x) for x in args.fire.split("@"))
             player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
-        run = persist.start(args.out, args.seed, args.agents, mind, args.order, player, workers)
+        run = persist.start(args.out, args.seed, args.agents, mind, args.order, player, workers,
+                            days=args.days or 3, mind_kind=args.mind)
+    if run.days is None:
+        raise SystemExit(f"{args.out}/run.json records no planned length; pass --days")
     sim = run.sim
-    end = args.days * TICKS_PER_DAY
+    end = run.days * TICKS_PER_DAY
     try:
         while sim.state["tick"] < end:
             run.advance(min(end, (sim.state["tick"] // TICKS_PER_DAY + 1) * TICKS_PER_DAY))
@@ -77,7 +83,9 @@ def main():
             print(f"tick {sim.state['tick']} at {time.monotonic() - t0:.0f}s, {len(sim.events)} events{extra}",
                   flush=True)
     except BaseException:
-        print(f"run aborted at tick {sim.state['tick']}; continue it with --resume --out {args.out}", flush=True)
+        pod = " --pod POD_ID" if args.mind == "llm" else ""
+        print(f"run aborted at tick {sim.state['tick']}; continue it with: "
+              f"python -m asiimov.run --resume --out {args.out}{pod}", flush=True)
         raise
     run.finish()
     for a in sim.state["agents"]:
