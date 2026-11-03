@@ -9,7 +9,7 @@ from .memory import render_files
 from .metrics import summarize
 from .llm import LLMMind
 from .minds import NoisyMind, StubMind
-from .sim import TICKS_PER_DAY, Sim
+from .sim import ORDERS, TICKS_PER_DAY, Sim
 
 
 POD_DIR = os.path.join(os.path.dirname(__file__), "..", "runs", "pods")
@@ -42,13 +42,17 @@ def main():
     ap.add_argument("--llm-model")
     ap.add_argument("--llm-key")
     ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument("--order", choices=ORDERS, default="id", help="who acts first when agents contest")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="concurrent mind calls per tick (default 64 for llm, else 1); never changes the log")
     args = ap.parse_args()
     rec = None
     if args.mind == "llm":
         mind, rec = llm_from_args(args)
     else:
         mind = StubMind() if args.mind == "stub" else NoisyMind()
-    sim = Sim(args.seed, args.agents, mind)
+    workers = args.workers or (64 if args.mind == "llm" else 1)
+    sim = Sim(args.seed, args.agents, mind, order=args.order, workers=workers)
     t0 = time.monotonic()
     player = {}
     if args.fire:

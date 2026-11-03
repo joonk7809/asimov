@@ -6,6 +6,7 @@ It is NOT the product's mind; it exists to exercise the pipeline and as a no-LLM
 """
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 
@@ -89,22 +90,40 @@ class NoisyMind(StubMind):
 
 
 class ReplayMind:
-    """Serves recorded outputs in order and refuses any request that doesn't match the record."""
+    """Serves recorded outputs by (tick, agent) and refuses any request that doesn't match the record.
+
+    Keyed, not sequential: requests are asked in agent order but committed in the world's
+    acting order, and an agent asks at most once per tick.
+    """
 
     def __init__(self, mind_events: list):
-        self.queue = list(mind_events)
-        self.pos = 0
+        self.record = {}
+        for ev in mind_events:
+            if (ev.tick, ev.actor) in self.record:
+                raise ReplayDivergence(f"two mind events for agent {ev.actor} at tick {ev.tick}")
+            self.record[(ev.tick, ev.actor)] = ev
 
     def decide(self, req: MindRequest) -> MindReply:
-        if self.pos >= len(self.queue):
+        ev = self.record.pop((req.tick, req.agent_id), None)
+        if ev is None:
             raise ReplayDivergence(f"unrecorded mind request at tick {req.tick} for agent {req.agent_id}")
-        ev = self.queue[self.pos]
-        self.pos += 1
-        expected = (ev.data["kind"], ev.actor, ev.mind["prompt_hash"])
-        got = (req.kind, req.agent_id, req.prompt_hash)
+        expected = (ev.data["kind"], ev.mind["prompt_hash"])
+        got = (req.kind, req.prompt_hash)
         if expected != got:
-            raise ReplayDivergence(f"mind request mismatch at tick {req.tick}: expected {expected}, got {got}")
+            raise ReplayDivergence(f"mind request mismatch at tick {req.tick} for agent {req.agent_id}: "
+                                   f"expected {expected}, got {got}")
         return MindReply(ev.mind["raw_output"], ev.mind["model"], ev.mind["sampling"])
+
+
+def dispatch(mind, reqs: list[MindRequest], workers: int = 1) -> list[MindReply]:
+    """Ask the mind every request of a tick; replies come back in request order, however they arrive.
+
+    workers > 1 calls the mind from that many threads, so the mind must be thread-safe (LLMMind is).
+    """
+    if workers <= 1 or len(reqs) <= 1:
+        return [mind.decide(r) for r in reqs]
+    with ThreadPoolExecutor(min(workers, len(reqs))) as ex:
+        return list(ex.map(mind.decide, reqs))
 
 
 class ForbiddenMind:
