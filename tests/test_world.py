@@ -109,3 +109,23 @@ def test_memory_files_and_prompt_budgets():
         _, counts = assemble_prompt(a, s.state, "deliberate", "now")
         for name, n in counts.items():
             assert n <= SECTION_BUDGETS[name] + 1
+
+
+def test_aborted_run_keeps_its_recorded_events(tmp_path, monkeypatch):
+    """A paid run that dies mid-way (here: the mind fails on day 2) must not lose the log."""
+    import sys
+
+    from asiimov import run as run_mod
+
+    class Dying(StubMind):
+        def decide(self, req):
+            if req.tick >= 2 * TICKS_PER_DAY:
+                raise RuntimeError("LLM server unreachable")
+            return super().decide(req)
+
+    monkeypatch.setattr(run_mod, "StubMind", Dying)
+    monkeypatch.setattr(sys, "argv", ["run", "--agents", "10", "--days", "4", "--out", str(tmp_path)])
+    with pytest.raises(RuntimeError):
+        run_mod.main()
+    events = read_jsonl(str(tmp_path / "events.partial.jsonl"))
+    assert events[0].kind == "genesis" and events[-1].tick >= 2 * TICKS_PER_DAY - 1
