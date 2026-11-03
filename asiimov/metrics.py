@@ -72,7 +72,10 @@ def summarize(events: list[Event], activity: dict, n_agents: int) -> dict:
                 plan = json.loads(e.mind["raw_output"]).get("plan", [])
             except Exception:
                 plan = []
-            hrs = sum(b["end_h"] - b["start_h"] for b in plan if b.get("activity") == "work")
+            plan = plan if isinstance(plan, list) else []
+            hrs = sum(b["end_h"] - b["start_h"] for b in plan if isinstance(b, dict)
+                      and b.get("activity") == "work" and isinstance(b.get("start_h"), int)
+                      and isinstance(b.get("end_h"), int) and b["end_h"] > b["start_h"])
             work[e.actor][e.tick // TICKS_PER_DAY] += hrs
     work_groups = {a: list(d.values()) for a, d in work.items()}
 
