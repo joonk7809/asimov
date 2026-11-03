@@ -119,10 +119,13 @@ class Sim:
 
     def _situation(self, a: dict, view: dict) -> str:
         m = (self.state["tick"] % TICKS_PER_DAY) * 10
-        who = ", ".join(f"#{p['id']}" for p in view["present"]) or "nobody"
+        who = ", ".join(f"#{p['id']} ({p['role']})" for p in view["present"]) or "nobody"
         s = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
              f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
              f"Here: {who}.")
+        agents = self.state["agents"]
+        kin = ", ".join(f"{agents[k['id']]['name']} (#{k['id']})" for k in view["kin"])
+        s += f" Your family: {kin or 'none'}."
         if "market_food" in view:
             s += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
         return s
