@@ -53,15 +53,17 @@ u.urlopen(u.Request("https://api.runpod.io/graphql?api_key=" + os.environ["RUNPO
 """
 
 
-def ttl_cmd(secs: int) -> str:
-    """Shell prefix for dockerStartCmd: background loop that terminates the pod after secs."""
+def ttl_cmd(expires: int) -> str:
+    """Shell prefix for dockerStartCmd: background loop that terminates the pod at epoch `expires`.
+    An absolute deadline, so a container restart doesn't reset the clock; past it, it fires at once."""
     b64 = base64.b64encode(TTL_SCRIPT.encode()).decode()  # base64: no shell or JSON quoting to get wrong
-    return f"(sleep {secs}; while true; do echo {b64} | base64 -d | python3; sleep 300; done) & "
+    return f"(sleep $(({expires} - $(date +%s))); while true; do echo {b64} | base64 -d | python3; sleep 300; done) & "
 
 
 def up(args):
     key = secrets.token_urlsafe(24)
-    cmd = ttl_cmd(int(args.ttl_hours * 3600)) + (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
+    expires = int(time.time() + args.ttl_hours * 3600)
+    cmd = ttl_cmd(expires) + (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
            f"--max-model-len {args.max_len} --gpu-memory-utilization 0.92 --enable-prefix-caching "
            f"--served-model-name {args.model}")
     body = {
@@ -83,7 +85,7 @@ def up(args):
     rec = {"id": pod["id"], "model": args.model, "api_key": key, "created": time.time(),
            "url": f"https://{pod['id']}-8000.proxy.runpod.net", "cost_per_hr": pod.get("costPerHr"),
            "gpu": (pod.get("machine") or {}).get("gpuTypeId") or pod.get("gpu"),
-           "expires": time.time() + args.ttl_hours * 3600}
+           "expires": expires}
     with open(os.path.join(POD_DIR, f"{pod['id']}.json"), "w") as f:
         json.dump(rec, f, indent=2)
     print(json.dumps({k: v for k, v in rec.items() if k != "api_key"}, indent=2))
@@ -142,7 +144,7 @@ def main():
     p.add_argument("--gpu", nargs="*")
     p.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])
     p.add_argument("--max-len", type=int, default=8192)
-    p.add_argument("--ttl-hours", type=float, default=6.0, help="pod deletes itself after this long")
+    p.add_argument("--ttl-hours", type=float, default=6.0, help="pod terminates itself this long after launch; size it to the planned run")
     p.set_defaults(fn=up)
     p = sub.add_parser("wait")
     p.add_argument("pod")
