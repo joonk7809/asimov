@@ -13,6 +13,14 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
   and its causal `parents`. No silent state edits.
 - Simulation arithmetic is integer-only; randomness goes through `Rng.draw(stream, ...)` so it is
   recomputable from the log.
+- A tick collects mind requests, then commits replies in `Sim._order` (the one place that decides who
+  acts first; `--order id|shuffle`). Never apply a reply where it is requested: concurrency must not
+  change the log.
+- A complete log starts with `genesis` (naming `ENGINE_VERSION`) and ends with `end`. Bump
+  `ENGINE_VERSION` and the golden hash in `tests/test_world.py` whenever a change alters the log
+  for the same inputs.
+- Runs persist as they go (`asiimov/persist.py`): resuming a crashed run must write the same bytes
+  an uninterrupted run writes. `tests/test_persist.py` enforces this.
 - Mind outputs are recorded verbatim. `replay()` must reproduce the log and final hash without
   calling any model. `tests/test_world.py` enforces this; keep it green.
 - `StubMind` and `NoisyMind` are stand-ins for the GPU-served model, not the product's minds.
@@ -22,3 +30,5 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
     pip install pytest hypothesis
     python -m pytest -q
     python -m asiimov.run --agents 100 --days 7 --seed 1 --fire 3@1 --out runs/demo
+    python -m asiimov.run --resume --days 10 --out runs/demo   # continue after a crash, or run longer
+    python -m asiimov.scorecard --mind stub --out runs/scorecard-stub   # variety tests, plan/variety-scorecard.md

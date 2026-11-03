@@ -1,15 +1,20 @@
-"""Run a world: python -m asiimov.run --agents 100 --days 3 --seed 1 --out runs/demo"""
+"""Run a world: python -m asiimov.run --agents 100 --days 3 --seed 1 --out runs/demo
+
+The log and daily snapshots go to --out as the run goes. If the run dies (or to run it longer),
+continue it with: python -m asiimov.run --resume --days N --out runs/demo [mind flags]
+--days is the world's total length; seed, agents, order and --fire come from the first run.
+"""
 import argparse
 import json
 import os
 import time
 
-from .events import write_jsonl
+from . import persist
 from .memory import render_files
 from .metrics import summarize
 from .llm import LLMMind
 from .minds import NoisyMind, StubMind
-from .sim import TICKS_PER_DAY, Sim
+from .sim import ORDERS, TICKS_PER_DAY
 
 
 POD_DIR = os.path.join(os.path.dirname(__file__), "..", "runs", "pods")
@@ -37,43 +42,51 @@ def main():
     ap.add_argument("--mind", choices=["stub", "noisy", "llm"], default="stub")
     ap.add_argument("--fire", type=str, default=None, help="player fire as FAMILY@DAY, e.g. 3@1")
     ap.add_argument("--out", default="runs/demo")
+    ap.add_argument("--resume", action="store_true", help="continue the run in --out (crashed or finished)")
     ap.add_argument("--pod", help="pod id from scripts/runpod_pod.py (url, model and key)")
     ap.add_argument("--llm-url")
     ap.add_argument("--llm-model")
     ap.add_argument("--llm-key")
     ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument("--order", choices=ORDERS, default="id", help="who acts first when agents contest")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="concurrent mind calls per tick (default 64 for llm, else 1); never changes the log")
     args = ap.parse_args()
     rec = None
     if args.mind == "llm":
         mind, rec = llm_from_args(args)
     else:
         mind = StubMind() if args.mind == "stub" else NoisyMind()
-    sim = Sim(args.seed, args.agents, mind)
+    workers = args.workers or (64 if args.mind == "llm" else 1)
     t0 = time.monotonic()
-    player = {}
-    if args.fire:
-        fam, day = (int(x) for x in args.fire.split("@"))
-        player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
-    os.makedirs(args.out, exist_ok=True)
+    if args.resume:
+        run = persist.resume(args.out, mind, workers)
+        print(f"resumed at tick {run.sim.state['tick']}", flush=True)
+    else:
+        player = {}
+        if args.fire:
+            fam, day = (int(x) for x in args.fire.split("@"))
+            player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
+        run = persist.start(args.out, args.seed, args.agents, mind, args.order, player, workers)
+    sim = run.sim
+    end = args.days * TICKS_PER_DAY
     try:
-        for day in range(args.days):
-            sim.run(1, player)
+        while sim.state["tick"] < end:
+            run.advance(min(end, (sim.state["tick"] // TICKS_PER_DAY + 1) * TICKS_PER_DAY))
             extra = f", model wall {mind.stats().get('wall_s_in_model', 0)}s" if args.mind == "llm" else ""
-            print(f"day {day} done at {time.monotonic() - t0:.0f}s, {len(sim.events)} events{extra}", flush=True)
+            print(f"tick {sim.state['tick']} at {time.monotonic() - t0:.0f}s, {len(sim.events)} events{extra}",
+                  flush=True)
     except BaseException:
-        # A paid LLM run that dies mid-way (server gone, Ctrl-C) keeps every recorded mind output.
-        # The last tick may be incomplete, so this file is for inspection, not for replay().
-        write_jsonl(sim.events, os.path.join(args.out, "events.partial.jsonl"))
-        print(f"run aborted at tick {sim.state['tick']}; wrote events.partial.jsonl", flush=True)
+        print(f"run aborted at tick {sim.state['tick']}; continue it with --resume --out {args.out}", flush=True)
         raise
-    write_jsonl(sim.events, os.path.join(args.out, "events.jsonl"))
+    run.finish()
     for a in sim.state["agents"]:
         d = os.path.join(args.out, "agents", f"{a['id']:03d}")
         os.makedirs(d, exist_ok=True)
         for name, text in render_files(a, sim.state).items():
             with open(os.path.join(d, name), "w") as f:
                 f.write(text + "\n")
-    summary = summarize(sim.events, sim.metrics["activity"], args.agents)
+    summary = summarize(sim.events, sim.metrics["activity"], len(sim.state["agents"]))
     summary["final_hash"] = sim.state_hash()
     summary["wall_s"] = round(time.monotonic() - t0, 1)
     if args.mind == "llm":

@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -8,7 +9,7 @@ from asiimov.metrics import icc1, summarize
 from asiimov.minds import NoisyMind, ReplayDivergence, StubMind
 from asiimov.replay import replay
 from asiimov.rng import Rng
-from asiimov.sim import TICKS_PER_DAY, Sim
+from asiimov.sim import ENGINE_VERSION, TICKS_PER_DAY, Sim
 
 FIRE = {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]}
 
@@ -16,6 +17,7 @@ FIRE = {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]}
 def run(mind, agents=30, days=2, seed=7, player=None):
     sim = Sim(seed, agents, mind)
     sim.run(days, player or {})
+    sim.finish()
     return sim
 
 
@@ -109,3 +111,46 @@ def test_memory_files_and_prompt_budgets():
         _, counts = assemble_prompt(a, s.state, "deliberate", "now")
         for name, n in counts.items():
             assert n <= SECTION_BUDGETS[name] + 1
+
+
+def test_aborted_run_keeps_its_recorded_events(tmp_path, monkeypatch):
+    """A paid run that dies mid-way (here: the mind fails on day 2) must not lose the log, and
+    --resume must finish it with exactly the log an uninterrupted run writes."""
+    import sys
+
+    from asiimov import run as run_mod
+
+    class Dying(StubMind):
+        def decide(self, req):
+            if req.tick >= 2 * TICKS_PER_DAY:
+                raise RuntimeError("LLM server unreachable")
+            return super().decide(req)
+
+    args = ["run", "--agents", "10", "--days", "4", "--fire", "1@1"]
+    monkeypatch.setattr(run_mod, "StubMind", Dying)
+    monkeypatch.setattr(sys, "argv", args + ["--out", str(tmp_path / "a")])
+    with pytest.raises(RuntimeError):
+        run_mod.main()
+    events = read_jsonl(str(tmp_path / "a" / "events.jsonl"))
+    assert events[0].kind == "genesis" and events[-1].tick == 2 * TICKS_PER_DAY - 1
+
+    monkeypatch.setattr(run_mod, "StubMind", StubMind)
+    monkeypatch.setattr(sys, "argv", ["run", "--resume", "--days", "4", "--out", str(tmp_path / "a")])
+    run_mod.main()
+    monkeypatch.setattr(sys, "argv", args + ["--out", str(tmp_path / "b")])
+    run_mod.main()
+    a, b = ((tmp_path / d / "events.jsonl").read_bytes() for d in "ab")
+    assert a == b
+    assert replay(read_jsonl(str(tmp_path / "a" / "events.jsonl"))).state_hash() == \
+        json.loads((tmp_path / "b" / "metrics.json").read_text())["final_hash"]
+
+
+# sha256 of a fixed world's log, per engine version. If this fails, the rules or the log format changed:
+# bump ENGINE_VERSION (old logs then refuse to replay) and record the new hash here.
+GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b"}
+
+
+def test_log_changes_bump_the_engine_version():
+    s = run(StubMind(), agents=20, days=2, seed=3, player=FIRE)
+    digest = hashlib.sha256("".join(e.to_json() + "\n" for e in s.events).encode()).hexdigest()
+    assert GOLDEN.get(ENGINE_VERSION) == digest, f"engine {ENGINE_VERSION} log hash is now {digest}"

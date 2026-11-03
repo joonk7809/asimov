@@ -2,24 +2,28 @@
 from collections import defaultdict
 
 from .events import Event
-from .minds import ReplayMind
-from .sim import TICKS_PER_DAY, Sim
+from .minds import ReplayDivergence, ReplayMind
+from .sim import ENGINE_VERSION, Sim
 
 
 def replay(events: list[Event]) -> Sim:
-    genesis = events[0]
+    genesis, end = events[0], events[-1]
     assert genesis.kind == "genesis"
+    engine = genesis.data.get("engine")
+    if engine != ENGINE_VERSION:
+        raise ReplayDivergence(f"log was written by engine {engine}, this is engine {ENGINE_VERSION}")
+    if end.kind != "end":
+        raise ReplayDivergence("log has no end event: the run stopped mid-way; resume it (asiimov.run --resume)")
     pop = genesis.data["population"]
     mind_events = [e for e in events if e.origin == "mind"]
     player = defaultdict(list)
     for e in events:
         if e.origin == "player":
             player[e.tick].append({"kind": e.kind, **e.data})
-    last_tick = events[-1].tick
-    sim = Sim(genesis.data["seed"], len(pop["agents"]), ReplayMind(mind_events), genesis=pop, expected=events)
-    days = (last_tick + 1) // TICKS_PER_DAY
-    sim.run(days, player)
+    sim = Sim(genesis.data["seed"], len(pop["agents"]), ReplayMind(mind_events), genesis=pop, expected=events,
+              order=genesis.data["order"])
+    sim.run_until(end.tick, player)
+    sim.finish()
     if len(sim.events) != len(events):
-        from .minds import ReplayDivergence
         raise ReplayDivergence(f"replay produced {len(sim.events)} events, log has {len(events)}")
     return sim
