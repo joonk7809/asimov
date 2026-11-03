@@ -76,18 +76,26 @@ class ArmSim(Sim):
         self.arm, self.souls = arm, souls
         super().__init__(seed, n_agents, mind, genesis=genesis)
 
-    def _ask(self, a, kind, situation, view, parents):
+    def _ablated(self, method, a, *args, **kwargs):
         if self.arm == "full":
-            return super()._ask(a, kind, situation, view, parents)
+            return method(self, a, *args, **kwargs)
         saved = a["soul"], a["core"]
         if self.arm == "no_text":
             a["soul"], a["core"] = "", []
         else:  # flat_params: code sees median params, the prompt keeps the agent's real soul
             a["soul"] = self.souls[a["id"]]
         try:
-            return super()._ask(a, kind, situation, view, parents)
+            return method(self, a, *args, **kwargs)
         finally:
             a["soul"], a["core"] = saved
+
+
+# Wrap the Sim method that assembles a mind prompt from agent state: `_ask` today, `_request` once
+# the two-phase tick lands. Both build the prompt synchronously, so swapping text around the call works.
+_PROMPT_METHODS = [m for m in ("_ask", "_request") if hasattr(Sim, m)]
+assert len(_PROMPT_METHODS) == 1, f"expected one prompt-building Sim method, found {_PROMPT_METHODS}"
+setattr(ArmSim, _PROMPT_METHODS[0],
+        lambda self, a, *args, _m=getattr(Sim, _PROMPT_METHODS[0]), **kw: self._ablated(_m, a, *args, **kw))
 
 
 def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None) -> list:
