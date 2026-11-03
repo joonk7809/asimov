@@ -69,3 +69,28 @@ def test_schemas_accept_stub_outputs():
     stub = StubMind()
     for req in collect_prompts(agents=30, days=2, seed=3):
         jsonschema.validate(json.loads(stub.decide(req).raw_output), SCHEMAS[req.kind])
+
+
+def test_llm_mind_retries_a_200_that_is_not_a_completion(monkeypatch):
+    """A proxy page or error JSON with status 200 must be retried, not crash the world mid-run."""
+    import asiimov.llm as llm
+    replies = iter([b"<html>502</html>", b'{"error": "loading"}', json.dumps(
+        {"model": "m", "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]}).encode()])
+
+    class Resp:
+        def __init__(self, data):
+            self.data = data
+
+        def read(self):
+            return self.data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda req, timeout: Resp(next(replies)))
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    out = LLMMind("http://x", "m", retries=3).post("/v1/chat/completions", {})
+    assert out["choices"][0]["message"]["content"] == "{}"

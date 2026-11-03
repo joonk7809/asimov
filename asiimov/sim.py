@@ -28,6 +28,11 @@ def _clamp(v, lo=0, hi=1000):
     return max(lo, min(hi, v))
 
 
+def _is_int(v) -> bool:
+    # JSON true/false parse to bool, which Python treats as int; a mind's hour or id never is one.
+    return type(v) is int
+
+
 class Sim:
     def __init__(self, seed: int, n_agents: int, mind, genesis: dict | None = None,
                  expected: list[Event] | None = None):
@@ -86,6 +91,8 @@ class Sim:
     def _ask(self, a: dict, kind: str, situation: str, view: dict, parents) -> tuple[int, dict | None]:
         prompt, counts = assemble_prompt(a, self.state, kind, situation)
         ph = prompt_hash(prompt)
+        # The mind gets a copy: whatever it does to the view must not reach world state.
+        view = json.loads(json.dumps(view))
         reply = self.mind.decide(MindRequest(kind, a["id"], self.state["tick"], prompt, ph, view))
         eid = self._emit(f"mind_{kind}", "mind", a["id"], {"kind": kind}, parents, mind={
             "model": reply.model, "prompt_hash": ph, "prompt_tokens": sum(counts.values()),
@@ -95,7 +102,7 @@ class Sim:
             out = json.loads(reply.raw_output)
             if not isinstance(out, dict):
                 out = None
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):  # JSONDecodeError, or nesting deep enough to blow the stack
             out = None
         return eid, out
 
@@ -204,7 +211,7 @@ class Sim:
         raw_plan = out.get("plan") if out else None
         for b in raw_plan if isinstance(raw_plan, list) else []:
             ok = (isinstance(b, dict) and b.get("activity") in ACTIVITIES
-                  and isinstance(b.get("start_h"), int) and isinstance(b.get("end_h"), int)
+                  and _is_int(b.get("start_h")) and _is_int(b.get("end_h"))
                   and 0 <= b["start_h"] < b["end_h"] <= 24)
             if ok:
                 blocks.append({"activity": b["activity"], "start_h": b["start_h"], "end_h": b["end_h"]})
@@ -306,7 +313,7 @@ class Sim:
         parents = [a["last_food_loss_event"]] if a["last_food_loss_event"] is not None else []
         view = self._view(a, occupancy)
         eid, out = self._ask(a, "deliberate", self._situation(a, view), view, parents)
-        self._resolve(a, out, eid, occupancy)
+        self._resolve(a, out, eid)
 
     # ------------------------------------------------------------------ actions -> receipts
     def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None):
@@ -314,7 +321,7 @@ class Sim:
         data.update(extra or {})
         return self._emit("receipt", origin, a["id"], data, [eid])
 
-    def _resolve(self, a: dict, out: dict | None, eid: int, occupancy: dict):
+    def _resolve(self, a: dict, out: dict | None, eid: int):
         agents = self.state["agents"]
         action = (out or {}).get("action")
         target = (out or {}).get("target")
@@ -333,11 +340,12 @@ class Sim:
             a["cooldown_until"] = self.state["tick"] + 1
             return self._receipt(a, eid, action, True, "heading to market")
         if action in ("steal", "ask_kin"):
-            if not isinstance(target, int) or not 0 <= target < len(agents) or target == a["id"]:
+            if not _is_int(target) or not 0 <= target < len(agents) or target == a["id"]:
                 return self._receipt(a, eid, action, False, "no such person")
             t = agents[target]
             if action == "steal":
-                if target not in occupancy.get(a["place"], []):
+                # Live places, not the tick-start occupancy: the target may already have moved this tick.
+                if t["place"] != a["place"]:
                     return self._receipt(a, eid, action, False, "target not here")
                 if t["inv"]["food"] <= 0:
                     return self._receipt(a, eid, action, False, "target has no food")
@@ -355,11 +363,13 @@ class Sim:
                 a["inv"]["food"] += 1
                 self._note(a["id"], f"{t['name']} gave me food")
                 self._note(t["id"], f"gave food to {a['name']}")
-                self._rel(a, t["id"])["affinity"] += 50
+                r = self._rel(a, t["id"])
+                r["affinity"] = min(1000, r["affinity"] + 50)
                 return self._receipt(a, eid, action, True, "kin gave food", "chance",
                                      {"stream": stream, "index": idx, "roll": roll, "limit": limit})
             self._note(a["id"], f"{t['name']} refused to share food")
-            self._rel(a, t["id"])["affinity"] -= 50
+            r = self._rel(a, t["id"])
+            r["affinity"] = max(-1000, r["affinity"] - 50)
             return self._receipt(a, eid, action, False, "kin refused", "chance",
                                  {"stream": stream, "index": idx, "roll": roll, "limit": limit})
         if action == "wait":

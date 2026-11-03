@@ -19,5 +19,6 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
   Don't tune game behavior to them.
 
 ## Run
+    pip install pytest hypothesis
     python -m pytest -q
     python -m asiimov.run --agents 100 --days 7 --seed 1 --fire 3@1 --out runs/demo

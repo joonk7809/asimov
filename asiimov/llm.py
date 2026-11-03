@@ -5,6 +5,7 @@ records the raw output verbatim, so replay never needs the model again. Output s
 enforced server-side with a JSON schema per request kind (vLLM structured outputs); the
 world still validates every field and issues receipts, because a schema can't check facts.
 """
+import http.client
 import json
 import time
 import urllib.error
@@ -60,7 +61,8 @@ class LLMMind:
             "model": self.model,
             "messages": [{"role": "user", "content": req.prompt}],
             "temperature": self.temperature, "top_p": self.top_p, "max_tokens": self.max_tokens,
-            # Per-request seed from the prompt: sampled, but stable for an identical prompt on the same server.
+            # Per-request seed from the prompt. vLLM does not promise identical samples across different
+            # batch compositions, so this is not a reproducibility guarantee; replay uses the recording.
             "seed": int(req.prompt_hash[:8], 16),
             # Qwen3 hybrid models: no <think> block; deliberation is the answer itself.
             "chat_template_kwargs": {"enable_thinking": False},
@@ -80,8 +82,12 @@ class LLMMind:
             try:
                 r = urllib.request.Request(self.base_url + path, data=data, headers=headers)
                 with urllib.request.urlopen(r, timeout=self.timeout) as resp:
-                    return json.loads(resp.read())
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                    out = json.loads(resp.read())
+                if not isinstance(out, dict) or not out.get("choices"):
+                    raise ValueError(f"no choices in server reply: {str(out)[:200]}")
+                return out
+            # HTTPException: truncated body (IncompleteRead). ValueError: a 200 whose body isn't a completion.
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, ValueError) as e:
                 if isinstance(e, urllib.error.HTTPError) and 400 <= e.code < 500 and e.code != 429:
                     raise RuntimeError(f"LLM server rejected request: {e.code} {e.read()[:500]!r}") from e
                 last = e

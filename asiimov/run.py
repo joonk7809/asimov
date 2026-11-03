@@ -54,11 +54,18 @@ def main():
     if args.fire:
         fam, day = (int(x) for x in args.fire.split("@"))
         player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
-    for day in range(args.days):
-        sim.run(1, player)
-        extra = f", model wall {mind.stats()['wall_s_in_model']}s" if args.mind == "llm" else ""
-        print(f"day {day} done at {time.monotonic() - t0:.0f}s, {len(sim.events)} events{extra}", flush=True)
     os.makedirs(args.out, exist_ok=True)
+    try:
+        for day in range(args.days):
+            sim.run(1, player)
+            extra = f", model wall {mind.stats().get('wall_s_in_model', 0)}s" if args.mind == "llm" else ""
+            print(f"day {day} done at {time.monotonic() - t0:.0f}s, {len(sim.events)} events{extra}", flush=True)
+    except BaseException:
+        # A paid LLM run that dies mid-way (server gone, Ctrl-C) keeps every recorded mind output.
+        # The last tick may be incomplete, so this file is for inspection, not for replay().
+        write_jsonl(sim.events, os.path.join(args.out, "events.partial.jsonl"))
+        print(f"run aborted at tick {sim.state['tick']}; wrote events.partial.jsonl", flush=True)
+        raise
     write_jsonl(sim.events, os.path.join(args.out, "events.jsonl"))
     for a in sim.state["agents"]:
         d = os.path.join(args.out, "agents", f"{a['id']:03d}")
