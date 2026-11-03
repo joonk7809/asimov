@@ -18,6 +18,7 @@ import re
 from collections import Counter, defaultdict
 
 from .events import read_jsonl, write_jsonl
+from .metrics import icc1
 from .memory import render_soul
 from .params import TRAITS, generate_population
 from .rng import Rng
@@ -89,7 +90,9 @@ class ArmSim(Sim):
             a["soul"], a["core"] = saved
 
 
-def run_arm(arm: str, mind, proto: dict) -> list:
+def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None) -> list:
+    """Run one arm. On a crash, the events recorded so far go to out_dir/events.partial.jsonl
+    (same convention as asiimov.run) so a paid run is never lost."""
     pop = labeled_population(proto["seed"], proto["agents"])
     souls = {a["id"]: render_soul(a) for a in pop["agents"]}
     genesis = flatten_params(pop) if arm == "flat_params" else pop
@@ -98,7 +101,15 @@ def run_arm(arm: str, mind, proto: dict) -> list:
     if proto.get("fire"):
         fam, day = (int(x) for x in proto["fire"].split("@"))
         player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
-    sim.run(proto["days"], player)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)  # before the run, so an unwritable --out fails before paying
+    try:
+        sim.run(proto["days"], player)
+    except BaseException:
+        if out_dir:
+            write_jsonl(sim.events, os.path.join(out_dir, "events.partial.jsonl"))
+            print(f"arm {arm} aborted at tick {sim.state['tick']}; wrote events.partial.jsonl", flush=True)
+        raise
     return sim.events
 
 
@@ -187,22 +198,6 @@ def agent_means(g: dict, feature: str) -> dict[int, float]:
 
 
 # ---------------------------------------------------------------------------- statistics
-def icc1(groups: dict, min_k: int) -> float:
-    """One-way ICC(1) over agents with at least min_k periods (truncated to a common k)."""
-    groups = {a: v for a, v in groups.items() if len(v) >= min_k}
-    if len(groups) < 2:
-        return float("nan")
-    k = min(len(v) for v in groups.values())
-    data = [v[:k] for v in groups.values()]
-    n = len(data)
-    means = [sum(v) / k for v in data]
-    grand = sum(means) / n
-    msb = k * sum((m - grand) ** 2 for m in means) / (n - 1)
-    msw = sum(sum((x - m) ** 2 for x in v) for v, m in zip(data, means)) / (n * (k - 1))
-    denom = msb + (k - 1) * msw
-    return (msb - msw) / denom if denom else 0.0  # nobody varies at all: no between-agent variety
-
-
 def _ranks(xs: list[float]) -> list[float]:
     order = sorted(range(len(xs)), key=lambda i: xs[i])
     r = [0.0] * len(xs)
@@ -253,10 +248,14 @@ def cosine(a: Counter, b: Counter) -> float:
 def t1_icc(ex, th, proto):
     g = graded(ex, proto["skip_first_waking_periods"])
     min_k = th["min_periods_per_agent"]
-    iccs = {f: icc1({a: [p[f] for p in ps] for a, ps in g.items()}, min_k) for f in proto["graded_features"]}
+    if sum(1 for ps in g.values() if len(ps) >= min_k) < 2:
+        return {"status": "inconclusive", "why": "too few agents with enough periods"}
+
+    def icc(f):  # nan here means nobody varies at all: no between-agent variety
+        v = icc1({a: [p[f] for p in ps] for a, ps in g.items()}, min_k)
+        return 0.0 if math.isnan(v) else v
+    iccs = {f: icc(f) for f in proto["graded_features"]}
     vals = sorted(iccs.values())
-    if any(math.isnan(v) for v in vals):
-        return {"status": "inconclusive", "why": "too few agents with enough periods", "icc": iccs}
     med = (vals[(len(vals) - 1) // 2] + vals[len(vals) // 2]) / 2
     ok = th["median_icc_min"] <= med <= th["median_icc_max"] and vals[0] >= th["feature_icc_floor"]
     wake = icc1({a: [p["wake_min"] for p in ps] for a, ps in g.items()}, min_k)
@@ -480,8 +479,7 @@ def main():
             events = read_jsonl(path)
         else:
             mind = StubMind() if args.mind == "stub" else llm_from_args(args)[0]
-            events = run_arm(arm, mind, proto)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            events = run_arm(arm, mind, proto, os.path.dirname(path))
             write_jsonl(events, path)
             print(f"arm {arm}: {len(events)} events", flush=True)
         ex = extract(events)

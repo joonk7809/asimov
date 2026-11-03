@@ -1,4 +1,5 @@
 import json
+import math
 import random
 
 import pytest
@@ -56,6 +57,18 @@ def test_arms_ablate_only_the_prompt():
     assert [a["role"] for a in flat] == [a["role"] for a in pop["agents"]]
 
 
+def test_a_crashed_arm_keeps_its_recorded_events(tmp_path):
+    class DiesOnDay2(StubMind):
+        def decide(self, req):
+            if req.tick >= 2 * TICKS_PER_DAY:
+                raise RuntimeError("pod went away")
+            return super().decide(req)
+    with pytest.raises(RuntimeError):
+        sc.run_arm("full", DiesOnDay2(), PROTO, str(tmp_path))
+    saved = sc.read_jsonl(str(tmp_path / "events.partial.jsonl"))
+    assert saved[0].kind == "genesis" and saved[-1].tick >= 2 * TICKS_PER_DAY - 1
+
+
 def test_name_labels_are_balanced_and_independent_of_params():
     pop = sc.labeled_population(1, 100)
     labels = [sc.FIRST_NAME_LABEL[a["name"].split(" ")[0]] for a in pop["agents"]]
@@ -71,7 +84,7 @@ def test_icc_separates_noise_from_character():
     noise = {a: [rng.gauss(0, 1) for _ in range(6)] for a in range(50)}
     char = {a: [a + rng.gauss(0, 0.1) for _ in range(6)] for a in range(50)}
     assert sc.icc1(noise, 3) < 0.15 < 0.95 < sc.icc1(char, 3)
-    assert sc.icc1({a: [1.0] * 4 for a in range(5)}, 3) == 0.0
+    assert math.isnan(sc.icc1({a: [1.0] * 4 for a in range(5)}, 3))  # t1 grades this as 0
 
 
 def test_spearman_handles_ties_and_constants():
