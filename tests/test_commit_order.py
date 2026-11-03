@@ -87,10 +87,8 @@ class ConcurrentCommit(RuleBasedStateMachine):
 
     def teardown(self):
         if hasattr(self, "fast"):
-            while self.fast.state["tick"] % TICKS_PER_DAY:  # replay() covers whole days only
-                self.fast.step()
-                self.serial.step()
             assert [e.to_json() for e in self.fast.events] == [e.to_json() for e in self.serial.events]
+            self.fast.finish()  # mid-day is fine: the end event says where the log stops
             r = replay([Event(**json.loads(e.to_json())) for e in self.fast.events])
             assert r.state_hash() == self.fast.state_hash()
 
@@ -140,5 +138,6 @@ def test_shuffled_world_replays_exactly_and_differs_from_id_order():
     fire = {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]}
     a.run(2, fire)
     b.run(2, fire)
+    a.finish()
     assert a.state_hash() != b.state_hash()
     assert replay([Event(**json.loads(e.to_json())) for e in a.events]).state_hash() == a.state_hash()

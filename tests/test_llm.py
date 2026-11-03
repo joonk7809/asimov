@@ -48,6 +48,7 @@ def test_llm_mind_drives_world_and_replays_without_server(server, tmp_path):
     mind = LLMMind(server, "fake/qwen", api_key="k")
     sim = Sim(5, 20, mind)
     sim.run(2, {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 1}]})
+    sim.finish()
     kinds = {b["response_format"]["json_schema"]["name"] for b in SEEN}
     assert kinds == {"plan", "deliberate", "reflect"}
     assert all(b["chat_template_kwargs"] == {"enable_thinking": False} for b in SEEN)
@@ -135,6 +136,7 @@ def test_concurrent_calls_to_a_slow_server_give_the_serial_log(tmp_path):
     finally:
         srv.shutdown()
     assert [e.to_json() for e in fast.events] == [e.to_json() for e in serial.events]
+    fast.finish()
     path = tmp_path / "log.jsonl"
     write_jsonl(fast.events, str(path))
     assert replay(read_jsonl(str(path))).state_hash() == fast.state_hash()

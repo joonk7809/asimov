@@ -8,6 +8,9 @@ One tick = 10 sim-minutes, 144 ticks per day. A tick has two phases:
    takes effect on the tick it was asked, and its mind_* event carries that tick.
 Arrival order never matters, so a log is the same whatever the server's latency, and
 mind outputs are recorded so a replay reproduces the world bit-for-bit without a model.
+A complete log starts with genesis (which names the engine version) and ends with `end`,
+whose tick is the first tick not run. `snapshot()`/`restore()` let a world continue
+in another process; asiimov.persist uses them to resume runs after a crash.
 """
 import hashlib
 import json
@@ -26,6 +29,9 @@ FARMER_SELL_PRICE = 2
 WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
              "healer": "plaza", "guard": "plaza", "child": "plaza", "elder": "plaza"}
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
+# Bump on any change that alters the log for the same inputs: old logs then refuse to replay
+# with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
+ENGINE_VERSION = "1"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -42,17 +48,7 @@ def _is_int(v) -> bool:
 class Sim:
     def __init__(self, seed: int, n_agents: int, mind, genesis: dict | None = None,
                  expected: list[Event] | None = None, order: str = "id", workers: int = 1):
-        if order not in ORDERS:
-            raise ValueError(f"order must be one of {ORDERS}")
-        self.seed = seed
-        self.rng = Rng(seed)
-        self.mind = mind
-        self.order = order
-        self.workers = workers  # concurrent mind calls per tick; never changes the log
-        self.pending: dict[int, tuple] = {}  # agent id -> (request, parents, prompt tokens, apply)
-        self.expected = expected
-        self.events: list[Event] = []
-        self.metrics = {"activity": defaultdict(lambda: defaultdict(int))}
+        self._setup(seed, mind, expected, order, workers)
         pop = genesis if genesis is not None else generate_population(seed, n_agents)
         self.state = {"tick": 0, "market_food": 10, "families": pop["families"], "agents": []}
         for p in pop["agents"]:
@@ -70,9 +66,56 @@ class Sim:
                 "last_food_loss_event": None, "belief_causes": {}, "habit": None,
             })
             self.state["agents"].append(a)
-        self._emit("genesis", "chance", None, {"seed": seed, "order": order, "population": pop}, [])
+        self._emit("genesis", "chance", None,
+                   {"engine": ENGINE_VERSION, "seed": seed, "order": order, "population": pop}, [])
         for a in self.state["agents"]:
             self._schedule_wake(a, 0, first=True)
+
+    def _setup(self, seed, mind, expected, order, workers):
+        if order not in ORDERS:
+            raise ValueError(f"order must be one of {ORDERS}")
+        self.seed = seed
+        self.rng = Rng(seed)
+        self.mind = mind
+        self.order = order
+        self.workers = workers  # concurrent mind calls per tick; never changes the log
+        self.pending: dict[int, tuple] = {}  # agent id -> (request, parents, prompt tokens, apply)
+        self.expected = expected
+        self.events: list[Event] = []
+        self.metrics = {"activity": defaultdict(lambda: defaultdict(int))}
+
+    # ------------------------------------------------------------------ persistence
+    def snapshot(self) -> dict:
+        """Everything needed to continue this world from the next tick, as JSON. Taken between ticks.
+        Serialize it without sort_keys, so a rule that iterates a dict sees the same order after restore."""
+        assert not self.pending, "snapshots are taken between ticks"
+        return {"engine": ENGINE_VERSION, "seed": self.seed, "order": self.order, "tick": self.state["tick"],
+                "n_events": len(self.events), "hash": self.state_hash(), "state": self.state,
+                "rng": self.rng.counters,
+                "activity": [[d, h, act, n] for (d, h), c in self.metrics["activity"].items() for act, n in c.items()]}
+
+    @classmethod
+    def restore(cls, snap: dict, events: list[Event], mind, workers: int = 1,
+                expected: list[Event] | None = None) -> "Sim":
+        """Continue a world from `snapshot()` and the log it was taken after (its first n_events)."""
+        if snap["engine"] != ENGINE_VERSION:
+            raise ValueError(f"snapshot is from engine {snap['engine']}, this is {ENGINE_VERSION}")
+        if len(events) < snap["n_events"]:
+            raise ValueError(f"snapshot follows {snap['n_events']} events, the log has {len(events)}")
+        sim = cls.__new__(cls)
+        sim._setup(snap["seed"], mind, expected, snap["order"], workers)
+        sim.state = json.loads(json.dumps(snap["state"]))
+        sim.rng.counters = dict(snap["rng"])
+        sim.events = list(events[:snap["n_events"]])
+        for d, h, act, n in snap["activity"]:
+            sim.metrics["activity"][(d, h)][act] = n
+        if sim.state_hash() != snap["hash"]:
+            raise ValueError("snapshot state does not match its own hash")
+        return sim
+
+    def finish(self) -> int:
+        """Mark where the recording stops. Its tick is the first tick not run; its hash is the final state."""
+        return self._emit("end", "rule", None, {"hash": self.state_hash()})
 
     # ------------------------------------------------------------------ plumbing
     def _emit(self, kind, origin, actor, data, parents=(), mind=None) -> int:
@@ -170,8 +213,11 @@ class Sim:
 
     # ------------------------------------------------------------------ tick
     def run(self, days: int, player_events: dict | None = None):
+        self.run_until(self.state["tick"] + days * TICKS_PER_DAY, player_events)
+
+    def run_until(self, end_tick: int, player_events: dict | None = None):
         player_events = player_events or {}
-        for _ in range(days * TICKS_PER_DAY):
+        while self.state["tick"] < end_tick:
             self.step(player_events.get(self.state["tick"], []))
 
     def step(self, player_actions=()):

@@ -162,6 +162,7 @@ def test_hostile_minds_cannot_break_invariants_and_every_log_replays(seed, agent
     sim = Sim(seed, agents, HostileMind(seed, agents))
     fam = min(fire_family, len(sim.state["families"]) - 1)
     stepped_run(sim, 2, {TICKS_PER_DAY + 60: [{"kind": "fire", "family": fam}]})
+    sim.finish()
     r = replay([Event(**json.loads(e.to_json())) for e in sim.events])
     assert r.state_hash() == sim.state_hash()
 
@@ -174,6 +175,7 @@ def test_replay_detects_tampering_with_any_rule_derived_field(seed, agents, pick
     when they change the world (see test_world.py): replay checks consequences, not authorship."""
     sim = Sim(seed, agents, NoisyMind())
     sim.run(1)
+    sim.finish()
     events = [Event(**json.loads(e.to_json())) for e in sim.events]
     e = events[pick % len(events)]
     if field == "data":
