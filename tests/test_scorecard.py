@@ -142,3 +142,10 @@ def test_end_to_end_report_on_the_stand_in(arms, tmp_path):
     assert t["2_trait_predicts_behavior"]["traits"]["chronotype"] == "pass"
     assert report["overall"] == "fail"
     assert "Variety scorecard" in sc.render_md(report)
+
+
+def test_concurrent_mind_calls_leave_every_arm_log_unchanged():
+    proto = dict(PROTO, days=2)
+    for arm in ("no_text", "flat_params"):
+        serial = [e.to_json() for e in sc.run_arm(arm, StubMind(), proto)]
+        assert [e.to_json() for e in sc.run_arm(arm, StubMind(), proto, workers=8)] == serial

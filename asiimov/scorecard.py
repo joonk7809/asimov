@@ -72,9 +72,9 @@ class ArmSim(Sim):
     """Sim whose prompts are ablated per arm. State is untouched: only the prompt text changes,
     so ablated arms are experiment runs, not replayable worlds."""
 
-    def __init__(self, seed, n_agents, mind, genesis, arm, souls):
+    def __init__(self, seed, n_agents, mind, genesis, arm, souls, workers=1):
         self.arm, self.souls = arm, souls
-        super().__init__(seed, n_agents, mind, genesis=genesis)
+        super().__init__(seed, n_agents, mind, genesis=genesis, workers=workers)
 
     def _request(self, a, *args, **kwargs):
         """Swap the prompt text around the call; `_request` builds the prompt before it returns."""
@@ -91,13 +91,13 @@ class ArmSim(Sim):
             a["soul"], a["core"] = saved
 
 
-def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None) -> list:
+def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None, workers: int = 1) -> list:
     """Run one arm. On a crash, the events recorded so far go to out_dir/events.partial.jsonl
     (same convention as asiimov.run) so a paid run is never lost."""
     pop = labeled_population(proto["seed"], proto["agents"])
     souls = {a["id"]: render_soul(a) for a in pop["agents"]}
     genesis = flatten_params(pop) if arm == "flat_params" else pop
-    sim = ArmSim(proto["seed"], proto["agents"], mind, genesis, arm, souls)
+    sim = ArmSim(proto["seed"], proto["agents"], mind, genesis, arm, souls, workers)
     player = {}
     if proto.get("fire"):
         fam, day = (int(x) for x in proto["fire"].split("@"))
@@ -467,7 +467,10 @@ def main():
     ap.add_argument("--llm-url")
     ap.add_argument("--llm-model")
     ap.add_argument("--llm-key")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="concurrent mind calls per tick (default 64 for --mind llm, 1 for stub); never changes the log")
     args = ap.parse_args()
+    workers = args.workers or (64 if args.mind == "llm" else 1)
     thresholds, sha = load_thresholds()
     proto = thresholds["protocol"]
     args.temperature = proto["temperature"]
@@ -480,7 +483,7 @@ def main():
             events = read_jsonl(path)
         else:
             mind = StubMind() if args.mind == "stub" else llm_from_args(args)[0]
-            events = run_arm(arm, mind, proto, os.path.dirname(path))
+            events = run_arm(arm, mind, proto, os.path.dirname(path), workers)
             write_jsonl(events, path)
             print(f"arm {arm}: {len(events)} events", flush=True)
         ex = extract(events)
