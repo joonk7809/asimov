@@ -20,6 +20,7 @@ import urllib.request
 
 API = "https://rest.runpod.io/v1"
 IMAGE = "vllm/vllm-openai:v0.11.0"
+NAME_PREFIX = "asiimov-"  # every pod this script starts; `down --all` touches only these
 GPU_TYPES = ["NVIDIA H100 80GB HBM3", "NVIDIA H100 PCIe", "NVIDIA H100 NVL", "NVIDIA A100 80GB PCIe",
              "NVIDIA A100-SXM4-80GB"]
 POD_DIR = os.path.join(os.path.dirname(__file__), "..", "runs", "pods")
@@ -44,7 +45,7 @@ def up(args):
            f"--max-model-len {args.max_len} --gpu-memory-utilization 0.92 --enable-prefix-caching "
            f"--served-model-name {args.model}")
     body = {
-        "name": f"asiimov-{args.model.split('/')[-1].lower()}"[:60],
+        "name": f"{NAME_PREFIX}{args.model.split('/')[-1].lower()}"[:60],
         "imageName": IMAGE,
         "gpuTypeIds": args.gpu or GPU_TYPES,
         "gpuTypePriority": "custom",
@@ -92,10 +93,23 @@ def ls(_args):
 
 
 def down(args):
-    ids = [p["id"] for p in call("GET", "/pods") or []] if args.all else [args.pod]
+    # --all means every pod this script started (name prefix), never other pods on the account.
+    if args.all:
+        ids = [p["id"] for p in call("GET", "/pods") or [] if (p.get("name") or "").startswith(NAME_PREFIX)]
+    elif args.pod:
+        ids = [args.pod]
+    else:
+        sys.exit("give a POD_ID or --all")
+    failed = []
     for pid in ids:
-        call("DELETE", f"/pods/{pid}")
-        print("terminated", pid)
+        try:  # keep going: one failed DELETE must not leave the remaining pods billing
+            call("DELETE", f"/pods/{pid}")
+            print("terminated", pid)
+        except SystemExit as e:
+            print(f"FAILED to terminate {pid}: {e}", file=sys.stderr)
+            failed.append(pid)
+    if failed:
+        sys.exit(f"still running, terminate by hand: {' '.join(failed)}")
 
 
 def main():

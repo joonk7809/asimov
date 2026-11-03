@@ -69,3 +69,72 @@ def test_schemas_accept_stub_outputs():
     stub = StubMind()
     for req in collect_prompts(agents=30, days=2, seed=3):
         jsonschema.validate(json.loads(stub.decide(req).raw_output), SCHEMAS[req.kind])
+
+
+def test_llm_mind_retries_a_200_that_is_not_a_completion(monkeypatch):
+    """A proxy page or error JSON with status 200 must be retried, not crash the world mid-run."""
+    import asiimov.llm as llm
+    replies = iter([b"<html>502</html>", b'{"error": "loading"}', json.dumps(
+        {"model": "m", "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]}).encode()])
+
+    class Resp:
+        def __init__(self, data):
+            self.data = data
+
+        def read(self):
+            return self.data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda req, timeout: Resp(next(replies)))
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    out = LLMMind("http://x", "m", retries=3).post("/v1/chat/completions", {})
+    assert out["choices"][0]["message"]["content"] == "{}"
+
+
+class SlowFake(Fake):
+    """Answers after a random delay, so concurrent replies arrive out of order. Tracks requests in flight."""
+    lock = threading.Lock()
+    inflight = 0
+    peak = 0
+
+    def do_POST(self):
+        import random
+        import time
+        with SlowFake.lock:
+            SlowFake.inflight += 1
+            SlowFake.peak = max(SlowFake.peak, SlowFake.inflight)
+        time.sleep(random.uniform(0, 0.003))
+        try:
+            super().do_POST()
+        finally:
+            with SlowFake.lock:
+                SlowFake.inflight -= 1
+
+
+class Server(ThreadingHTTPServer):
+    request_queue_size = 128  # the default backlog of 5 drops bursts of connects, which then retry after 1 s
+
+
+def test_concurrent_calls_to_a_slow_server_give_the_serial_log(tmp_path):
+    srv = Server(("127.0.0.1", 0), SlowFake)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}"
+    try:
+        fire = {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 1}]}
+        SlowFake.peak = 0
+        fast = Sim(5, 30, LLMMind(url, "fake/qwen"), workers=16)
+        fast.run(2, fire)
+        assert SlowFake.peak > 1, "calls were not concurrent"
+        serial = Sim(5, 30, LLMMind(url, "fake/qwen"), workers=1)
+        serial.run(2, fire)
+    finally:
+        srv.shutdown()
+    assert [e.to_json() for e in fast.events] == [e.to_json() for e in serial.events]
+    path = tmp_path / "log.jsonl"
+    write_jsonl(fast.events, str(path))
+    assert replay(read_jsonl(str(path))).state_hash() == fast.state_hash()

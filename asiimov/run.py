@@ -9,7 +9,7 @@ from .memory import render_files
 from .metrics import summarize
 from .llm import LLMMind
 from .minds import NoisyMind, StubMind
-from .sim import TICKS_PER_DAY, Sim
+from .sim import ORDERS, TICKS_PER_DAY, Sim
 
 
 POD_DIR = os.path.join(os.path.dirname(__file__), "..", "runs", "pods")
@@ -42,23 +42,34 @@ def main():
     ap.add_argument("--llm-model")
     ap.add_argument("--llm-key")
     ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument("--order", choices=ORDERS, default="id", help="who acts first when agents contest")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="concurrent mind calls per tick (default 64 for llm, else 1); never changes the log")
     args = ap.parse_args()
     rec = None
     if args.mind == "llm":
         mind, rec = llm_from_args(args)
     else:
         mind = StubMind() if args.mind == "stub" else NoisyMind()
-    sim = Sim(args.seed, args.agents, mind)
+    workers = args.workers or (64 if args.mind == "llm" else 1)
+    sim = Sim(args.seed, args.agents, mind, order=args.order, workers=workers)
     t0 = time.monotonic()
     player = {}
     if args.fire:
         fam, day = (int(x) for x in args.fire.split("@"))
         player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
-    for day in range(args.days):
-        sim.run(1, player)
-        extra = f", model wall {mind.stats()['wall_s_in_model']}s" if args.mind == "llm" else ""
-        print(f"day {day} done at {time.monotonic() - t0:.0f}s, {len(sim.events)} events{extra}", flush=True)
     os.makedirs(args.out, exist_ok=True)
+    try:
+        for day in range(args.days):
+            sim.run(1, player)
+            extra = f", model wall {mind.stats().get('wall_s_in_model', 0)}s" if args.mind == "llm" else ""
+            print(f"day {day} done at {time.monotonic() - t0:.0f}s, {len(sim.events)} events{extra}", flush=True)
+    except BaseException:
+        # A paid LLM run that dies mid-way (server gone, Ctrl-C) keeps every recorded mind output.
+        # The last tick may be incomplete, so this file is for inspection, not for replay().
+        write_jsonl(sim.events, os.path.join(args.out, "events.partial.jsonl"))
+        print(f"run aborted at tick {sim.state['tick']}; wrote events.partial.jsonl", flush=True)
+        raise
     write_jsonl(sim.events, os.path.join(args.out, "events.jsonl"))
     for a in sim.state["agents"]:
         d = os.path.join(args.out, "agents", f"{a['id']:03d}")
