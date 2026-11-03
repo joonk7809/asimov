@@ -13,4 +13,5 @@ network policy blocks RunPod.
     python scripts/runpod_pod.py wait POD_ID
     python -m asiimov.bench --pod POD_ID --out runs/bench-4b.json         # throughput, $/1k calls
     python -m asiimov.run --mind llm --pod POD_ID --agents 100 --days 7 --seed 1 --fire 3@1 --out runs/llm-4b
+    python -m asiimov.run --resume --mind llm --pod NEW_POD_ID --days 7 --out runs/llm-4b  # if the pod died
     python scripts/runpod_pod.py down POD_ID                               # always terminate
