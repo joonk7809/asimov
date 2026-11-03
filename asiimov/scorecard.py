@@ -20,7 +20,7 @@ from dataclasses import replace
 
 from .events import read_jsonl, write_jsonl
 from .metrics import icc1
-from .memory import SCHEMA, prompt_hash, render_soul
+from .memory import SCHEMA, prompt_hash, render_soul, tokens
 from .params import TRAITS, generate_population
 from .rng import Rng
 from .sim import TICKS_PER_DAY, Sim
@@ -126,10 +126,12 @@ class ArmSim(Sim):
                 super()._request(a, *args, **kwargs)
             finally:
                 a["soul"] = saved
-            req, *rest = self.pending[a["id"]]
+            req, parents, prompt_tokens, apply = self.pending[a["id"]]
             assert req.prompt.startswith(SCHEMA_HEAD), "fiction arm expects the standard schema header"
             prompt = FICTION_HEADER + req.prompt[len(SCHEMA_HEAD):]
-            self.pending[a["id"]] = (replace(req, prompt=prompt, prompt_hash=prompt_hash(prompt)), *rest)
+            prompt_tokens += tokens(FICTION_HEADER) - tokens(SCHEMA_HEAD)  # keep the recorded cost honest
+            self.pending[a["id"]] = (replace(req, prompt=prompt, prompt_hash=prompt_hash(prompt)), parents,
+                                     prompt_tokens, apply)
             return None
         saved = a["soul"], a["core"]
         if self.arm == "no_text":

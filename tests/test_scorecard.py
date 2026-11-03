@@ -183,3 +183,19 @@ def test_fiction_arm_changes_only_the_framing_and_adds_trait_anchors():
     assert sc.anchors(pop["agents"][key[0]]) in fic and "# How you tend to act" not in full
     assert fic.replace(sc.FICTION_HEADER, sc.SCHEMA_HEAD).replace("\n\n" + sc.anchors(pop["agents"][key[0]]), "") == full
     assert seen["fiction"][key].prompt_hash != seen["full"][key].prompt_hash
+
+
+def test_fiction_arm_records_the_tokens_of_the_prompt_it_sent():
+    from asiimov.memory import tokens
+    sent = {}
+
+    class Spy(StubMind):
+        def decide(self, req):
+            sent[(req.agent_id, req.tick)] = tokens(req.prompt)
+            return super().decide(req)
+    pop = sc.labeled_population(1, 30)
+    sim = sc.ArmSim(1, 30, Spy(), pop, "fiction", {a["id"]: sc.render_soul(a) for a in pop["agents"]})
+    sim.run(1)
+    recorded = {(e.actor, e.tick): e.mind["prompt_tokens"] for e in sim.events if e.origin == "mind"}
+    # Section clipping and joins make the per-section sum differ from tokens(prompt) by a few at most.
+    assert all(abs(recorded[k] - sent[k]) <= 8 for k in recorded)
