@@ -16,6 +16,9 @@ from .minds import MindReply, MindRequest
 ACTIVITIES = ["work", "socialize", "home", "rest", "explore"]
 ACTIONS = ["buy_food", "go_market", "ask_kin", "steal", "wait"]
 
+# No maxLength on strings: vLLM 0.11 structured outputs (xgrammar) decode ~15x slower with it
+# (measured on Qwen3-4B, A6000: reflect 18.5 s vs 1.7 s). max_tokens bounds the reply and the
+# world truncates every stored string, so the cap adds nothing.
 SCHEMAS = {
     "plan": {
         "type": "object",
@@ -31,13 +34,13 @@ SCHEMAS = {
         "type": "object",
         "properties": {"action": {"type": "string", "enum": ACTIONS},
                        "target": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
-                       "reason": {"type": "string", "maxLength": 160}},
+                       "reason": {"type": "string"}},
         "required": ["action", "target", "reason"], "additionalProperties": False,
     },
     "reflect": {
         "type": "object",
-        "properties": {"core": {"type": "array", "maxItems": 2, "items": {"type": "string", "maxLength": 160}},
-                       "summary": {"type": "string", "maxLength": 240}},
+        "properties": {"core": {"type": "array", "maxItems": 2, "items": {"type": "string"}},
+                       "summary": {"type": "string"}},
         "required": ["core", "summary"], "additionalProperties": False,
     },
 }
@@ -74,7 +77,7 @@ class LLMMind:
 
     def post(self, path: str, body: dict) -> dict:
         data = json.dumps(body).encode()
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "User-Agent": "asiimov-mind/0.1"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         last = None

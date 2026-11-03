@@ -10,6 +10,7 @@ Needs RUNPOD_API_KEY. The endpoint is https://POD_ID-8000.proxy.runpod.net and i
 by a per-pod vLLM API key, written to runs/pods/POD_ID.json (gitignored).
 """
 import argparse
+import base64
 import json
 import os
 import secrets
@@ -30,7 +31,8 @@ def call(method: str, path: str, body: dict | None = None) -> dict | list | None
     req = urllib.request.Request(API + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": f"Bearer {os.environ['RUNPOD_API_KEY']}",
-                                          "Content-Type": "application/json"})
+                                          "Content-Type": "application/json",
+                                          "User-Agent": "asiimov-runpod/0.1"})
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read()
@@ -39,9 +41,27 @@ def call(method: str, path: str, body: dict | None = None) -> dict | list | None
         sys.exit(f"RunPod {method} {path} -> {e.code}: {e.read()[:800].decode(errors='replace')}")
 
 
+# In-pod dead man's switch: the pod terminates itself after --ttl-hours even if the operator
+# (this script's caller) crashes. RunPod injects RUNPOD_POD_ID and a pod-scoped RUNPOD_API_KEY.
+# That key gets 403 from the REST API, but GraphQL podTerminate on its own pod works (tested
+# 2026-11-03: a pod running this terminated itself). Retries every 5 min until the pod is gone.
+TTL_SCRIPT = """import json, os, urllib.request as u
+q = 'mutation { podTerminate(input: {podId: "%s"}) }' % os.environ["RUNPOD_POD_ID"]
+u.urlopen(u.Request("https://api.runpod.io/graphql?api_key=" + os.environ["RUNPOD_API_KEY"],
+                    data=json.dumps({"query": q}).encode(),
+                    headers={"Content-Type": "application/json", "User-Agent": "asiimov-ttl"}), timeout=60)
+"""
+
+
+def ttl_cmd(secs: int) -> str:
+    """Shell prefix for dockerStartCmd: background loop that terminates the pod after secs."""
+    b64 = base64.b64encode(TTL_SCRIPT.encode()).decode()  # base64: no shell or JSON quoting to get wrong
+    return f"(sleep {secs}; while true; do echo {b64} | base64 -d | python3; sleep 300; done) & "
+
+
 def up(args):
     key = secrets.token_urlsafe(24)
-    cmd = (f"vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
+    cmd = ttl_cmd(int(args.ttl_hours * 3600)) + (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
            f"--max-model-len {args.max_len} --gpu-memory-utilization 0.92 --enable-prefix-caching "
            f"--served-model-name {args.model}")
     body = {
@@ -62,7 +82,8 @@ def up(args):
     os.makedirs(POD_DIR, exist_ok=True)
     rec = {"id": pod["id"], "model": args.model, "api_key": key, "created": time.time(),
            "url": f"https://{pod['id']}-8000.proxy.runpod.net", "cost_per_hr": pod.get("costPerHr"),
-           "gpu": (pod.get("machine") or {}).get("gpuTypeId") or pod.get("gpu")}
+           "gpu": (pod.get("machine") or {}).get("gpuTypeId") or pod.get("gpu"),
+           "expires": time.time() + args.ttl_hours * 3600}
     with open(os.path.join(POD_DIR, f"{pod['id']}.json"), "w") as f:
         json.dump(rec, f, indent=2)
     print(json.dumps({k: v for k, v in rec.items() if k != "api_key"}, indent=2))
@@ -74,7 +95,8 @@ def wait(args):
     while time.time() - t0 < args.timeout:
         try:
             req = urllib.request.Request(rec["url"] + "/v1/models",
-                                         headers={"Authorization": f"Bearer {rec['api_key']}"})
+                                         headers={"Authorization": f"Bearer {rec['api_key']}",
+                                                  "User-Agent": "asiimov-runpod/0.1"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 print(f"ready after {time.time() - t0:.0f}s:", r.read()[:300].decode())
                 return
@@ -120,6 +142,7 @@ def main():
     p.add_argument("--gpu", nargs="*")
     p.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])
     p.add_argument("--max-len", type=int, default=8192)
+    p.add_argument("--ttl-hours", type=float, default=6.0, help="pod deletes itself after this long")
     p.set_defaults(fn=up)
     p = sub.add_parser("wait")
     p.add_argument("pod")
