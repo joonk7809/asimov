@@ -13,6 +13,9 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
   and its causal `parents`. No silent state edits.
 - Simulation arithmetic is integer-only; randomness goes through `Rng.draw(stream, ...)` so it is
   recomputable from the log.
+- A tick collects mind requests, then commits replies in `Sim._order` (the one place that decides who
+  acts first; `--order id|shuffle`). Never apply a reply where it is requested: concurrency must not
+  change the log.
 - Mind outputs are recorded verbatim. `replay()` must reproduce the log and final hash without
   calling any model. `tests/test_world.py` enforces this; keep it green.
 - `StubMind` and `NoisyMind` are stand-ins for the GPU-served model, not the product's minds.

@@ -1,8 +1,13 @@
 """Deterministic, event-sourced village simulation.
 
-One tick = 10 sim-minutes, 144 ticks per day. Agents are processed in id order.
-Every state change happens inside an emitted event; mind outputs are recorded so a
-replay reproduces the world bit-for-bit without calling any model.
+One tick = 10 sim-minutes, 144 ticks per day. A tick has two phases:
+1. Rules, agents in id order. An agent that needs its mind (waking, going to sleep,
+   hungry with no food) files one request built from the world as it stands, then waits.
+2. Commit. The tick's requests go to the mind together (concurrently when workers > 1),
+   then each reply is validated and applied in the order `_order` decides. A reply
+   takes effect on the tick it was asked, and its mind_* event carries that tick.
+Arrival order never matters, so a log is the same whatever the server's latency, and
+mind outputs are recorded so a replay reproduces the world bit-for-bit without a model.
 """
 import hashlib
 import json
@@ -10,7 +15,7 @@ from collections import defaultdict
 
 from .events import Event, canonical
 from .memory import assemble_prompt, prompt_hash, render_soul, tokens
-from .minds import MindRequest, ReplayDivergence
+from .minds import MindRequest, ReplayDivergence, dispatch
 from .params import generate_population
 from .rng import Rng
 
@@ -21,6 +26,7 @@ FARMER_SELL_PRICE = 2
 WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
              "healer": "plaza", "guard": "plaza", "child": "plaza", "elder": "plaza"}
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
+ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
 
@@ -35,10 +41,15 @@ def _is_int(v) -> bool:
 
 class Sim:
     def __init__(self, seed: int, n_agents: int, mind, genesis: dict | None = None,
-                 expected: list[Event] | None = None):
+                 expected: list[Event] | None = None, order: str = "id", workers: int = 1):
+        if order not in ORDERS:
+            raise ValueError(f"order must be one of {ORDERS}")
         self.seed = seed
         self.rng = Rng(seed)
         self.mind = mind
+        self.order = order
+        self.workers = workers  # concurrent mind calls per tick; never changes the log
+        self.pending: dict[int, tuple] = {}  # agent id -> (request, parents, prompt tokens, apply)
         self.expected = expected
         self.events: list[Event] = []
         self.metrics = {"activity": defaultdict(lambda: defaultdict(int))}
@@ -59,7 +70,7 @@ class Sim:
                 "last_food_loss_event": None, "belief_causes": {}, "habit": None,
             })
             self.state["agents"].append(a)
-        self._emit("genesis", "chance", None, {"seed": seed, "population": pop}, [])
+        self._emit("genesis", "chance", None, {"seed": seed, "order": order, "population": pop}, [])
         for a in self.state["agents"]:
             self._schedule_wake(a, 0, first=True)
 
@@ -88,23 +99,43 @@ class Sim:
     def _rel(self, a: dict, other: int) -> dict:
         return a["relationships"].setdefault(str(other), {"affinity": 0, "note": ""})
 
-    def _ask(self, a: dict, kind: str, situation: str, view: dict, parents) -> tuple[int, dict | None]:
-        prompt, counts = assemble_prompt(a, self.state, kind, situation)
-        ph = prompt_hash(prompt)
+    def _request(self, a: dict, kind: str, view: dict, parents, apply):
+        """File a mind request for this tick. `apply(eid, out)` runs in the commit phase."""
+        assert a["id"] not in self.pending, "one mind request per agent per tick"
+        prompt, counts = assemble_prompt(a, self.state, kind, self._situation(a, view))
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
-        reply = self.mind.decide(MindRequest(kind, a["id"], self.state["tick"], prompt, ph, view))
-        eid = self._emit(f"mind_{kind}", "mind", a["id"], {"kind": kind}, parents, mind={
-            "model": reply.model, "prompt_hash": ph, "prompt_tokens": sum(counts.values()),
-            "output_tokens": tokens(reply.raw_output), "sampling": reply.sampling,
-            "raw_output": reply.raw_output})
-        try:
-            out = json.loads(reply.raw_output)
-            if not isinstance(out, dict):
+        req = MindRequest(kind, a["id"], self.state["tick"], prompt, prompt_hash(prompt), view)
+        self.pending[a["id"]] = (req, list(parents), sum(counts.values()), apply)
+
+    def _order(self, ids) -> list[int]:
+        """Who goes first when agents contest the same food, target or listener. Decided only here."""
+        ids = sorted(ids)
+        if self.order == "shuffle":
+            for i in range(len(ids) - 1, 0, -1):  # Fisher-Yates on the seeded "order" stream
+                _, j = self.rng.draw("order", 0, i)
+                ids[i], ids[j] = ids[j], ids[i]
+        return ids
+
+    def _commit(self):
+        """Ask every pending request at once, then validate and apply replies in `_order`."""
+        aids = sorted(self.pending)
+        replies = dict(zip(aids, dispatch(self.mind, [self.pending[i][0] for i in aids], self.workers)))
+        pending, self.pending = self.pending, {}
+        for aid in self._order(aids):
+            req, parents, prompt_tokens, apply = pending[aid]
+            reply = replies[aid]
+            eid = self._emit(f"mind_{req.kind}", "mind", aid, {"kind": req.kind}, parents, mind={
+                "model": reply.model, "prompt_hash": req.prompt_hash, "prompt_tokens": prompt_tokens,
+                "output_tokens": tokens(reply.raw_output), "sampling": reply.sampling,
+                "raw_output": reply.raw_output})
+            try:
+                out = json.loads(reply.raw_output)
+                if not isinstance(out, dict):
+                    out = None
+            except (ValueError, RecursionError):  # JSONDecodeError, or nesting deep enough to blow the stack
                 out = None
-        except (ValueError, RecursionError):  # JSONDecodeError, or nesting deep enough to blow the stack
-            out = None
-        return eid, out
+            apply(eid, out)
 
     # ------------------------------------------------------------------ views
     def _hour(self):
@@ -166,6 +197,7 @@ class Sim:
             self._eat(a)
             self._maybe_deliberate(a, occupancy)
 
+        self._commit()
         self._talk()
         for a in agents:
             if not a["asleep"]:
@@ -205,8 +237,10 @@ class Sim:
         a["activity"] = "home"
         self._emit("wake", "rule", a["id"], {"place": a["place"]}, [a["rhythm_event"]])
         self._note(a["id"], "woke up")
-        view = self._view(a, occupancy)
-        eid, out = self._ask(a, "plan", self._situation(a, view), view, [a["rhythm_event"]])
+        self._request(a, "plan", self._view(a, occupancy), [a["rhythm_event"]],
+                      lambda eid, out: self._apply_plan(a, eid, out))
+
+    def _apply_plan(self, a: dict, eid: int, out: dict | None):
         blocks, dropped = [], 0
         raw_plan = out.get("plan") if out else None
         for b in raw_plan if isinstance(raw_plan, list) else []:
@@ -222,8 +256,11 @@ class Sim:
                                                       "dropped": dropped}, [eid])
 
     def _sleep(self, a: dict, occupancy: dict):
-        view = self._view(a, occupancy)
-        eid, out = self._ask(a, "reflect", self._situation(a, view), view, [a["rhythm_event"]])
+        """The agent reflects on its day; it falls asleep when the reflection is committed."""
+        self._request(a, "reflect", self._view(a, occupancy), [a["rhythm_event"]],
+                      lambda eid, out: self._fall_asleep(a, eid, out))
+
+    def _fall_asleep(self, a: dict, eid: int, out: dict | None):
         promoted = []
         if out and isinstance(out.get("core"), list):
             for c in out["core"][:2]:
@@ -311,9 +348,8 @@ class Sim:
             return
         a["cooldown_until"] = tick + 12
         parents = [a["last_food_loss_event"]] if a["last_food_loss_event"] is not None else []
-        view = self._view(a, occupancy)
-        eid, out = self._ask(a, "deliberate", self._situation(a, view), view, parents)
-        self._resolve(a, out, eid)
+        self._request(a, "deliberate", self._view(a, occupancy), parents,
+                      lambda eid, out: self._resolve(a, out, eid))
 
     # ------------------------------------------------------------------ actions -> receipts
     def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None):
@@ -415,7 +451,7 @@ class Sim:
             ids = by_place[place]
             if len(ids) < 2:
                 continue
-            for aid in ids:
+            for aid in self._order(ids):
                 a = agents[aid]
                 stream = f"talk:{aid}"
                 idx, roll = self.rng.draw(stream, 0, 999)

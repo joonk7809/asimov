@@ -16,7 +16,8 @@ def replay(events: list[Event]) -> Sim:
         if e.origin == "player":
             player[e.tick].append({"kind": e.kind, **e.data})
     last_tick = events[-1].tick
-    sim = Sim(genesis.data["seed"], len(pop["agents"]), ReplayMind(mind_events), genesis=pop, expected=events)
+    sim = Sim(genesis.data["seed"], len(pop["agents"]), ReplayMind(mind_events), genesis=pop, expected=events,
+              order=genesis.data["order"])
     days = (last_tick + 1) // TICKS_PER_DAY
     sim.run(days, player)
     if len(sim.events) != len(events):
