@@ -2,7 +2,8 @@
 that dies can be resumed, and it finishes with exactly the log an uninterrupted run writes.
 
 A run directory holds:
-  run.json               the world's inputs: seed, agents, order, player actions (written once)
+  run.json               the world's inputs: seed, agents, order, player actions, target length in
+                         days and the mind's model (resume refuses a different model)
   events.jsonl           append-only, whole ticks only; flushed every tick, fsynced before each snapshot
   snapshots/<tick>.json  Sim.snapshot() at the start of that tick, plus the sha256 of the log before it
   crash.jsonl            events of the tick that was running when the run died (inspection only)
@@ -33,8 +34,10 @@ def _atomic_write(path: str, text: str):
 class Run:
     """A world running into a directory. Make one with start() or resume(), then advance() and finish()."""
 
-    def __init__(self, out: str, sim: Sim, player: dict, on_disk: int, hashed: int, snapshot_every: int):
+    def __init__(self, out: str, sim: Sim, player: dict, on_disk: int, hashed: int, snapshot_every: int,
+                 days: int | None = None):
         self.out, self.sim, self.player, self.snapshot_every = out, sim, player, snapshot_every
+        self.days = days  # the world's planned length, from run.json
         self.on_disk = on_disk  # events already in events.jsonl
         self.hashed = hashed    # events covered by self.sha, the running sha256 of the log
         self.sha = hashlib.sha256("".join(e.to_json() + "\n" for e in sim.events[:hashed]).encode())
@@ -89,26 +92,40 @@ class Run:
         _atomic_write(self._snap_path(snap["tick"]), json.dumps(snap))  # no sort_keys: see Sim.snapshot
 
 
+def config(out: str) -> dict:
+    with open(os.path.join(out, "run.json")) as f:
+        return json.load(f)
+
+
 def start(out: str, seed: int, agents: int, mind, order: str = "id", player: dict | None = None,
-          workers: int = 1, snapshot_every: int = TICKS_PER_DAY) -> Run:
+          workers: int = 1, snapshot_every: int = TICKS_PER_DAY, days: int | None = None,
+          mind_kind: str | None = None) -> Run:
     """Start a new world in `out`. Refuses a directory that already holds a log."""
     player = player or {}
     if os.path.exists(os.path.join(out, "events.jsonl")):
         raise FileExistsError(f"{out} already holds a run; resume it or pick another directory")
     os.makedirs(out, exist_ok=True)
     cfg = {"seed": seed, "agents": agents, "order": order,
-           "player": [[t, act] for t in sorted(player) for act in player[t]]}
+           "player": [[t, act] for t in sorted(player) for act in player[t]],
+           "days": days, "mind": mind_kind, "model": getattr(mind, "model", None)}
     _atomic_write(os.path.join(out, "run.json"), json.dumps(cfg, indent=1))
-    run = Run(out, Sim(seed, agents, mind, order=order, workers=workers), player, 0, 0, snapshot_every)
+    run = Run(out, Sim(seed, agents, mind, order=order, workers=workers), player, 0, 0, snapshot_every, days)
     run._append()
     run._snapshot()  # tick 0, so a run that dies on its first day still resumes
     return run
 
 
-def resume(out: str, mind, workers: int = 1, snapshot_every: int = TICKS_PER_DAY) -> Run:
-    """Continue the world in `out` from where its log stops, whether it crashed or finished."""
-    with open(os.path.join(out, "run.json")) as f:
-        cfg = json.load(f)
+def resume(out: str, mind, workers: int = 1, snapshot_every: int = TICKS_PER_DAY, days: int | None = None) -> Run:
+    """Continue the world in `out` from where its log stops, whether it crashed or finished.
+    `days` changes the planned length (to extend a world); otherwise run.json's is kept."""
+    cfg = config(out)
+    model = getattr(mind, "model", None)
+    if cfg.get("model") is not None and model != cfg["model"]:
+        # One world, one mind: continuing a Qwen world with the stub would silently mix two minds.
+        raise ValueError(f"{out} was run with mind {cfg['model']!r}; refusing to continue it with {model!r}")
+    if days is not None and days != cfg.get("days"):
+        cfg["days"] = days
+        _atomic_write(os.path.join(out, "run.json"), json.dumps(cfg, indent=1))
     player = defaultdict(list)
     for t, act in cfg["player"]:
         player[t].append(act)
@@ -128,7 +145,7 @@ def resume(out: str, mind, workers: int = 1, snapshot_every: int = TICKS_PER_DAY
         f.truncate(sum(len(l) + 1 for l in lines[:len(events)]))
     tail_minds = [e for e in events[n:] if e.origin == "mind"]
     sim = Sim.restore(snap, events, ReplayMind(tail_minds), workers, expected=events)
-    run = Run(out, sim, player, len(events), n, snapshot_every)
+    run = Run(out, sim, player, len(events), n, snapshot_every, cfg.get("days"))
     while len(sim.events) < len(events):
         run._tick()
     sim.expected, sim.mind = None, mind

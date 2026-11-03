@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from asiimov import persist
-from asiimov.events import read_jsonl, write_jsonl
+from asiimov.events import read_jsonl
 from asiimov.minds import NoisyMind, ReplayDivergence, StubMind
 from asiimov.replay import replay
 from asiimov.sim import TICKS_PER_DAY, Sim
@@ -174,6 +174,7 @@ def test_snapshot_state_equals_a_replay_to_that_tick(tmp_path):
         sim = Sim(4, 16, StubMind())
         sim.run_until(snap["tick"], FIRE)
         assert sim.state_hash() == snap["hash"] and len(sim.events) == snap["n_events"]
+        assert [e.to_json() for e in sim.events] == [e.to_json() for e in events[:snap["n_events"]]]
 
 
 def test_start_refuses_to_overwrite_a_run(tmp_path):
@@ -192,3 +193,34 @@ def test_replay_refuses_unfinished_logs_and_other_engines(tmp_path):
     events[0].data["engine"] = "0"
     with pytest.raises(ReplayDivergence, match="engine 0"):
         replay(events)
+
+
+def _cli(monkeypatch, *argv):
+    from asiimov import run as run_mod
+    monkeypatch.setattr(sys, "argv", ["run", *argv])
+    run_mod.main()
+
+
+def test_following_the_abort_hint_verbatim_finishes_the_planned_world(tmp_path, monkeypatch, capsys):
+    """The hint after a crash must continue the same world to its planned length with the same mind."""
+    from asiimov import run as run_mod
+    ref, d = str(tmp_path / "ref"), str(tmp_path / "crashed")
+    _cli(monkeypatch, "--agents", "12", "--days", "4", "--out", ref)
+    monkeypatch.setattr(run_mod, "StubMind", lambda: Dies(2 * TICKS_PER_DAY + 30))
+    with pytest.raises(RuntimeError):
+        _cli(monkeypatch, "--agents", "12", "--days", "4", "--out", d)
+    hint = capsys.readouterr().out.strip().splitlines()[-1].split("continue it with: python -m asiimov.run ")[1]
+    monkeypatch.setattr(run_mod, "StubMind", StubMind)
+    _cli(monkeypatch, *hint.split())
+    with open(os.path.join(ref, "events.jsonl"), "rb") as a, open(os.path.join(d, "events.jsonl"), "rb") as b:
+        assert a.read() == b.read()
+
+
+def test_resume_refuses_a_different_mind(tmp_path):
+    out = str(tmp_path / "w")
+    run = persist.start(out, 2, 10, StubMind(), days=2, mind_kind="stub")
+    run.advance(TICKS_PER_DAY)
+    run.log.close()
+    with pytest.raises(ValueError, match="refusing to continue"):
+        persist.resume(out, NoisyMind())
+    assert persist.resume(out, StubMind()).days == 2
