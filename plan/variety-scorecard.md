@@ -38,9 +38,22 @@ data) is "inconclusive", which is not a pass. Per the plan, the cost-ladder tier
 cheapest one that passes tests 1 to 5.
 
 ## Stand-in mind result (validation, not a target)
-See the PR that added this file for the `StubMind` report. The stub reads params directly and
-ignores prompt text, so it is expected to fail test 3 (text contribution 0) and test 5 (templated
-text). Those failures show the tests can fail for the right reason.
+`StubMind`, protocol above, report generated after the thresholds were committed:
+
+| Test | Result | Numbers |
+|---|---|---|
+| 1 | pass | median ICC 0.861 (work 0.861, social 0.970, explore 0.967, places 0.847, partners 0.592); wake 0.976 (code-driven, not graded) |
+| 2 | pass | extraversion-social 0.58, extraversion-talks 0.44, honesty-steal rate 0.66 (n 74), conscientiousness-work 0.36, openness-explore 0.42, chronotype-wake 1.00; emotionality and agreeableness untested |
+| 3 | fail | text contribution 0.00, params contribution 0.24 |
+| 4 | fail | max top share 0.88, mean 0.607, entropy 0.603 |
+| 5 | fail | similarity ratio vs no_text 1.00, drift -0.10 |
+| 6 | pass | largest gap social hours d -0.35 at p 0.08 (chance imbalance; alpha 0.007) |
+
+The log-derived numbers reproduce the earlier stub baseline (wake ICC 0.976, planned work-hours
+ICC 1.0, lockstep max 0.88 / mean 0.61). Test 1 grades executed work hours (0.861), not planned
+ones (1.0): habits and hunger pull agents off their plans, which is real day-to-day variation.
+The stub reads params directly and ignores prompt text, so it fails 3 and 5 by construction, and
+it fails 4 on the known midday work crowd. That shows the tests fail for the right reasons.
 
 ## Change log
 - v1 (2026-11-03): initial thresholds.
