@@ -149,3 +149,37 @@ def test_concurrent_mind_calls_leave_every_arm_log_unchanged():
     for arm in ("no_text", "flat_params"):
         serial = [e.to_json() for e in sc.run_arm(arm, StubMind(), proto)]
         assert [e.to_json() for e in sc.run_arm(arm, StubMind(), proto, workers=8)] == serial
+
+
+def test_famine_halves_farm_food_from_its_start_day_only():
+    from collections import Counter
+    proto = dict(PROTO, days=4)
+    food = {}
+    for arm in ("full", "famine"):
+        food[arm] = Counter(e.tick // TICKS_PER_DAY for e in sc.run_arm(arm, StubMind(), proto)
+                            if e.kind == "produce" and "food" in e.data)
+    for day in range(sc.FAMINE_FROM_DAY):
+        assert food["famine"][day] == food["full"][day]
+    for day in range(sc.FAMINE_FROM_DAY, 4):  # agents work a bit differently once hungry, so roughly half
+        assert 0.35 < food["famine"][day] / food["full"][day] < 0.65
+
+
+def test_fiction_arm_changes_only_the_framing_and_adds_trait_anchors():
+    seen = {}
+
+    class Spy(StubMind):
+        def decide(self, req):
+            seen.setdefault(self.arm, {}).setdefault((req.agent_id, req.kind), req)
+            return super().decide(req)
+    pop = sc.labeled_population(1, 30)
+    souls = {a["id"]: sc.render_soul(a) for a in pop["agents"]}
+    for arm in ("full", "fiction"):
+        spy = Spy()
+        spy.arm = arm
+        sc.ArmSim(1, 30, spy, pop, arm, souls).run(1)
+    key = next(iter(seen["full"]))
+    full, fic = seen["full"][key].prompt, seen["fiction"][key].prompt
+    assert full.startswith(sc.SCHEMA_HEAD) and fic.startswith(sc.FICTION_HEADER)
+    assert sc.anchors(pop["agents"][key[0]]) in fic and "# How you tend to act" not in full
+    assert fic.replace(sc.FICTION_HEADER, sc.SCHEMA_HEAD).replace("\n\n" + sc.anchors(pop["agents"][key[0]]), "") == full
+    assert seen["fiction"][key].prompt_hash != seen["full"][key].prompt_hash

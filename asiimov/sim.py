@@ -352,11 +352,17 @@ class Sim:
             if a["work_progress"] >= 3000:
                 a["work_progress"] -= 3000
                 if a["role"] == "farmer":
-                    a["inv"]["food"] += 1
-                    self._emit("produce", "rule", a["id"], {"food": 1}, [a["plan_event"]])
+                    food = self._food_yield(a)
+                    if food:
+                        a["inv"]["food"] += food
+                        self._emit("produce", "rule", a["id"], {"food": food}, [a["plan_event"]])
                 else:
                     a["inv"]["coin"] += 2
                     self._emit("produce", "rule", a["id"], {"coin": 2}, [a["plan_event"]])
+
+    def _food_yield(self, a: dict) -> int:
+        """Food from one completed unit of farm work. A hook so experiment arms can change it."""
+        return 1
 
     def _habit(self, a: dict) -> str:
         """No-LLM habit layer for hours the plan doesn't cover, driven by needs and traits."""
