@@ -31,7 +31,7 @@ WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "2"
+ENGINE_VERSION = "3"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -212,8 +212,12 @@ class Sim:
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
+            # Here, not in the shared SCHEMA: plan wording there shifted deliberate choices (PR #8 A/B,
+            # results/raw/pr8-4b-2d), so deliberate prompts keep main's SCHEMA byte for byte.
             s += (f" You just woke and will be ready for bed around {bed_h:02d}:00."
-                  f" Plan from {m // 60:02d}:00 to {bed_h:02d}:00.")
+                  f" Plan your whole day from {m // 60:02d}:00 to {bed_h:02d}:00 in 2 to 6 back-to-back blocks,"
+                  ' like {"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,'
+                  '"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}.')
         return s
 
     # ------------------------------------------------------------------ tick

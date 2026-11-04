@@ -110,8 +110,13 @@ def test_plan_schema_and_prompt_ask_for_the_whole_waking_day():
                     {"activity": "socialize", "start_h": 15, "end_h": 22}]}
     v = jsonschema.Draft202012Validator(SCHEMAS["plan"])
     assert not v.is_valid(one) and v.is_valid(day)
-    plans = [r for r in collect_prompts(agents=10, days=1, seed=3) if r.kind == "plan"]
+    reqs = collect_prompts(agents=10, days=2, seed=3)
+    plans = [r for r in reqs if r.kind == "plan"]
     assert plans and all("ready for bed around" in r.prompt and "back-to-back blocks" in r.prompt for r in plans)
+    # The plan wording stays out of other prompts: in the shared header it cut ask_kin from ~1% of
+    # Qwen3-4B deliberations to 0 (PR #8 A/B, results/raw/pr8-4b-2d).
+    others = [r for r in reqs if r.kind != "plan"]
+    assert others and not any("back-to-back" in r.prompt for r in others)
 
 
 def test_llm_mind_retries_a_200_that_is_not_a_completion(monkeypatch):

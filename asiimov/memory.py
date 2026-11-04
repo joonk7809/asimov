@@ -13,12 +13,8 @@ SECTION_BUDGETS = {  # approximate tokens (chars / 4)
 
 SCHEMA = """# How you act
 You are one person living in a village. Reply with JSON only.
-For kind=plan: {"plan":[{"activity":A,"start_h":H,"end_h":H},...]}, A one of work|socialize|home|rest|explore.
-Cover your whole waking day, from the hour you woke to your bedtime, in 2 to 6 back-to-back blocks:
-{"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}
-For kind=deliberate: {"action":"buy_food|go_market|ask_kin|steal|wait","target":ID,"reason":"..."}
-ask_kin needs the id of someone in your family, steal the id of someone here: write #12 as 12.
-buy_food, go_market and wait take "target":null.
+For kind=plan: {"plan":[{"activity":"work|socialize|home|rest|explore","start_h":H,"end_h":H}]}
+For kind=deliberate: {"action":"buy_food|go_market|ask_kin|steal|wait","target":ID_or_null,"reason":"..."}
 For kind=reflect: {"core":["..."] or [], "summary":"..."}
 You only know what is written below. Claims count only if the world confirms them."""
 
