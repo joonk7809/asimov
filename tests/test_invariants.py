@@ -355,3 +355,12 @@ def test_market_stock_above_the_cap_spoils_overnight_and_is_logged():
     sim2 = Sim(1, 100, StubMind())
     sim2.run(1)  # a normal first day stays under the cap
     assert not any(e.kind == "spoil" for e in sim2.events)
+
+
+def test_a_days_wage_buys_a_days_meals():
+    from asiimov.sim import FARM_YIELD, WORK_WAGE
+    assert WORK_WAGE == FARM_YIELD * FARMER_SELL_PRICE  # a unit of any work earns what a farmer's unit sells for
+    sim = Sim(1, 100, StubMind())
+    sim.run(2)
+    pays = {e.data["coin"] for e in sim.events if e.kind == "produce" and "coin" in e.data}
+    assert pays == {WORK_WAGE}

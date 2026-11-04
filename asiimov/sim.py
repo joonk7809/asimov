@@ -31,6 +31,9 @@ FARMER_SELL_PRICE = 2
 # 267 meals of need (t1h-4b), so the plain world was a famine from day 2. At 3 the same work
 # makes about 300.
 FARM_YIELD = 3
+# Coin per unit of non-farm work: what a farmer gets for the same unit's food, so a day's work buys
+# a day's meals. At 2 (engine 1-4) a 4B guard earned about 3 coin a day against about 8 for meals.
+WORK_WAGE = FARM_YIELD * FARMER_SELL_PRICE
 MARKET_KEEP_DAYS = 2  # market stock above this many days of village need spoils each night
 WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
              "healer": "plaza", "guard": "plaza", "child": "plaza", "elder": "plaza"}
@@ -392,8 +395,8 @@ class Sim:
                         # worked until bed, so 30-40 of about 100 a day reached the market.
                         self._farmer_sells(a)
                 else:
-                    a["inv"]["coin"] += 2
-                    self._emit("produce", "rule", a["id"], {"coin": 2}, [a["plan_event"]])
+                    a["inv"]["coin"] += WORK_WAGE
+                    self._emit("produce", "rule", a["id"], {"coin": WORK_WAGE}, [a["plan_event"]])
 
     def _place(self, a: dict, activity: str) -> str:
         return WORKPLACE[a["role"]] if activity == "work" else ACTIVITY_PLACE.get(activity, a["home"])

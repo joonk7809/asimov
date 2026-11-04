@@ -152,4 +152,5 @@ def test_food_diagnostic_counts_meals_by_role_and_food_by_day():
     day0 = {"produced": 3, "sold": 2, "bought": 0, "eaten": 1, "from_household": 0, "deliberations": 0, "spoiled": 0}
     day1 = {"produced": 0, "sold": 0, "bought": 2, "eaten": 2, "from_household": 1, "deliberations": 1, "spoiled": 0}
     assert food(ev) == {"meals_per_agent_day_by_role": {"crafter": 0.5, "farmer": 0.5},
-                        "buy_attempts": 2, "buy_failed_share": 0.5, "food_by_day": [day0, day1]}
+                        "buy_attempts": 2, "buy_failed_share": 0.5,
+                        "buy_failed_by_why": {"no stock or no coin": 1}, "food_by_day": [day0, day1]}

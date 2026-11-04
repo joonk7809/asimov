@@ -20,6 +20,7 @@ Reads any engine's log without replaying it, so old and new runs compare directl
     python -m asiimov.diagnostics results/raw/t1e-4b/full/events.jsonl.gz [more logs...]
 """
 import argparse
+from collections import Counter
 import json
 import re
 
@@ -59,6 +60,7 @@ def food(events: list) -> dict:
                "spoiled": 0}
               for _ in range(days)]
     buys = failed = 0
+    why = Counter()
     for e in events:
         d = e.tick // TICKS_PER_DAY
         if e.kind == "eat":
@@ -68,6 +70,7 @@ def food(events: list) -> dict:
         elif e.kind == "receipt" and e.data["action"] == "buy_food":
             buys += 1
             failed += not e.data["ok"]
+            why[e.data["why"]] += not e.data["ok"]
             by_day[d]["bought"] += e.data.get("food", 1) if e.data["ok"] else 0
         elif e.kind == "spoil":
             by_day[d]["spoiled"] += e.data["market_food_lost"]
@@ -80,6 +83,7 @@ def food(events: list) -> dict:
     count = {r: sum(1 for x in roles.values() if x == r) for r in meals}
     return {"meals_per_agent_day_by_role": {r: round(meals[r] / (count[r] * days), 2) for r in meals if days},
             "buy_attempts": buys, "buy_failed_share": round(failed / buys, 3) if buys else None,
+            "buy_failed_by_why": {w: n for w, n in sorted(why.items()) if n},
             "food_by_day": by_day}
 
 
