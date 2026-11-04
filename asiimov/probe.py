@@ -272,7 +272,8 @@ def ask(pack: list[dict], mind, k: int, answers_path: str, workers: int = 1, max
                     f.write(json.dumps(rec, sort_keys=True) + "\n")
                     f.flush()
                     written += 1
-        finally:
+        finally:  # on Ctrl-C or a write error too: queued jobs must not keep calling the model
+            stop.set()
             if workers > 1:
                 ex.shutdown()
     gaps = len(todo) - written

@@ -183,3 +183,26 @@ def test_a_dead_server_stops_the_ask_early(pack, tmp_path):
         with pytest.raises(probe.AskIncomplete):
             probe.ask(pack[:50], dead, 5, str(tmp_path / f"a{workers}.jsonl"), workers=workers, max_failures=10)
         assert dead.calls < 10 + 4 * 2, dead.calls  # the queue is cancelled, not drained
+
+
+def test_an_interrupted_ask_stops_calling_the_model(pack, tmp_path):
+    """Re-review of PR #9: Ctrl-C in the main loop left every queued job to make its call."""
+    import _thread
+    import time
+
+    class Interrupting(SoulMind):
+        calls = 0
+
+        def decide(self, req):
+            Interrupting.calls += 1
+            if Interrupting.calls == 20:
+                _thread.interrupt_main()  # SIGINT to the main thread, as Ctrl-C would
+            time.sleep(0.002)
+            return super().decide(req)
+    path = str(tmp_path / "answers.jsonl")
+    with pytest.raises(KeyboardInterrupt):
+        probe.ask(pack[:50], Interrupting(), 5, path, workers=4)
+    assert Interrupting.calls < 100, Interrupting.calls  # 1500 jobs queued
+    with open(path) as f:
+        saved = len(f.readlines())
+    assert probe.ask(pack[:50], SoulMind(), 5, path, workers=4) == 1500 - saved
