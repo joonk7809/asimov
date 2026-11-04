@@ -5,9 +5,11 @@
                     t1e-4b full plans were copies.
   value_word_share  share of non-empty core entries the mind wrote that only name values ("power",
                     "hedonism, power"). Counted on what the mind wrote, before engine 4 rejects them.
-  grounded_share    share of those entries that name a person (a villager's name or #id) or a place:
-                    what the engine-4 reflect ask requests. A label wrapped in a sentence ("hedonism is
-                    what drives me") escapes value_word_share but not this.
+  person_share      share of those entries that name a villager (a name word or #id): the signal that a
+                    memory records something that happened with someone. A label wrapped in a sentence
+                    ("hedonism is what drives me") escapes value_word_share but not this.
+  place_share       share that name a place in a sentence of 3+ words (a lone "market" doesn't count).
+                    Weaker: to-do lines ("buy food before I go home") count here too.
 
 Reads any engine's log without replaying it, so old and new runs compare directly.
 
@@ -31,18 +33,20 @@ def _reply(e) -> dict | None:
     return out if isinstance(out, dict) else None
 
 
-def grounded(text: str, names: frozenset) -> bool:
-    if re.search(r"#\d+", text):
-        return True
-    words = set(re.findall(r"[a-z]+", text.lower()))
-    return bool(words & (names | PLACES))
+def names_person(text: str, names: frozenset) -> bool:
+    return bool(re.search(r"#\d+", text)) or bool(set(re.findall(r"[a-z]+", text.lower())) & names)
+
+
+def names_place(text: str) -> bool:
+    words = re.findall(r"[a-z]+", text.lower())
+    return len(words) >= 3 and bool(set(words) & PLACES)
 
 
 def diagnose(events: list) -> dict:
     pop = events[0].data.get("population", {}) if events and events[0].kind == "genesis" else {}
     names = frozenset(w for a in pop.get("agents", ()) for w in re.findall(r"[a-z]+", a["name"].lower()))
     last: dict[int, list] = {}
-    plans = copies = entries = bare = ground = 0
+    plans = copies = entries = bare = person = place = 0
     for e in events:
         if e.origin != "mind":
             continue
@@ -58,10 +62,12 @@ def diagnose(events: list) -> dict:
                 if isinstance(c, str) and c.strip():
                     entries += 1
                     bare += is_bare_value(c)
-                    ground += grounded(c, names)
+                    person += names_person(c, names)
+                    place += names_place(c)
     return {"plans_after_first": plans, "plan_copy_rate": round(copies / plans, 3) if plans else None,
             "core_entries": entries, "value_word_share": round(bare / entries, 3) if entries else None,
-            "grounded_share": round(ground / entries, 3) if entries else None}
+            "person_share": round(person / entries, 3) if entries else None,
+            "place_share": round(place / entries, 3) if entries else None}
 
 
 def main():

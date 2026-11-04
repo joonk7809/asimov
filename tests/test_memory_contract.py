@@ -63,4 +63,4 @@ def test_diagnostics_on_a_log_with_known_answers():
            _mind(5, 1, "reflect", {"core": ["", "hedonism"], "summary": ""}),
            _mind(6, 1, "reflect", {"core": ["hedonism is what drives me", "#4 helped me"], "summary": ""})]
     assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 5,
-                             "value_word_share": 0.4, "grounded_share": 0.4}
+                             "value_word_share": 0.4, "person_share": 0.4, "place_share": 0.2}
