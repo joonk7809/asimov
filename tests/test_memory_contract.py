@@ -62,7 +62,8 @@ def test_core_entries_naming_someone_outside_the_record_are_rejected():
     cases = {f"{stranger['name']} showed me a map at the woods": 1, f"{first} waved at me in the market": 1,
              f"#{stranger['id']} sold me bread": 1, "#999 sold me bread": 1,
              f"{agents[kin]['name']} gave me food at home": 0, f"#{kin} and I ate at home": 0,
-             f"{a['name']} rested at home all day": 0}
+             f"{a['name']} rested at home all day": 0,
+             f"{agents[kin]['name']} talked with {a['name'].split()[0]} at the plaza": 0}
     for text, unknown in cases.items():
         a["asleep"] = False
         sim._fall_asleep(a, 0, {"core": [text], "summary": ""})
@@ -105,3 +106,13 @@ def test_full_names_are_unique_per_world():
         for pop in (generate_population(seed, 100), labeled_population(seed, 100)):
             names = [a["name"] for a in pop["agents"]]
             assert len(set(names)) == len(names), seed
+
+
+def test_author_naming_themself_is_not_someone_else():
+    """Two Annas: Anna Dean writing her own full or first name names nobody (the reflect A/B's 54
+    false 'unknown' entries were all this)."""
+    agents = [{"id": 0, "name": "Anna Dean"}, {"id": 1, "name": "Anna Vosavo"}, {"id": 2, "name": "Omar Luriro"}]
+    assert named_people("Omar Luriro and Anna Dean talked at the plaza", agents, 0) == [{2}]
+    assert named_people("Omar Luriro talked with Anna at the woods", agents, 0) == [{2}]
+    assert named_people("Anna Vosavo talked with me", agents, 0) == [{1}]
+    assert named_people("Anna waved at Omar Luriro", agents, 2) == [{0, 1}]
