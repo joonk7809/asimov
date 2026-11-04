@@ -22,6 +22,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import replace
 
+from .diagnostics import diagnose
 from .events import read_jsonl, write_jsonl
 from .metrics import icc1
 from .memory import SCHEMA, prompt_hash, render_soul, tokens
@@ -538,7 +539,9 @@ def grade(arms: dict, thresholds: dict, sha: str) -> dict:
     statuses = [t["status"] for t in tests.values()]
     overall = "pass" if all(s == "pass" for s in statuses) else "fail" if "fail" in statuses else "inconclusive"
     return {"overall": overall, "thresholds_version": thresholds["version"], "thresholds_sha256": sha,
-            "models": {k: v.get("model") for k, v in arms.items()}, "tests": tests}
+            "models": {k: v.get("model") for k, v in arms.items()}, "tests": tests,
+            # Not graded: how much output repeats what the prompt handed over (lesson L12).
+            "diagnostics": {k: v["diagnostics"] for k, v in arms.items() if "diagnostics" in v}}
 
 
 def render_md(report: dict) -> str:
@@ -551,6 +554,10 @@ def render_md(report: dict) -> str:
         key = {k: v for k, v in t.items() if k not in ("status", "pairs", "daily_full", "features", "icc")
                and not isinstance(v, dict)}
         lines.append(f"| {name} | {t['status']} | {json.dumps(key)} |")
+    if report.get("diagnostics"):
+        lines += ["", "Copy diagnostics (not graded): " + "; ".join(
+            f"{arm} plan copy {d['plan_copy_rate']}, value-word core {d['value_word_share']}"
+            for arm, d in report["diagnostics"].items())]
     lines += ["", "Full numbers are in report.json."]
     return "\n".join(lines) + "\n"
 
@@ -596,6 +603,7 @@ def main():
             print(f"arm {arm}: {len(events)} events", flush=True)
         ex = extract(events)
         ex["model"] = next((e.mind["model"] for e in events if e.origin == "mind"), None)
+        ex["diagnostics"] = diagnose(events)
         config, role = configuration(arm)
         groups[config][role] = ex
     graded = [c for c in groups if "full" in groups[c]]

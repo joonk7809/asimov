@@ -17,7 +17,7 @@ import json
 from collections import defaultdict
 
 from .events import Event, canonical
-from .memory import assemble_prompt, prompt_hash, render_soul, tokens
+from .memory import REFLECT_ASK, assemble_prompt, is_bare_value, prompt_hash, render_soul, tokens
 from .minds import MindRequest, ReplayDivergence, dispatch
 from .params import generate_population
 from .rng import Rng
@@ -32,7 +32,7 @@ ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
 ACTIVITY_PLACE = {"socialize": "plaza", "shop": "market", "explore": "woods"}  # work: WORKPLACE; else home
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "3"
+ENGINE_VERSION = "4"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -44,6 +44,21 @@ def _clamp(v, lo=0, hi=1000):
 def _is_int(v) -> bool:
     # JSON true/false parse to bool, which Python treats as int; a mind's hour or id never is one.
     return type(v) is int
+
+
+def valid_blocks(out: dict | None) -> tuple[list[dict], int]:
+    """The plan blocks the world accepts from a plan reply, and how many it drops."""
+    blocks, dropped = [], 0
+    raw_plan = out.get("plan") if out else None
+    for b in raw_plan if isinstance(raw_plan, list) else []:
+        ok = (isinstance(b, dict) and b.get("activity") in ACTIVITIES
+              and _is_int(b.get("start_h")) and _is_int(b.get("end_h"))
+              and 0 <= b["start_h"] < b["end_h"] <= 24)
+        if ok:
+            blocks.append({"activity": b["activity"], "start_h": b["start_h"], "end_h": b["end_h"]})
+        else:
+            dropped += 1
+    return blocks, dropped
 
 
 class Sim:
@@ -219,6 +234,8 @@ class Sim:
                   f" Plan your whole day from {m // 60:02d}:00 to {bed_h:02d}:00 in 2 to 6 back-to-back blocks,"
                   ' like {"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,'
                   '"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}.')
+        elif kind == "reflect":
+            s += REFLECT_ASK
         return s
 
     # ------------------------------------------------------------------ tick
@@ -297,16 +314,7 @@ class Sim:
                       lambda eid, out: self._apply_plan(a, eid, out))
 
     def _apply_plan(self, a: dict, eid: int, out: dict | None):
-        blocks, dropped = [], 0
-        raw_plan = out.get("plan") if out else None
-        for b in raw_plan if isinstance(raw_plan, list) else []:
-            ok = (isinstance(b, dict) and b.get("activity") in ACTIVITIES
-                  and _is_int(b.get("start_h")) and _is_int(b.get("end_h"))
-                  and 0 <= b["start_h"] < b["end_h"] <= 24)
-            if ok:
-                blocks.append({"activity": b["activity"], "start_h": b["start_h"], "end_h": b["end_h"]})
-            else:
-                dropped += 1
+        blocks, dropped = valid_blocks(out)
         a["plan"], a["plan_event"] = blocks, eid
         self._emit("plan_receipt", "rule", a["id"], {"ok": out is not None, "blocks": len(blocks),
                                                       "dropped": dropped}, [eid])
@@ -317,11 +325,14 @@ class Sim:
                       lambda eid, out: self._fall_asleep(a, eid, out))
 
     def _fall_asleep(self, a: dict, eid: int, out: dict | None):
-        promoted = []
+        promoted, rejected = [], 0
         if out and isinstance(out.get("core"), list):
             for c in out["core"][:2]:
                 if isinstance(c, str) and c.strip():
-                    promoted.append(c.strip()[:200])
+                    if is_bare_value(c):
+                        rejected += 1
+                    else:
+                        promoted.append(c.strip()[:200])
         a["core"] = (a["core"] + promoted)[-6:]
         tick = self.state["tick"]
         for r in a["recent"]:
@@ -331,9 +342,12 @@ class Sim:
         a["episodes"] = sorted(a["episodes"], key=lambda e: (-e["importance"], -e["tick"]))[:keep]
         a["episodes"].sort(key=lambda e: e["tick"])
         a["recent"] = []
+        # Today's plan ends with today: left in place, the next wake prompt showed it as "Today's plan"
+        # and 86% of 4B plans copied it (engine 3).
+        a["plan"] = []
         a["asleep"], a["slept_at"] = True, tick
         a["activity"], a["place"], a["override"] = "sleep", a["home"], None
-        self._emit("sleep", "rule", a["id"], {"promoted": len(promoted)}, [eid])
+        self._emit("sleep", "rule", a["id"], {"promoted": len(promoted), "rejected": rejected}, [eid])
         self._schedule_wake(a, tick)
 
     def _act(self, a: dict):
