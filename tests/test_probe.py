@@ -148,3 +148,38 @@ def test_ask_resumes_after_a_crash_without_asking_twice(pack, tmp_path):
         good = [json.loads(line) for line in f if line.strip().endswith("}")]
     assert sorted((a["point"], a["variant"], a["rep"]) for a in good) == sorted(probe.jobs(small, 3))
     assert probe.analyze(small, good, 3)["points_incomplete"] == 0
+
+
+def test_a_failed_job_never_discards_the_answers_that_did_arrive(pack, tmp_path):
+    """Review of PR #9: one raising job used to drop every answer of a threaded ask."""
+    small = pack[:50]
+    path = str(tmp_path / "answers.jsonl")
+    calls = []
+
+    class Flaky(SoulMind):
+        def decide(self, req):
+            calls.append(1)
+            if len(calls) == 5:
+                raise RuntimeError("LLM server unreachable")
+            return super().decide(req)
+    total = len(probe.jobs(small, 5))
+    with pytest.raises(probe.AskIncomplete, match="1 of"):
+        probe.ask(small, Flaky(), 5, path, workers=4)
+    with open(path) as f:
+        assert len(f.readlines()) == total - 1
+    assert probe.ask(small, SoulMind(), 5, path, workers=4) == 1
+
+
+def test_a_dead_server_stops_the_ask_early(pack, tmp_path):
+    class Dead:
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, req):
+            self.calls += 1
+            raise RuntimeError("down")
+    for workers in (1, 4):
+        dead = Dead()
+        with pytest.raises(probe.AskIncomplete):
+            probe.ask(pack[:50], dead, 5, str(tmp_path / f"a{workers}.jsonl"), workers=workers, max_failures=10)
+        assert dead.calls < 10 + 4 * 2, dead.calls  # the queue is cancelled, not drained

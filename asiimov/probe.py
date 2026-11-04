@@ -28,6 +28,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import threading
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,6 +44,7 @@ MEMORY_SECTIONS = ("core", "relationships", "beliefs", "episodes", "recent")
 KINDS = ("plan", "deliberate", "reflect")
 # Simulated (n=167 points of one kind, base action share uniform in 0.2-0.8, uniform planted shift):
 # 80% power to detect a shift of about 0.16 in an action's share at k=5, and about 0.11 at k=10.
+# For one action moving share by d, the deliberate excess is d**2.
 POWER = {5: 0.16, 10: 0.11}
 ARMS = ("full", "famine", "fiction")  # arms whose logs replay exactly (prompts are a function of state)
 
@@ -210,8 +212,16 @@ def sample_seed(point: dict, variant: str, rep: int) -> int:
     return int(h[:8], 16)
 
 
-def ask(pack: list[dict], mind, k: int, answers_path: str, workers: int = 1) -> int:
-    """Ask every job not yet in answers_path; append each answer as it arrives. Returns jobs asked."""
+class AskIncomplete(RuntimeError):
+    pass
+
+
+def ask(pack: list[dict], mind, k: int, answers_path: str, workers: int = 1, max_failures: int = 50) -> int:
+    """Ask every job not yet in answers_path; append each answer as it arrives. Returns answers written.
+
+    A failed job never discards the others: every answer that arrives is written. Once max_failures jobs
+    have failed (a dead pod, say) the queue is cancelled. Either way AskIncomplete is raised at the end
+    with the gap count, and a rerun asks only the gaps."""
     done = set()
     if os.path.exists(answers_path):
         with open(answers_path, "rb+") as f:  # drop a line a crash cut off, so the next append starts clean
@@ -228,30 +238,48 @@ def ask(pack: list[dict], mind, k: int, answers_path: str, workers: int = 1) -> 
     by_id = {p["id"]: p for p in pack}
     todo = [j for j in jobs(pack, k) if j not in done]
     lock = threading.Lock()
+    stop = threading.Event()
+    written, failures = 0, []
 
     def one(job):
+        if stop.is_set():  # too many failures: skip the rest quickly (cancelled futures never
+            return None    # reach as_completed, so the queue drains through this check instead)
         pid, variant, rep = job
         p = by_id[pid]
         prompt = p["prompts"][variant]
         req = MindRequest(p["kind"], p["agent"], p["tick"], prompt, prompt_hash(prompt),
                           json.loads(json.dumps(p["view"])), seed=sample_seed(p, variant, rep))
-        reply = mind.decide(req)
+        try:
+            reply = mind.decide(req)
+        except Exception as e:  # noqa: BLE001 - counted here, in the worker, so a fast failure stops the queue
+            with lock:
+                failures.append(e)
+                if len(failures) >= max_failures:
+                    stop.set()
+            return None
         return {"point": pid, "variant": variant, "rep": rep, "seed": req.seed, "raw_output": reply.raw_output,
                 "model": reply.model}
 
     with open(answers_path, "a") as f:
-        def write(rec):
-            with lock:
-                f.write(json.dumps(rec, sort_keys=True) + "\n")
-                f.flush()
         if workers <= 1:
-            for j in todo:
-                write(one(j))
+            results = (one(j) for j in todo)
         else:
-            with ThreadPoolExecutor(workers) as ex:
-                for fut in as_completed([ex.submit(one, j) for j in todo]):
-                    write(fut.result())
-    return len(todo)
+            ex = ThreadPoolExecutor(workers)
+            results = (fut.result() for fut in as_completed([ex.submit(one, j) for j in todo]))
+        try:
+            for rec in results:  # written by this thread only, as each answer arrives
+                if rec is not None:
+                    f.write(json.dumps(rec, sort_keys=True) + "\n")
+                    f.flush()
+                    written += 1
+        finally:
+            if workers > 1:
+                ex.shutdown()
+    gaps = len(todo) - written
+    if gaps:
+        raise AskIncomplete(f"{gaps} of {len(todo)} jobs unanswered ({len(failures)} failed, first: "
+                            f"{failures[0]!r}); answers so far are saved, rerun ask to fill the gaps")
+    return written
 
 
 # ---------------------------------------------------------------------------- analysis
@@ -380,13 +408,23 @@ def render_md(report: dict, meta: dict) -> str:
              "plan: share of hours planned differently; reflect: Jaccard distance of promoted core-memory words). "
              "0 means no effect; 95% bootstrap CI over decision points (points cluster by agent, so it is "
              "somewhat narrow; with 12 cells, one marginal exclusion of 0 is weak evidence).", "",
-             "| kind | points | noise (full vs full) | null excess | " + " | ".join(VARIANTS[1:]) + " |",
-             "|---|---|---|---|" + "---|" * (len(VARIANTS) - 1)]
+             "swapped_soul uses the most-different donor and swaps text only (params unchanged): an upper bound "
+             "on a random swap, and not scorecard v2 test 8.",
+             "| kind | points | noise (full vs full) | null excess | " + " | ".join(VARIANTS[1:]) + " | 80% power |",
+             "|---|---|---|---|" + "---|" * len(VARIANTS)]
+    k = report["k"]
     for kind, row in report["kinds"].items():
         cells = [f"{row[v]['mean']:+.3f} [{row[v]['ci95'][0]:+.3f}, {row[v]['ci95'][1]:+.3f}]" for v in VARIANTS[1:]]
         n = row["null_excess"]
+        power = (f"action-share shift {POWER[k]} (excess about {POWER[k] ** 2:.3f}) at 167 points"
+                 if kind == "deliberate" and k in POWER else "not simulated")
         lines.append(f"| {kind} | {row['points']} | {row['noise_within_full']:.3f} | "
-                     f"{n['mean']:+.3f} [{n['ci95'][0]:+.3f}, {n['ci95'][1]:+.3f}] | " + " | ".join(cells) + " |")
+                     f"{n['mean']:+.3f} [{n['ci95'][0]:+.3f}, {n['ci95'][1]:+.3f}] | " + " | ".join(cells)
+                     + f" | {power} |")
+    lines += ["", "A CI that includes 0 means the effect is below what this probe detects, not that there is none."]
+    if meta.get("engine") == "1" and "plan" in report["kinds"]:
+        lines.append("Engine 1 plans were one short block (F2), so the plan row is diluted; the plan row that "
+                     "counts comes from an engine 2 log.")
     if "deliberate_actions" in report:
         lines += ["", "Deliberate action shares (first K answers per variant):", ""]
         for v, shares in report["deliberate_actions"].items():
@@ -439,9 +477,16 @@ def main():
             for rec in pack:
                 f.write(json.dumps(rec, sort_keys=True) + "\n")
         models = sorted({r["model"] for r in pack})
+        try:
+            commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                                    cwd=os.path.dirname(__file__)).stdout.strip() or None
+            dirty = bool(subprocess.run(["git", "status", "--porcelain", "asiimov"], capture_output=True, text=True,
+                                        cwd=os.path.dirname(__file__)).stdout.strip())
+        except OSError:
+            commit, dirty = None, None
         _write_json({"label": args.label, "log": args.log, "log_sha256": log_sha, "arm": args.arm,
                      "points": len(pack), "seed": args.seed,
-                     "prompt_token_offset": args.prompt_token_offset, "model": models, "engine": ENGINE_VERSION,
+                     "prompt_token_offset": args.prompt_token_offset, "commit": commit, "dirty": dirty, "model": models, "engine": ENGINE_VERSION,
                      "kinds": dict(Counter(r["kind"] for r in pack)), "variants": list(VARIANTS)}, meta_path)
         print(f"packed {len(pack)} points: {dict(Counter(r['kind'] for r in pack))}")
         return
@@ -463,11 +508,12 @@ def main():
             raise SystemExit(f"answers so far were asked with --k {meta['k']}")
         meta.update({"k": args.k, "sampling": {kk: v for kk, v in s.items() if kk != "seed"}})
         _write_json(meta, meta_path)
-        n = ask(pack, mind, args.k, answers_path, args.workers)
-        stats = mind.stats()
-        meta.setdefault("ask_runs", []).append({"asked": n, **stats})
-        _write_json(meta, meta_path)
-        print(f"asked {n} jobs: {stats}")
+        try:
+            n = ask(pack, mind, args.k, answers_path, args.workers)
+        finally:  # record what this run cost even when it stops short
+            meta.setdefault("ask_runs", []).append(mind.stats())
+            _write_json(meta, meta_path)
+        print(f"answered {n} jobs: {mind.stats()}")
         return
 
     with open(answers_path) as f:
