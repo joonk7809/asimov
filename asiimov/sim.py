@@ -31,6 +31,7 @@ FARMER_SELL_PRICE = 2
 # 267 meals of need (t1h-4b), so the plain world was a famine from day 2. At 3 the same work
 # makes about 300.
 FARM_YIELD = 3
+MARKET_KEEP_DAYS = 2  # market stock above this many days of village need spoils each night
 WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
              "healer": "plaza", "guard": "plaza", "child": "plaza", "elder": "plaza"}
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
@@ -281,6 +282,7 @@ class Sim:
             if not a["asleep"]:
                 self.metrics["activity"][(tick // TICKS_PER_DAY, self._hour())][a["activity"]] += 1
         if tick % TICKS_PER_DAY == TICKS_PER_DAY - 1:
+            self._spoil()
             self._emit("checkpoint", "rule", None, {"day": tick // TICKS_PER_DAY, "hash": self.state_hash()})
         st["tick"] = tick + 1
 
@@ -422,6 +424,21 @@ class Sim:
             a["inv"]["coin"] += surplus * FARMER_SELL_PRICE
             self.state["market_food"] += surplus
             self._emit("sell", "rule", a["id"], {"food": surplus}, [a["plan_event"]])
+
+    def _market_cap(self) -> int:
+        """MARKET_KEEP_DAYS of the village's meals, from each agent's metabolism and sleep."""
+        rise = sum((1440 - a["rhythm"]["sleep_need_min"]) // 10 * (a["body"]["metabolism"] // 100)
+                   + a["rhythm"]["sleep_need_min"] // 10 * (a["body"]["metabolism"] // 200)
+                   for a in self.state["agents"])
+        return MARKET_KEEP_DAYS * rise // 450
+
+    def _spoil(self):
+        """Food left on the stall past a cap rots overnight, so a fed village still needs its farmers."""
+        cap = self._market_cap()
+        if self.state["market_food"] > cap:
+            lost = self.state["market_food"] - cap
+            self.state["market_food"] = cap
+            self._emit("spoil", "rule", None, {"market_food_lost": lost, "cap": cap})
 
     def _meals_left_today(self, a: dict) -> int:
         """Meals _eat will take before this agent's bedtime, counting the one due now (at least 1).

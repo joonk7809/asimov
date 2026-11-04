@@ -144,11 +144,12 @@ def stepped_run(sim: Sim, days: int, player: dict):
         new = sim.events[n0:]
         produced = sum(e.data.get("food", 0) for e in new if e.kind == "produce")
         eaten = sum(1 for e in new if e.kind == "eat")
+        spoiled = sum(e.data["market_food_lost"] for e in new if e.kind in ("spoil", "blight"))
         coin_made = sum(e.data.get("coin", 0) for e in new if e.kind == "produce")
         sold = sum(e.data["food"] for e in new if e.kind == "sell")
         bought = sum(e.data["food"] for e in new if e.kind == "receipt" and e.data["action"] == "buy_food" and e.data["ok"])
         food1, coin1 = totals(sim)
-        assert food1 - food0 == produced - eaten - burned, f"food ledger broken at tick {tick}"
+        assert food1 - food0 == produced - eaten - burned - spoiled, f"food ledger broken at tick {tick}"
         assert coin1 - coin0 == coin_made + FARMER_SELL_PRICE * sold - FOOD_PRICE * bought, f"coin ledger at {tick}"
         check_state(sim)
     assert [a["traits"] for a in sim.state["agents"]] == genesis_traits, "a mind changed someone's traits"
@@ -341,3 +342,16 @@ def test_a_working_adult_also_buys_what_the_dependants_at_home_still_need():
     adult["place"], adult["inv"]["coin"], sim.state["market_food"] = "market", 1000, 1000
     sim._resolve(adult, {"action": "buy_food"}, 0)
     assert adult["inv"]["food"] == want
+
+
+def test_market_stock_above_the_cap_spoils_overnight_and_is_logged():
+    sim = Sim(1, 100, StubMind())
+    cap = sim._market_cap()
+    assert 450 < cap < 650  # two days of meals for about 100 agents at about 2.7 a day
+    sim.state["market_food"] = cap + 40
+    sim.run(1)
+    spoils = [e for e in sim.events if e.kind == "spoil"]
+    assert spoils and spoils[0].data["cap"] == cap and sim.state["market_food"] <= cap
+    sim2 = Sim(1, 100, StubMind())
+    sim2.run(1)  # a normal first day stays under the cap
+    assert not any(e.kind == "spoil" for e in sim2.events)

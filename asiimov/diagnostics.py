@@ -55,7 +55,8 @@ def food(events: list) -> dict:
     roles = {a["id"]: a["role"] for a in pop.get("agents", ())}
     days = events[-1].tick // TICKS_PER_DAY + (events[-1].tick % TICKS_PER_DAY > 0) if events else 0
     meals = {r: 0 for r in sorted(set(roles.values()))}
-    by_day = [{"produced": 0, "sold": 0, "bought": 0, "eaten": 0, "from_household": 0, "deliberations": 0}
+    by_day = [{"produced": 0, "sold": 0, "bought": 0, "eaten": 0, "from_household": 0, "deliberations": 0,
+               "spoiled": 0}
               for _ in range(days)]
     buys = failed = 0
     for e in events:
@@ -68,6 +69,8 @@ def food(events: list) -> dict:
             buys += 1
             failed += not e.data["ok"]
             by_day[d]["bought"] += e.data.get("food", 1) if e.data["ok"] else 0
+        elif e.kind == "spoil":
+            by_day[d]["spoiled"] += e.data["market_food_lost"]
         elif e.origin == "mind" and e.data["kind"] == "deliberate":
             by_day[d]["deliberations"] += 1
         elif e.kind == "produce" and "food" in e.data:
