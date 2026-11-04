@@ -11,6 +11,9 @@
                     ("hedonism is what drives me") escapes value_word_share but not this.
   place_share       share that name a place in a sentence of 3+ words (a lone "market" doesn't count).
                     Weaker: to-do lines ("buy food before I go home") count here too.
+  meals_per_agent_day_by_role  eat events per agent per simulated day, by role. A fed agent eats about
+                    3 a day; under the engine-4 economy most non-farmers fell to about 0.5 from day 2.
+  food_by_day       food produced, sold to the market and eaten, per day.
 
 Reads any engine's log without replaying it, so old and new runs compare directly.
 
@@ -21,7 +24,7 @@ import json
 import re
 
 from .memory import is_bare_value
-from .sim import WORKPLACE, valid_blocks
+from .sim import TICKS_PER_DAY, WORKPLACE, valid_blocks
 
 PLACES = frozenset(WORKPLACE.values()) | {"market", "plaza", "woods", "home"}
 
@@ -45,6 +48,26 @@ def names_person(text: str, others: frozenset, own_id: int | None) -> bool:
 def names_place(text: str) -> bool:
     words = re.findall(r"[a-z]+", text.lower())
     return len(words) >= 3 and bool(set(words) & PLACES)
+
+
+def food(events: list) -> dict:
+    pop = events[0].data.get("population", {}) if events and events[0].kind == "genesis" else {}
+    roles = {a["id"]: a["role"] for a in pop.get("agents", ())}
+    days = events[-1].tick // TICKS_PER_DAY + (events[-1].tick % TICKS_PER_DAY > 0) if events else 0
+    meals = {r: 0 for r in sorted(set(roles.values()))}
+    by_day = [{"produced": 0, "sold": 0, "eaten": 0} for _ in range(days)]
+    for e in events:
+        d = e.tick // TICKS_PER_DAY
+        if e.kind == "eat":
+            meals[roles[e.actor]] += 1
+            by_day[d]["eaten"] += 1
+        elif e.kind == "produce" and "food" in e.data:
+            by_day[d]["produced"] += e.data["food"]
+        elif e.kind == "sell":
+            by_day[d]["sold"] += e.data["food"]
+    count = {r: sum(1 for x in roles.values() if x == r) for r in meals}
+    return {"meals_per_agent_day_by_role": {r: round(meals[r] / (count[r] * days), 2) for r in meals if days},
+            "food_by_day": by_day}
 
 
 def diagnose(events: list) -> dict:
@@ -73,7 +96,7 @@ def diagnose(events: list) -> dict:
     return {"plans_after_first": plans, "plan_copy_rate": round(copies / plans, 3) if plans else None,
             "core_entries": entries, "value_word_share": round(bare / entries, 3) if entries else None,
             "person_share": round(person / entries, 3) if entries else None,
-            "place_share": round(place / entries, 3) if entries else None}
+            "place_share": round(place / entries, 3) if entries else None, **food(events)}
 
 
 def main():

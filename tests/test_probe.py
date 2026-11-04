@@ -70,8 +70,12 @@ def test_sampling_spreads_over_kinds_and_agents(logs):
     pts = probe.sample_points(logs["full"], 90, seed=0)
     assert len(pts) == 90 and len(set(pts)) == 90
     by_kind = {k: [a for _, a, kk in pts if kk == k] for k in probe.KINDS}
-    assert all(len(v) == 30 for v in by_kind.values())
-    assert all(max(v.count(a) for a in v) <= 2 for v in by_kind.values())  # round-robin over agents
+    avail = {k: sum(e.origin == "mind" and e.data["kind"] == k for e in logs["full"]) for k in probe.KINDS}
+    for k, v in by_kind.items():  # an even split, and a kind with fewer points gives its share to the others
+        assert len(v) == avail[k] if avail[k] < 30 else len(v) >= 30, (k, len(v), avail[k])
+    for k, v in by_kind.items():  # round-robin over the agents that have points of that kind
+        n = len({e.actor for e in logs["full"] if e.origin == "mind" and e.data["kind"] == k})
+        assert max(v.count(a) for a in v) <= -(-len(v) // n), k
 
 
 def test_world_prompts_are_unchanged_by_the_hook(logs):

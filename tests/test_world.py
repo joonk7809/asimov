@@ -9,6 +9,7 @@ from asiimov.metrics import icc1, summarize
 from asiimov.minds import NoisyMind, ReplayDivergence, StubMind
 from asiimov.replay import replay
 from asiimov.rng import Rng
+import asiimov.sim as sim_mod
 from asiimov.sim import ENGINE_VERSION, TICKS_PER_DAY, Sim
 
 FIRE = {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]}
@@ -81,7 +82,11 @@ def test_icc_separates_character_from_noise():
     assert icc1({1: [1, 9, 5], 2: [9, 1, 5], 3: [5, 9, 1]}) < 0.1
 
 
-def test_player_intervention_propagates_against_a_twin():
+def test_player_intervention_propagates_against_a_twin(monkeypatch):
+    # Propagation runs through scarcity (hunger, theft, grudges). With engine 5's fed world the
+    # stub's fire reaches nobody outside the family (seeds 1, 2, 5, every family), a true negative
+    # (S4); the propagation machinery is tested in the engine-1..4 economy.
+    monkeypatch.setattr(sim_mod, "FARM_YIELD", 1)
     base = run(StubMind(), agents=60, days=4, seed=5)
     fire = run(StubMind(), agents=60, days=4, seed=5, player={TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]})
 
@@ -150,7 +155,8 @@ def test_aborted_run_keeps_its_recorded_events(tmp_path, monkeypatch):
 GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b",
           "2": "6dd170b56c91610ef4359f4850f451a87224fb9ed5cb9edf7ec552d0fe884f4d",  # 42adb9e, never merged
           "3": "7b0e876ed43e135033a9b9b6e819c176e70c2e4aeb3b3b14f9b2f8d3ad71088d",
-          "4": "87be8cccf05d032f2dc428e615b7f45ad3981da0c735ff9edb2ce74cb48d3c32"}
+          "4": "87be8cccf05d032f2dc428e615b7f45ad3981da0c735ff9edb2ce74cb48d3c32",
+          "5": "0fee94237e5d869893987415c8f91ab11467bc4c5b1d3b0be69b962f92288c3b"}
 
 
 def test_log_changes_bump_the_engine_version():

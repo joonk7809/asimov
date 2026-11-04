@@ -77,7 +77,8 @@ def test_core_entries_naming_someone_outside_the_record_are_rejected():
 
 
 def _genesis(names):
-    return Event(0, 0, "genesis", "rule", None, {"population": {"agents": [{"name": n} for n in names]}}, [])
+    agents = [{"id": i, "name": n, "role": "farmer"} for i, n in enumerate(names)]
+    return Event(0, 0, "genesis", "rule", None, {"population": {"agents": agents}}, [])
 
 
 def _mind(i, actor, kind, out):
@@ -94,8 +95,11 @@ def test_diagnostics_on_a_log_with_known_answers():
            _mind(6, 1, "reflect", {"core": ["hedonism is what drives me", "#4 helped me"], "summary": ""}),
            _mind(7, 1, "reflect", {"core": ["Ana Nelen rested at home", "#1 walked to the woods"], "summary": ""})]
     # Agent 1 is Ana Nelen: naming herself or her own #1 is not naming someone.
-    assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 7,
-                             "value_word_share": 0.286, "person_share": 0.286, "place_share": 0.429}
+    d = diagnose(evs)
+    assert {k: d[k] for k in ("plans_after_first", "plan_copy_rate", "core_entries", "value_word_share",
+                              "person_share", "place_share")} == {
+        "plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 7,
+        "value_word_share": 0.286, "person_share": 0.286, "place_share": 0.429}
 
 
 def test_full_names_are_unique_per_world():
@@ -131,3 +135,15 @@ def test_named_people_does_not_depend_on_hash_seed():
     outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                            env={**os.environ, "PYTHONHASHSEED": str(seed)}).stdout for seed in range(1, 9)}
     assert len(outs) == 1, outs
+
+
+def test_food_diagnostic_counts_meals_by_role_and_food_by_day():
+    from asiimov.diagnostics import food
+    g = Event(0, 0, "genesis", "rule", None, {"population": {"agents": [
+        {"id": 0, "name": "A", "role": "farmer"}, {"id": 1, "name": "B", "role": "crafter"},
+        {"id": 2, "name": "C", "role": "crafter"}]}}, [])
+    ev = [g, Event(1, 10, "produce", "rule", 0, {"food": 3}, []), Event(2, 10, "sell", "rule", 0, {"food": 2}, []),
+          Event(3, 20, "eat", "rule", 0, {}, []), Event(4, 150, "eat", "rule", 1, {}, []),
+          Event(5, 160, "eat", "rule", 2, {}, []), Event(6, 288, "end", "rule", None, {}, [])]
+    assert food(ev) == {"meals_per_agent_day_by_role": {"crafter": 0.5, "farmer": 0.5},
+                        "food_by_day": [{"produced": 3, "sold": 2, "eaten": 1}, {"produced": 0, "sold": 0, "eaten": 2}]}
