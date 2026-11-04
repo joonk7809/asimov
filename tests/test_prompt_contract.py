@@ -61,3 +61,34 @@ def test_every_warm_relationship_carries_its_last_contact():
 def test_the_summary_voice_ask_is_only_in_reflect_prompts():
     reqs = collect_prompts(agents=20, days=2, seed=3)
     assert all((REFLECT_VOICE in r.prompt) == (r.kind == "reflect") for r in reqs)
+
+
+def test_a_crowd_is_cut_to_fit_and_the_schema_offers_only_the_people_shown():
+    from collections import defaultdict
+    from asiimov.llm import schema_for
+    sim = Sim(1, 120, StubMind())
+    sim.state["tick"] = 60
+    for o in sim.state["agents"]:
+        o["place"] = "market"
+    occ = defaultdict(list)
+    for o in sim.state["agents"]:
+        occ[o["place"]].append(o["id"])
+    a = sim.state["agents"][40]
+    a["sleep_tick"] = 130
+    kin = [k for k in sim.state["families"][a["family"]]["members"] if k != a["id"]]
+    sim._rel(a, 119)["affinity"] = -500  # a grudge stays in view
+    for kind in ("deliberate", "plan", "reflect"):
+        sim.pending.clear()
+        sim._request(a, kind, sim._view(a, occ), [], lambda *x: None)
+        req = sim.pending[a["id"]][0]
+        now = req.prompt.split(f"# Now ({kind})\n", 1)[1]
+        assert now.startswith("Day 0, 10:00.") and "others." in now  # the head survives, the cut is said
+        assert len(now) + len(f"# Now ({kind})\n") <= SECTION_BUDGETS["situation"] * 4
+        shown = {p["id"] for p in req.view["present"]}
+        assert shown and all(f"#{i} (" in now for i in shown) and 119 in shown and set(kin) <= shown
+        listed = now.split("Here: ", 1)[1].split(" and ", 1)[0]
+        assert {int(x.split(" ")[0][1:]) for x in listed.split(", ")} == shown
+        if kind == "deliberate":
+            steal = next(b for b in schema_for(req)["anyOf"]
+                         if b["properties"]["action"]["enum"] == ["steal"])
+            assert set(steal["properties"]["target"]["enum"]) == shown

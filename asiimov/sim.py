@@ -17,7 +17,7 @@ import json
 from collections import defaultdict
 
 from .events import Event, canonical
-from .memory import (REFLECT_ASK, REFLECT_VOICE, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
+from .memory import (REFLECT_ASK, REFLECT_VOICE, SECTION_BUDGETS, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
                      render_soul, tokens)
 from .minds import MindRequest, ReplayDivergence, dispatch
 from .params import generate_population
@@ -230,29 +230,49 @@ class Sim:
         return view
 
     def _situation(self, a: dict, view: dict, kind: str) -> str:
+        """The "# Now" section. Everything but the list of people here comes first; that list then gets
+        whatever room the section budget leaves, and the view (so the reply schema) is cut to match.
+        Tail-clipping a crowded situation (85+ people in one place) had cut the head off and left the
+        schema offering steal targets the prompt no longer showed (PR #15 review)."""
         m = (self.state["tick"] % TICKS_PER_DAY) * 10
-        who = ", ".join(f"#{p['id']} ({p['role']})" for p in view["present"]) or "nobody"
-        s = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
-             f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
-             f"Here: {who}.")
         agents = self.state["agents"]
         kin = ", ".join(f"{agents[k['id']]['name']} (#{k['id']})" for k in view["kin"])
-        s += f" Your family: {kin or 'none'}."
-        s += " " + self._economy(a)
+        rest = f" Your family: {kin or 'none'}. " + self._economy(a)
         if "market_food" in view:
-            s += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
+            rest += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
             # Here, not in the shared SCHEMA: plan wording there shifted deliberate choices (PR #8 A/B,
             # results/raw/pr8-4b-2d), so deliberate prompts keep main's SCHEMA byte for byte.
-            s += (f" You just woke and will be ready for bed around {bed_h:02d}:00."
-                  f" Plan your whole day from {m // 60:02d}:00 to {bed_h:02d}:00 in 2 to 6 back-to-back blocks,"
-                  ' like {"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,'
-                  '"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}.')
+            rest += (f" You just woke and will be ready for bed around {bed_h:02d}:00."
+                     f" Plan your whole day from {m // 60:02d}:00 to {bed_h:02d}:00 in 2 to 6 back-to-back blocks,"
+                     ' like {"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,'
+                     '"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}.')
         elif kind == "reflect":
-            s += REFLECT_ASK + REFLECT_VOICE
-        return s
+            rest += REFLECT_ASK + REFLECT_VOICE
+        head = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
+                f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
+                f"Here: ")
+        room = SECTION_BUDGETS["situation"] * 4 - len(f"# Now ({kind})\n") - len(head) - len(rest) - 2
+        # Kin first, then the strongest feelings, then id: the people one would notice in a crowd.
+        rel = a["relationships"]
+        ranked = sorted(view["present"], key=lambda p: (not p["kin"], -abs(rel.get(str(p["id"]), {}).get("affinity", 0)),
+                                                        p["id"]))
+        shown, size = [], 0
+        for i, p in enumerate(ranked):
+            more = len(ranked) - i - 1
+            size += len(f"#{p['id']} ({p['role']})") + (2 if shown else 0)
+            if size + (len(f" and {more} others") if more else 0) > room:
+                break
+            shown.append(p)
+        shown.sort(key=lambda p: p["id"])  # listed in id order, as before
+        text = ", ".join(f"#{p['id']} ({p['role']})" for p in shown)
+        omitted = len(ranked) - len(shown)
+        if omitted:
+            text += f" and {omitted} others" if shown else f"{omitted} people"
+            view["present"] = shown
+        return head + (text or "nobody") + "." + rest
 
     def _economy(self, a: dict) -> str:
         """What any villager knows about making a living: what this role's work pays, and where food is
