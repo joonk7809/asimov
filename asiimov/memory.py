@@ -43,13 +43,13 @@ def named_people(text: str, agents: list, self_id: int) -> list[set[int]]:
     for i in map(int, re.findall(r"#(\d+)", text)):
         if i != self_id:
             groups.append({i} if i < len(agents) else set())
-    for o in agents:
-        full = re.compile(rf"\b{re.escape(o['name'].lower())}\b")
-        if o["id"] != self_id and full.search(low):
-            groups.append({o["id"]})
-            low = full.sub(" ", low)
     me = agents[self_id]["name"].lower()
     low = re.sub(rf"\b{re.escape(me)}\b", " ", low)  # the author naming themself
+    for name in sorted({o["name"].lower() for o in agents} - {me}, key=len, reverse=True):
+        full = re.compile(rf"\b{re.escape(name)}\b")
+        if full.search(low):  # names are unique from engine 4; older worlds can repeat one
+            groups.append({o["id"] for o in agents if o["name"].lower() == name})
+            low = full.sub(" ", low)
     words = set(re.findall(r"[a-z]+", low)) - {me.split()[0]}  # a bare own first name is the author too
     for first in {o["name"].split()[0].lower() for o in agents} & words:
         ids = {o["id"] for o in agents if o["name"].split()[0].lower() == first and o["id"] != self_id}
