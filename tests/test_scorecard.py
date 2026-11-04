@@ -199,3 +199,57 @@ def test_fiction_arm_records_the_tokens_of_the_prompt_it_sent():
     recorded = {(e.actor, e.tick): e.mind["prompt_tokens"] for e in sim.events if e.origin == "mind"}
     # Section clipping and joins make the per-section sum differ from tokens(prompt) by a few at most.
     assert all(abs(recorded[k] - sent[k]) <= 8 for k in recorded)
+
+
+def test_fiction_parts_compose_and_all_three_equal_the_fiction_arm():
+    assert sc.fiction_header(False, False) == sc.SCHEMA_HEAD
+    assert sc.FICTION_HEADER.startswith("# How you act\nThis is a story about a village.")
+    assert sc.parse_arm("fiction") == sc.parse_arm("full+framing+anchors+permission") == ("full", frozenset(sc.FICTION_PARTS))
+    assert sc.parse_arm("no_text+fiction") == ("no_text", frozenset(sc.FICTION_PARTS))
+    for bad in ("fiction+bogus", "nope", "no_text+no_text", "framing"):
+        with pytest.raises(ValueError):
+            sc.parse_arm(bad)
+    proto = dict(PROTO, days=2)
+    logs = {arm: [e.to_json() for e in sc.run_arm(arm, StubMind(), proto)]
+            for arm in ("fiction", "full+framing+anchors+permission")}
+    assert logs["fiction"] == logs["full+framing+anchors+permission"]
+
+
+def _first_prompts(arm, n=30):
+    seen = {}
+
+    class Spy(StubMind):
+        def decide(self, req):
+            seen.setdefault(req.agent_id, req.prompt)
+            return super().decide(req)
+    pop = sc.labeled_population(1, n)
+    base = sc.parse_arm(arm)[0]
+    genesis = sc.flatten_params(pop) if base == "flat_params" else pop
+    sim = sc.ArmSim(1, n, Spy(), genesis, arm, {a["id"]: sc.render_soul(a) for a in pop["agents"]},
+                    anchor_texts={a["id"]: sc.anchors(a) for a in pop["agents"]} if base == "flat_params" else None)
+    sim.run(1)
+    return pop, seen
+
+
+def test_each_fiction_part_adds_only_its_own_text():
+    pop, full = _first_prompts("full")
+    for part in sc.FICTION_PARTS:
+        _, got = _first_prompts(f"full+{part}")
+        for a in pop["agents"]:
+            p, anchor = got[a["id"]], sc.anchors(a)
+            assert (sc.FRAMING in p) == (part == "framing")
+            assert (sc.PERMISSION in p) == (part == "permission")
+            assert (anchor in p) == (part == "anchors")
+            back = p.replace(sc.fiction_header(part == "framing", part == "permission"), sc.SCHEMA_HEAD)
+            assert back.replace("\n\n" + anchor, "") == full[a["id"]]
+
+
+def test_fiction_composes_with_the_ablation_arms():
+    pop, nt = _first_prompts("no_text+fiction")
+    _, flat = _first_prompts("flat_params+fiction")
+    for a in pop["agents"]:
+        assert nt[a["id"]].startswith(sc.FICTION_HEADER) and flat[a["id"]].startswith(sc.FICTION_HEADER)
+        assert sc.render_soul(a) not in nt[a["id"]] and "# How you tend to act" not in nt[a["id"]]
+        # flat_params: code runs on median params, but the prompt keeps the real soul and real-param anchors
+        assert sc.render_soul(a) in flat[a["id"]] and sc.anchors(a) in flat[a["id"]]
+    assert len({sc.anchors(a) for a in pop["agents"]}) > 1
