@@ -59,8 +59,10 @@ def test_diagnostics_on_a_log_with_known_answers():
     day2 = {"plan": [{"activity": "explore", "start_h": 8, "end_h": 22}]}
     evs = [_genesis(["Bo Kaorri", "Ana Nelen"]), _mind(0, 0, "plan", day1), _mind(1, 1, "plan", day2),   # first plans: not counted
            _mind(2, 0, "plan", day1), _mind(3, 1, "plan", day1),   # agent 0 copies, agent 1 doesn't
-           _mind(4, 0, "reflect", {"core": ["power", "Bo stole my bread at the market"], "summary": ""}),
+           _mind(4, 0, "reflect", {"core": ["power", "Ana stole my bread at the market"], "summary": ""}),
            _mind(5, 1, "reflect", {"core": ["", "hedonism"], "summary": ""}),
-           _mind(6, 1, "reflect", {"core": ["hedonism is what drives me", "#4 helped me"], "summary": ""})]
-    assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 5,
-                             "value_word_share": 0.4, "person_share": 0.4, "place_share": 0.2}
+           _mind(6, 1, "reflect", {"core": ["hedonism is what drives me", "#4 helped me"], "summary": ""}),
+           _mind(7, 1, "reflect", {"core": ["Ana Nelen rested at home", "#1 walked to the woods"], "summary": ""})]
+    # Agent 1 is Ana Nelen: naming herself or her own #1 is not naming someone.
+    assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 7,
+                             "value_word_share": 0.286, "person_share": 0.286, "place_share": 0.429}

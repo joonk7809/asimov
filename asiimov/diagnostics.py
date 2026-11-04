@@ -5,8 +5,9 @@
                     t1e-4b full plans were copies.
   value_word_share  share of non-empty core entries the mind wrote that only name values ("power",
                     "hedonism, power"). Counted on what the mind wrote, before engine 4 rejects them.
-  person_share      share of those entries that name a villager (a name word or #id): the signal that a
-                    memory records something that happened with someone. A label wrapped in a sentence
+  person_share      share of those entries that name another villager (a name word or #id, not one's
+                    own): the signal that a memory records something that happened with someone. A
+                    label wrapped in a sentence
                     ("hedonism is what drives me") escapes value_word_share but not this.
   place_share       share that name a place in a sentence of 3+ words (a lone "market" doesn't count).
                     Weaker: to-do lines ("buy food before I go home") count here too.
@@ -33,8 +34,12 @@ def _reply(e) -> dict | None:
     return out if isinstance(out, dict) else None
 
 
-def names_person(text: str, names: frozenset) -> bool:
-    return bool(re.search(r"#\d+", text)) or bool(set(re.findall(r"[a-z]+", text.lower())) & names)
+def names_person(text: str, others: frozenset, own_id: int | None) -> bool:
+    """Names another villager: a #id other than one's own, or a word of someone else's name
+    (one's own name words, surname included, don't count)."""
+    if any(int(i) != own_id for i in re.findall(r"#(\d+)", text)):
+        return True
+    return bool(set(re.findall(r"[a-z]+", text.lower())) & others)
 
 
 def names_place(text: str) -> bool:
@@ -44,7 +49,8 @@ def names_place(text: str) -> bool:
 
 def diagnose(events: list) -> dict:
     pop = events[0].data.get("population", {}) if events and events[0].kind == "genesis" else {}
-    names = frozenset(w for a in pop.get("agents", ()) for w in re.findall(r"[a-z]+", a["name"].lower()))
+    own = {i: frozenset(re.findall(r"[a-z]+", a["name"].lower())) for i, a in enumerate(pop.get("agents", ()))}
+    everyone = frozenset().union(*own.values())
     last: dict[int, list] = {}
     plans = copies = entries = bare = person = place = 0
     for e in events:
@@ -62,7 +68,7 @@ def diagnose(events: list) -> dict:
                 if isinstance(c, str) and c.strip():
                     entries += 1
                     bare += is_bare_value(c)
-                    person += names_person(c, names)
+                    person += names_person(c, everyone - own.get(e.actor, frozenset()), e.actor)
                     place += names_place(c)
     return {"plans_after_first": plans, "plan_copy_rate": round(copies / plans, 3) if plans else None,
             "core_entries": entries, "value_word_share": round(bare / entries, 3) if entries else None,
