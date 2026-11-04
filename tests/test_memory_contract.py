@@ -77,7 +77,8 @@ def test_core_entries_naming_someone_outside_the_record_are_rejected():
 
 
 def _genesis(names):
-    return Event(0, 0, "genesis", "rule", None, {"population": {"agents": [{"name": n} for n in names]}}, [])
+    agents = [{"id": i, "name": n, "role": "farmer"} for i, n in enumerate(names)]
+    return Event(0, 0, "genesis", "rule", None, {"population": {"agents": agents}}, [])
 
 
 def _mind(i, actor, kind, out):
@@ -94,8 +95,11 @@ def test_diagnostics_on_a_log_with_known_answers():
            _mind(6, 1, "reflect", {"core": ["hedonism is what drives me", "#4 helped me"], "summary": ""}),
            _mind(7, 1, "reflect", {"core": ["Ana Nelen rested at home", "#1 walked to the woods"], "summary": ""})]
     # Agent 1 is Ana Nelen: naming herself or her own #1 is not naming someone.
-    assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 7,
-                             "value_word_share": 0.286, "person_share": 0.286, "place_share": 0.429}
+    d = diagnose(evs)
+    assert {k: d[k] for k in ("plans_after_first", "plan_copy_rate", "core_entries", "value_word_share",
+                              "person_share", "place_share")} == {
+        "plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 7,
+        "value_word_share": 0.286, "person_share": 0.286, "place_share": 0.429}
 
 
 def test_full_names_are_unique_per_world():
@@ -131,3 +135,39 @@ def test_named_people_does_not_depend_on_hash_seed():
     outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                            env={**os.environ, "PYTHONHASHSEED": str(seed)}).stdout for seed in range(1, 9)}
     assert len(outs) == 1, outs
+
+
+def test_food_diagnostic_counts_meals_by_role_and_food_by_day():
+    from asiimov.diagnostics import food
+    g = Event(0, 0, "genesis", "rule", None, {"population": {"agents": [
+        {"id": 0, "name": "A", "role": "farmer"}, {"id": 1, "name": "B", "role": "crafter"},
+        {"id": 2, "name": "C", "role": "crafter"}]}}, [])
+    ev = [g, Event(1, 10, "produce", "rule", 0, {"food": 3}, []), Event(2, 10, "sell", "rule", 0, {"food": 2}, []),
+          Event(3, 20, "eat", "rule", 0, {}, []), Event(4, 150, "eat", "rule", 1, {}, []),
+          Event(5, 160, "eat", "rule", 2, {"household": 0}, []),
+          Event(6, 170, "mind_deliberate", "mind", 1, {"kind": "deliberate"}, []),
+          Event(7, 171, "receipt", "rule", 1, {"action": "buy_food", "ok": True, "why": "bought", "food": 2}, []),
+          Event(8, 180, "receipt", "rule", 2, {"action": "buy_food", "ok": False, "why": "no stock or no coin"}, []),
+          Event(9, 288, "end", "rule", None, {}, [])]
+    day0 = {"produced": 3, "sold": 2, "bought": 0, "eaten": 1, "from_household": 0, "deliberations": 0, "spoiled": 0}
+    day1 = {"produced": 0, "sold": 0, "bought": 2, "eaten": 2, "from_household": 1, "deliberations": 1, "spoiled": 0}
+    assert food(ev) == {"meals_per_agent_day_by_role": {"crafter": 0.5, "farmer": 0.5},
+                        "buy_attempts": 2, "buy_failed_share": 0.5,
+                        "buy_failed_by_why": {"no stock or no coin": 1}, "food_by_day": [day0, day1]}
+
+
+def test_effort_diagnostic_separates_idle_minds_from_the_economy():
+    from asiimov.diagnostics import effort
+    t = {"conscientiousness": 0}
+    ags = [{"id": i, "name": f"N{i}", "role": r, "traits": {**t, "conscientiousness": c}}
+           for i, (r, c) in enumerate([("guard", 100), ("guard", 900), ("crafter", 500), ("child", 0)])]
+    g = Event(0, 0, "genesis", "rule", None, {"population": {"agents": ags}}, [])
+    fail = {"action": "buy_food", "ok": False, "why": "no stock or no coin"}
+    ev = [g, Event(1, 10, "produce", "rule", 1, {"coin": 6}, []), Event(2, 20, "eat", "rule", 1, {}, []),
+          Event(3, 30, "receipt", "rule", 0, fail, []), Event(4, 43, "receipt", "rule", 0, fail, []),
+          Event(5, 50, "receipt", "rule", 1, fail, []),
+          Event(6, 60, "receipt", "rule", 2, {"action": "buy_food", "ok": False, "why": "not at market"}, []),
+          Event(7, 143, "end", "rule", None, {}, [])]
+    assert effort(ev) == {"meals_per_agent_day_working_by_role": {"guard": 1.0}, "idle_share": 0.667,
+                          "idle_share_by_conscientiousness_quartile": [None, 1.0, 1.0, 0.0],
+                          "earner_supply_failed_share": 1.0, "futile_repeats": 1, "not_at_market": 1}
