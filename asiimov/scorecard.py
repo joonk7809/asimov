@@ -110,10 +110,18 @@ def labeled_population(seed: int, n_agents: int) -> dict:
     """Standard genesis, with first names drawn from gendered pools at random (own RNG stream)."""
     pop = generate_population(seed, n_agents)
     rng = Rng(seed * 104729 + 3)
+    used = set()
     for a in pop["agents"]:
         g = "F" if rng.draw(f"label:{a['id']}", 0, 1)[1] == 0 else "M"
-        first = NAME_POOLS[g][rng.draw(f"name:{a['id']}", 0, len(NAME_POOLS[g]) - 1)[1]]
-        a["name"] = f"{first} {a['name'].split(' ', 1)[1]}"
+        surname = a["name"].split(" ", 1)[1]
+        stream = f"name:{a['id']}"
+        for _ in range(1000):  # full names stay unique; a collision redraws on the same stream
+            a["name"] = f"{NAME_POOLS[g][rng.draw(stream, 0, len(NAME_POOLS[g]) - 1)[1]]} {surname}"
+            if a["name"] not in used:
+                break
+        else:
+            raise ValueError(f"no free {g} first name for surname {surname}")
+        used.add(a["name"])
     return pop
 
 

@@ -44,9 +44,10 @@ def named_people(text: str, agents: list, self_id: int) -> list[set[int]]:
         if i != self_id:
             groups.append({i} if i < len(agents) else set())
     for o in agents:
-        if o["id"] != self_id and o["name"].lower() in low:
+        full = re.compile(rf"\b{re.escape(o['name'].lower())}\b")
+        if o["id"] != self_id and full.search(low):
             groups.append({o["id"]})
-            low = low.replace(o["name"].lower(), " ")
+            low = full.sub(" ", low)
     words = set(re.findall(r"[a-z]+", low))
     for first in {o["name"].split()[0].lower() for o in agents} & words:
         ids = {o["id"] for o in agents if o["name"].split()[0].lower() == first and o["id"] != self_id}
@@ -60,7 +61,7 @@ def known_people(agent: dict, state: dict) -> set[int]:
     agents = state["agents"]
     known = set(state["families"][agent["family"]]["members"]) | {int(k) for k in agent["relationships"]}
     for text in list(agent["recent"]) + [e["text"] for e in agent["episodes"]]:
-        known |= {o["id"] for o in agents if o["name"] in text}
+        known |= {o["id"] for o in agents if re.search(rf"\b{re.escape(o['name'])}\b", text)}
     return known
 
 

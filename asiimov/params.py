@@ -42,6 +42,16 @@ def _name(rng: Rng, stream: str) -> str:
     return s.capitalize()
 
 
+def _unique_name(rng: Rng, stream: str, surname: str, used: set) -> str:
+    """A full name nobody else in the world has. A collision redraws on its own stream, so the
+    agent's other draws (and every world without a collision) are unchanged."""
+    name = f"{_name(rng, stream)} {surname}"
+    while name in used:
+        name = f"{_name(rng, 'rename:' + stream)} {surname}"
+    used.add(name)
+    return name
+
+
 def _trait(rng: Rng, family_z: int, stream: str) -> int:
     # z-scores in milli-units; sibling correlation ~0.25 (0.5*family + 0.866*individual).
     own = rng.normal_milli(stream, 1000)
@@ -65,6 +75,7 @@ def generate_population(seed: int, n_agents: int) -> dict:
     """Return {'agents': [...], 'families': [...]} for n_agents."""
     rng = Rng(seed * 7919 + 17)  # genesis has its own RNG so the sim stream starts clean
     agents, families = [], []
+    used: set[str] = set()  # full names: minds, notes and the memory guard refer to people by name
     roles_pool = [r for r, share in ROLE_SHARES for _ in range(share)]
     aid = 0
     fid = 0
@@ -98,7 +109,7 @@ def generate_population(seed: int, n_agents: int) -> dict:
             ranked = sorted(VALUES, key=lambda v: (-scores[v], v))
             agent = {
                 "id": aid,
-                "name": f"{_name(rng, s)} {surname}",
+                "name": _unique_name(rng, s, surname, used),
                 "family": fid,
                 "age": age,
                 "role": role,

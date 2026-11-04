@@ -5,7 +5,7 @@ import json
 from asiimov.bench import collect_prompts
 from asiimov.diagnostics import diagnose
 from asiimov.events import Event
-from asiimov.memory import REFLECT_ASK, is_bare_value
+from asiimov.memory import REFLECT_ASK, is_bare_value, named_people
 from asiimov.minds import StubMind
 from asiimov.sim import Sim
 
@@ -69,6 +69,10 @@ def test_core_entries_naming_someone_outside_the_record_are_rejected():
         sleep = next(e for e in reversed(sim.events) if e.kind == "sleep")
         assert sleep.data["unknown_person"] == unknown, text
         assert (a["core"][-1:] == [text]) == (not unknown), text
+    # A longer invented name isn't read as the real full name it contains, only as its first name.
+    first_of_kin = agents[kin]["name"].split()[0]
+    same_first = {o["id"] for o in agents if o["name"].split()[0] == first_of_kin and o["id"] != a["id"]}
+    assert named_people(f"{agents[kin]['name']}son lent me a cart", agents, a["id"]) == [same_first]
 
 
 def _genesis(names):
@@ -91,3 +95,13 @@ def test_diagnostics_on_a_log_with_known_answers():
     # Agent 1 is Ana Nelen: naming herself or her own #1 is not naming someone.
     assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 7,
                              "value_word_share": 0.286, "person_share": 0.286, "place_share": 0.429}
+
+
+def test_full_names_are_unique_per_world():
+    """The memory guard and every name the minds read resolve a full name to one person."""
+    from asiimov.params import generate_population
+    from asiimov.scorecard import labeled_population
+    for seed in range(1, 21):
+        for pop in (generate_population(seed, 100), labeled_population(seed, 100)):
+            names = [a["name"] for a in pop["agents"]]
+            assert len(set(names)) == len(names), seed
