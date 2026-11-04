@@ -1,0 +1,104 @@
+{
+  "version": 2,
+  "preregistered": "2026-11-04, before any v2 test was graded. Signed off by the steering thread with 7 amendments (shared folder plan/scorecard-v2-signoff.md). v1 (plan/variety-thresholds.json) is unchanged and stays the floor. Changing a number after seeing v2 results voids that test; bump version and say why in plan/variety-scorecard-v2.md.",
+  "power_source": "shared folder results/power-v2.json, from results/tools/power_v2.py (noise from canonical t1c-4b full); tests 11 and 16a by exact binomial",
+  "requires_v1": [1, 2, 3, 4, 5, 6],
+  "t7_mind_share": {
+    "authors_counted": ["intent", "plan"],
+    "median_share_min": 0.50,
+    "max_share_of_agents_below_0_20": 0.10,
+    "gates_in_v2": [3, 8],
+    "detects_at_80_power": "descriptive gate (no sampling test)"
+  },
+  "t8_soul_swap": {
+    "min_pairs": 20,
+    "min_kept_cells": 40,
+    "match_on": ["role", "age_band", "family_size"],
+    "cell_kept_if_abs_diff_exceeds": "1.96 * sqrt(2) * noise-twin within-agent SE, per feature",
+    "clip": [-1, 2],
+    "follow_index_min": 0.50,
+    "ci_lower_above_noise_index_plus": 0.20,
+    "bootstrap": 2000,
+    "stub_must_fail": true,
+    "detects_at_80_power": "true follow ~0.7 (0.5 passes 57% at 20 pairs; 0 to 0.35 pass 0/400)"
+  },
+  "t9_memory_effect": {
+    "authored_by_mind_only": true,
+    "window_days": 3,
+    "theft": {"min_pairs": 20, "min_drop": 0.30, "sign_test_p": 0.05},
+    "gift": {"min_pairs": 20, "min_rise": 0.30, "sign_test_p": 0.05, "status": "inconclusive until a give or help action exists"},
+    "precondition": [{"pairs": 20, "min_control_rate": 4}, {"pairs": 40, "min_control_rate": 2}],
+    "stub_must_fail": true,
+    "detects_at_80_power": "a ~50% drop (84% at 20 pairs and rate 4, 92% at 40 pairs and rate 2; null 0.3-1.5%); a true 30% drop passes only 39-50%"
+  },
+  "t10_intent_follow_through": {
+    "completed_share": [0.30, 0.90],
+    "multi_day_share_min": 0.20,
+    "conscientiousness_rho_min": 0.20,
+    "min_agents_with_3_intents": 60,
+    "stub_must_fail": true,
+    "detects_at_80_power": "rho ~0.35 at n 60 (0.3: 75%, 0.4: 93%; null passes 6.4%)"
+  },
+  "t11_legibility": {
+    "candidates": 5,
+    "soul_lines_shown": ["traits", "values"],
+    "distractors_match": ["role", "age_band"],
+    "min_trials": 100,
+    "accuracy_min": 0.40,
+    "judge": "an open model from a different family than the minds",
+    "stub_must_fail": true,
+    "detects_at_80_power": "true accuracy ~0.45 (0.40: 54%, 0.45: 87%; chance 0.20 passes ~0)"
+  },
+  "t12_grounding": {
+    "ungrounded_reference_max": 0.02,
+    "missing_or_invalid_target_max": 0.05,
+    "detects_at_80_power": "descriptive gate (rates over all mind outputs)"
+  },
+  "t13_robustness": {
+    "reruns": ["paraphrased framing", "seed 2", "seed 3"],
+    "tests": [2, 8, 9],
+    "sign_holds_in": "all reruns",
+    "pass_in_at_least": 2,
+    "detects_at_80_power": "inherits tests 2, 8 and 9"
+  },
+  "t14_belief_honesty": {
+    "unmotivated_false_statement_max": 0.05,
+    "honesty_vs_motivated_lie_rho_max": -0.20,
+    "status": "inconclusive until talk carries words",
+    "detects_at_80_power": "pending power check (no speech data yet)"
+  },
+  "t15_intervention_reach": {
+    "placements": 3,
+    "window_days": 2,
+    "median_agents_outside_family_diverging_min": 10,
+    "median_causal_depth_min": 6,
+    "divergence": "any graded feature beyond the fork-mind noise band",
+    "detects_at_80_power": "pending power check: the noise band needs the fork-mind twin (T12); frozen here, simulated before any test 15 grading"
+  },
+  "t16_human_indistinguishability": {
+    "verdict": "separate naturalness verdict, not part of the v2 overall",
+    "a_offline": {
+      "situations": 90,
+      "people": 2,
+      "split": [45, 45],
+      "writers_see": "the full prompt the mind saw, soul included; answer as that villager would",
+      "agent_samples_per_human_answer": 2,
+      "judgments": 180,
+      "accuracy_max": 0.60,
+      "ci95_upper_max": 0.70,
+      "ci": "bootstrap clustered by situation",
+      "tells_catalog_required": true,
+      "source_arm": "the arm being certified, named before writing starts",
+      "run_when": "the certified arm renders needs as felt states and an LLM-judge pre-pass on the same 90 situations scores below 0.80; a 10-item pilot can run any time",
+      "llm_judges_certify": false,
+      "detects_at_80_power": "passes ~90% when true judge accuracy is 0.55; 0.65 passes 7-9%, 0.70 under 1% (binomial approximation)"
+    },
+    "b_immersion": {
+      "needs": "T7 playable client",
+      "min_sim_days": 1,
+      "mean_rating_min": 3.5,
+      "max_share_flagged_as_agents": 0.5
+    }
+  },
+  "diagnostics": ["meter quoting (numeric needs or affinity in mind outputs)", "futile repeats (same failed action at the same place 3+ times without new information)", "socializing hours per agent-day", "transgressions per agent-week by honesty quartile"]
+}
