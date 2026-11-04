@@ -34,3 +34,4 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
     python -m asiimov.scorecard --mind stub --out runs/scorecard-stub   # variety tests, plan/variety-scorecard.md
     python -m asiimov.diagnostics runs/demo/events.jsonl   # plan copy rate, value-word core share (any engine)
     python -m asiimov.authorship --log runs/demo/events.jsonl --out runs/authorship   # who authors each waking tick (test 7)
+    python -m asiimov.fork --base runs/demo/events.jsonl --out runs/twin --fire 2@1 --pod POD_ID   # twin: served where prompts match, live elsewhere (tests 8, 9, 15)
