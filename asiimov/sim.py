@@ -27,17 +27,13 @@ TICKS_PER_DAY = 144
 VILLAGE_WAKE_MIN = 390  # 06:30
 FOOD_PRICE = 3
 FARMER_SELL_PRICE = 2
-# Food per completed unit of farm work. At 1, 33 farmers made about 100 food a day against about
-# 267 meals of need (t1h-4b), so the plain world was a famine from day 2. At 3 the same work
-# makes about 300.
-FARM_YIELD = 3
 WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
              "healer": "plaza", "guard": "plaza", "child": "plaza", "elder": "plaza"}
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
 ACTIVITY_PLACE = {"socialize": "plaza", "shop": "market", "explore": "woods"}  # work: WORKPLACE; else home
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "5"
+ENGINE_VERSION = "4"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -374,6 +370,8 @@ class Sim:
                     activity = b["activity"]
         place = self._place(a, activity)
         if activity != a["activity"] or place != a["place"]:
+            if a["activity"] == "work" and a["role"] == "farmer":
+                self._farmer_sells(a)
             a["activity"], a["place"] = activity, place
             self._emit("activity", "rule", a["id"], {"activity": activity, "place": place},
                        [parent] if parent is not None else [])
@@ -386,9 +384,6 @@ class Sim:
                     if food:
                         a["inv"]["food"] += food
                         self._emit("produce", "rule", a["id"], {"food": food}, [a["plan_event"]])
-                        # Sold as it's made: selling only on leaving work missed every farmer who
-                        # worked until bed, so 30-40 of about 100 a day reached the market.
-                        self._farmer_sells(a)
                 else:
                     a["inv"]["coin"] += 2
                     self._emit("produce", "rule", a["id"], {"coin": 2}, [a["plan_event"]])
@@ -398,7 +393,7 @@ class Sim:
 
     def _food_yield(self, a: dict) -> int:
         """Food from one completed unit of farm work. A hook so experiment arms can change it."""
-        return FARM_YIELD
+        return 1
 
     def _habit(self, a: dict) -> str:
         """No-LLM habit layer for hours the plan doesn't cover, driven by needs and traits."""

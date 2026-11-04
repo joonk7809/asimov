@@ -151,19 +151,17 @@ def test_concurrent_mind_calls_leave_every_arm_log_unchanged():
         assert [e.to_json() for e in sc.run_arm(arm, StubMind(), proto, workers=8)] == serial
 
 
-def test_famine_cuts_farm_food_from_its_start_day_only():
+def test_famine_halves_farm_food_from_its_start_day_only():
     from collections import Counter
     proto = dict(PROTO, days=4)
     food = {}
     for arm in ("full", "famine"):
-        food[arm] = Counter()
-        for e in sc.run_arm(arm, StubMind(), proto):
-            if e.kind == "produce" and "food" in e.data:
-                food[arm][e.tick // TICKS_PER_DAY] += e.data["food"]
+        food[arm] = Counter(e.tick // TICKS_PER_DAY for e in sc.run_arm(arm, StubMind(), proto)
+                            if e.kind == "produce" and "food" in e.data)
     for day in range(sc.FAMINE_FROM_DAY):
         assert food["famine"][day] == food["full"][day]
-    for day in range(sc.FAMINE_FROM_DAY, 4):  # agents work a bit differently once hungry, so roughly a third
-        assert 0.2 < food["famine"][day] / food["full"][day] < 0.45
+    for day in range(sc.FAMINE_FROM_DAY, 4):  # agents work a bit differently once hungry, so roughly half
+        assert 0.35 < food["famine"][day] / food["full"][day] < 0.65
 
 
 def test_fiction_arm_changes_only_the_framing_and_adds_trait_anchors():
@@ -274,12 +272,3 @@ def test_grade_only_grades_each_configuration_from_its_own_arms(tmp_path, monkey
     assert "needs full and no_text" in framing["tests"]["3_soul_ablation"]["why"]
     assert not (tmp_path / "report+anchors.json").exists()  # no full arm for anchors: not graded
     assert sc.configuration("famine") == ("famine", "full") and sc.configuration("no_text+fiction") == ("fiction", "no_text")
-
-
-def test_famine_spoils_the_market_once_at_its_start():
-    """Engine 5 banks surplus in the market on days 0-1; the famine must not live off it."""
-    ev = sc.run_arm("famine", StubMind(), dict(PROTO, days=3))
-    blights = [e for e in ev if e.kind == "blight"]
-    assert len(blights) == 1 and blights[0].tick == sc.FAMINE_FROM_DAY * TICKS_PER_DAY
-    assert blights[0].data["market_food_lost"] > 0
-    assert not any(e.kind == "blight" for e in sc.run_arm("full", StubMind(), dict(PROTO, days=3)))
