@@ -29,9 +29,9 @@ def test_reflect_ask_only_in_reflect_prompts():
 
 
 def test_bare_value_words():
-    for text in ("power", "Hedonism, power.", "self_direction", "Self-direction and achievement", "  "):
+    for text in ("power", "Hedonism, power.", "self_direction", "Self-direction and achievement"):
         assert is_bare_value(text), text
-    for text in ("Ana (#12) refused me food at the market", "power struggle with Bo", "stole bread"):
+    for text in ("Ana (#12) refused me food at the market", "power struggle with Bo", "stole bread", "42", "  "):
         assert not is_bare_value(text), text
 
 
@@ -46,6 +46,10 @@ def test_bare_value_core_entries_are_rejected_and_counted():
     assert a["plan"] == []
 
 
+def _genesis(names):
+    return Event(0, 0, "genesis", "rule", None, {"population": {"agents": [{"name": n} for n in names]}}, [])
+
+
 def _mind(i, actor, kind, out):
     return Event(i, i, f"mind_{kind}", "mind", actor, {"kind": kind}, [], {"raw_output": json.dumps(out)})
 
@@ -53,9 +57,10 @@ def _mind(i, actor, kind, out):
 def test_diagnostics_on_a_log_with_known_answers():
     day1 = {"plan": [{"activity": "work", "start_h": 8, "end_h": 16}, {"activity": "home", "start_h": 16, "end_h": 22}]}
     day2 = {"plan": [{"activity": "explore", "start_h": 8, "end_h": 22}]}
-    evs = [_mind(0, 0, "plan", day1), _mind(1, 1, "plan", day2),   # first plans: not counted
+    evs = [_genesis(["Bo Kaorri", "Ana Nelen"]), _mind(0, 0, "plan", day1), _mind(1, 1, "plan", day2),   # first plans: not counted
            _mind(2, 0, "plan", day1), _mind(3, 1, "plan", day1),   # agent 0 copies, agent 1 doesn't
            _mind(4, 0, "reflect", {"core": ["power", "Bo stole my bread at the market"], "summary": ""}),
-           _mind(5, 1, "reflect", {"core": ["", "hedonism"], "summary": ""})]
-    assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5,
-                             "core_entries": 3, "value_word_share": 0.667}
+           _mind(5, 1, "reflect", {"core": ["", "hedonism"], "summary": ""}),
+           _mind(6, 1, "reflect", {"core": ["hedonism is what drives me", "#4 helped me"], "summary": ""})]
+    assert diagnose(evs) == {"plans_after_first": 2, "plan_copy_rate": 0.5, "core_entries": 5,
+                             "value_word_share": 0.4, "grounded_share": 0.4}

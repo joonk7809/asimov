@@ -5,6 +5,9 @@
                     t1e-4b full plans were copies.
   value_word_share  share of non-empty core entries the mind wrote that only name values ("power",
                     "hedonism, power"). Counted on what the mind wrote, before engine 4 rejects them.
+  grounded_share    share of those entries that name a person (a villager's name or #id) or a place:
+                    what the engine-4 reflect ask requests. A label wrapped in a sentence ("hedonism is
+                    what drives me") escapes value_word_share but not this.
 
 Reads any engine's log without replaying it, so old and new runs compare directly.
 
@@ -12,9 +15,12 @@ Reads any engine's log without replaying it, so old and new runs compare directl
 """
 import argparse
 import json
+import re
 
 from .memory import is_bare_value
-from .sim import valid_blocks
+from .sim import WORKPLACE, valid_blocks
+
+PLACES = frozenset(WORKPLACE.values()) | {"market", "plaza", "woods", "home"}
 
 
 def _reply(e) -> dict | None:
@@ -25,9 +31,18 @@ def _reply(e) -> dict | None:
     return out if isinstance(out, dict) else None
 
 
+def grounded(text: str, names: frozenset) -> bool:
+    if re.search(r"#\d+", text):
+        return True
+    words = set(re.findall(r"[a-z]+", text.lower()))
+    return bool(words & (names | PLACES))
+
+
 def diagnose(events: list) -> dict:
+    pop = events[0].data.get("population", {}) if events and events[0].kind == "genesis" else {}
+    names = frozenset(w for a in pop.get("agents", ()) for w in re.findall(r"[a-z]+", a["name"].lower()))
     last: dict[int, list] = {}
-    plans = copies = entries = bare = 0
+    plans = copies = entries = bare = ground = 0
     for e in events:
         if e.origin != "mind":
             continue
@@ -43,8 +58,10 @@ def diagnose(events: list) -> dict:
                 if isinstance(c, str) and c.strip():
                     entries += 1
                     bare += is_bare_value(c)
+                    ground += grounded(c, names)
     return {"plans_after_first": plans, "plan_copy_rate": round(copies / plans, 3) if plans else None,
-            "core_entries": entries, "value_word_share": round(bare / entries, 3) if entries else None}
+            "core_entries": entries, "value_word_share": round(bare / entries, 3) if entries else None,
+            "grounded_share": round(ground / entries, 3) if entries else None}
 
 
 def main():

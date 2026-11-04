@@ -32,7 +32,7 @@ REFLECT_ASK = (" Your day is over. For core, write at most 2 things that happene
 
 def is_bare_value(text: str) -> bool:
     words = re.findall(r"[a-z]+", text.lower())
-    return all(w in VALUE_WORDS for w in words)
+    return bool(words) and all(w in VALUE_WORDS for w in words)
 
 
 def tokens(text: str) -> int:
