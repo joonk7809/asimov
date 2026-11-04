@@ -253,3 +253,22 @@ def test_fiction_composes_with_the_ablation_arms():
         # flat_params: code runs on median params, but the prompt keeps the real soul and real-param anchors
         assert sc.render_soul(a) in flat[a["id"]] and sc.anchors(a) in flat[a["id"]]
     assert len({sc.anchors(a) for a in pop["agents"]}) > 1
+
+
+def test_grade_only_grades_each_configuration_from_its_own_arms(tmp_path, monkeypatch):
+    from asiimov.events import write_jsonl
+    names = ["full", "no_text", "fiction", "no_text+fiction", "flat_params+fiction", "full+framing", "no_text+anchors"]
+    for arm in names:
+        (tmp_path / arm).mkdir()
+        write_jsonl(sc.run_arm(arm, StubMind(), PROTO), str(tmp_path / arm / "events.jsonl"))
+    monkeypatch.setattr("sys.argv", ["scorecard", "--grade-only", "--out", str(tmp_path)])
+    sc.main()
+    plain = json.loads((tmp_path / "report.json").read_text())
+    fic = json.loads((tmp_path / "report+fiction.json").read_text())
+    framing = json.loads((tmp_path / "report+framing.json").read_text())
+    assert (plain["configuration"], fic["configuration"], framing["configuration"]) == ("plain", "fiction", "framing")
+    # fiction's test 3 and 5 compare fiction's own arms, not the plain ones
+    assert "needs" not in json.dumps(fic["tests"]["3_soul_ablation"])
+    assert "needs full and no_text" in framing["tests"]["3_soul_ablation"]["why"]
+    assert not (tmp_path / "report+anchors.json").exists()  # no full arm for anchors: not graded
+    assert sc.configuration("famine") == ("famine", "full") and sc.configuration("no_text+fiction") == ("fiction", "no_text")

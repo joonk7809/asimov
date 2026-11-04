@@ -3,6 +3,10 @@
 python -m asiimov.scorecard --mind stub --out runs/scorecard-stub
 python -m asiimov.scorecard --mind llm --pod POD_ID --out runs/scorecard-llm
 python -m asiimov.scorecard --grade-only --out runs/scorecard-llm     # re-grade saved arm logs
+python -m asiimov.scorecard --mind llm --pod POD_ID --arms fiction,no_text+fiction,flat_params+fiction --out ...
+
+Each configuration (plain, fiction, famine, a single fiction part, ...) is graded from its own arms
+and gets its own report: report.json for plain, report+fiction.json for fiction, and so on.
 
 Thresholds and the run protocol come from plan/variety-thresholds.json, committed before any
 real-model run was graded; the report records that file's sha256. Everything is graded from the
@@ -172,6 +176,16 @@ class ArmSim(Sim):
             prompt_tokens += tokens(header) - tokens(SCHEMA_HEAD)  # keep the recorded cost honest
             self.pending[a["id"]] = (replace(req, prompt=prompt, prompt_hash=prompt_hash(prompt)), parents,
                                      prompt_tokens, apply)
+
+
+def configuration(arm: str) -> tuple[str, str]:
+    """Which graded configuration an arm belongs to and its role in it. 'no_text+fiction' ->
+    ('fiction', 'no_text'); 'famine' -> ('famine', 'full'); 'full+framing' -> ('framing', 'full')."""
+    base, parts = parse_arm(arm)
+    label = "fiction" if parts == set(FICTION_PARTS) else "+".join(p for p in FICTION_PARTS if p in parts)
+    if base == "famine":
+        return "+".join(x for x in ("famine", label) if x), "full"
+    return label, base
 
 
 def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None, workers: int = 1) -> list:
@@ -528,7 +542,8 @@ def grade(arms: dict, thresholds: dict, sha: str) -> dict:
 
 
 def render_md(report: dict) -> str:
-    lines = [f"# Variety scorecard: {report['overall'].upper()}", "",
+    config = report.get("configuration", "plain")
+    lines = [f"# Variety scorecard{'' if config == 'plain' else f' ({config})'}: {report['overall'].upper()}", "",
              f"Thresholds v{report['thresholds_version']} (sha256 {report['thresholds_sha256'][:12]}). "
              f"Models: {', '.join(f'{k}={v}' for k, v in report['models'].items())}.", "",
              "| Test | Status | Key numbers |", "|---|---|---|"]
@@ -546,8 +561,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mind", choices=["stub", "llm"], default="stub")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--arms", default=",".join(ARMS),
-                    help="comma-separated; each is <full|no_text|flat_params|famine|fiction>[+framing|+anchors|+permission|+fiction]")
+    ap.add_argument("--arms", help="comma-separated; each is <full|no_text|flat_params|famine|fiction>"
+                    "[+framing|+anchors|+permission|+fiction]. Default: the three canonical arms, or with "
+                    "--grade-only every arm log in --out")
     ap.add_argument("--grade-only", action="store_true", help="grade arm logs already in --out")
     ap.add_argument("--pod")
     ap.add_argument("--llm-url")
@@ -560,12 +576,18 @@ def main():
     thresholds, sha = load_thresholds()
     proto = thresholds["protocol"]
     args.temperature = proto["temperature"]
-    arms = {}
-    for arm in args.arms.split(","):
+    if args.arms:
+        names = args.arms.split(",")
+    elif args.grade_only:
+        names = sorted(d for d in os.listdir(args.out) if os.path.exists(os.path.join(args.out, d, "events.jsonl")))
+    else:
+        names = list(ARMS)
+    for arm in names:
+        parse_arm(arm)  # a typo fails here, before any arm is paid for
+    groups: dict[str, dict] = defaultdict(dict)  # configuration -> {full|no_text|flat_params: extracted log}
+    for arm in names:
         path = os.path.join(args.out, arm, "events.jsonl")
         if args.grade_only:
-            if not os.path.exists(path):
-                continue
             events = read_jsonl(path)
         else:
             mind = StubMind() if args.mind == "stub" else llm_from_args(args)[0]
@@ -574,17 +596,23 @@ def main():
             print(f"arm {arm}: {len(events)} events", flush=True)
         ex = extract(events)
         ex["model"] = next((e.mind["model"] for e in events if e.origin == "mind"), None)
-        arms[arm] = ex
-    if "full" not in arms:
+        config, role = configuration(arm)
+        groups[config][role] = ex
+    graded = [c for c in groups if "full" in groups[c]]
+    if not graded:
         raise SystemExit("the full arm is required")
-    report = grade(arms, thresholds, sha)
-    with open(os.path.join(args.out, "report.json"), "w") as f:
-        json.dump(report, f, indent=2)
-    md = render_md(report)
-    with open(os.path.join(args.out, "report.md"), "w") as f:
-        f.write(md)
-    print(md)
-
+    for config in graded:
+        report = grade(groups[config], thresholds, sha)
+        report["configuration"] = config or "plain"
+        stem = "report" + (f"+{config}" if config else "")
+        with open(os.path.join(args.out, stem + ".json"), "w") as f:
+            json.dump(report, f, indent=2)
+        md = render_md(report)
+        with open(os.path.join(args.out, stem + ".md"), "w") as f:
+            f.write(md)
+        print(f"== {stem}\n{md}")
+    for config in set(groups) - set(graded):
+        print(f"configuration {config or 'plain'!r} has no full arm; not graded", flush=True)
 
 if __name__ == "__main__":
     main()
