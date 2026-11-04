@@ -87,6 +87,43 @@ def food(events: list) -> dict:
             "food_by_day": by_day}
 
 
+def effort(events: list) -> dict:
+    """Whether the hungry are the minds' doing: working-age agents (not children or elders) who
+    completed no unit of work count as idle. Reported next to the role averages of food()."""
+    pop = events[0].data.get("population", {}) if events and events[0].kind == "genesis" else {}
+    ags = [a for a in pop.get("agents", ()) if a.get("role") not in (None, "child", "elder")]
+    days = events[-1].tick // TICKS_PER_DAY + (events[-1].tick % TICKS_PER_DAY > 0) if events else 0
+    earned = {e.actor for e in events if e.kind == "produce"}
+    meals, seen = Counter(), set()
+    buys = supply_fails = futile = not_at_market = 0
+    for e in events:
+        if e.kind == "eat":
+            meals[e.actor] += 1
+        elif e.kind == "receipt":
+            if not e.data["ok"]:  # the same failure again, the same day
+                key = (e.actor, e.tick // TICKS_PER_DAY, e.data["action"], e.data["why"])
+                futile += key in seen
+                seen.add(key)
+            if e.data["action"] == "buy_food":
+                not_at_market += e.data["why"] == "not at market"
+                if e.actor in earned:
+                    buys += 1
+                    supply_fails += e.data["why"] == "no stock or no coin"
+    working = {}
+    for r in sorted({a["role"] for a in ags}):
+        w = [a["id"] for a in ags if a["role"] == r and a["id"] in earned]
+        if w and days:
+            working[r] = round(sum(meals[i] for i in w) / (len(w) * days), 2)
+    by_c = sorted(ags, key=lambda a: (a.get("traits", {}).get("conscientiousness", 0), a["id"]))
+    quart = [by_c[len(by_c) * q // 4:len(by_c) * (q + 1) // 4] for q in range(4)]
+    return {"meals_per_agent_day_working_by_role": working,
+            "idle_share": round(sum(a["id"] not in earned for a in ags) / len(ags), 3) if ags else None,
+            "idle_share_by_conscientiousness_quartile": [
+                round(sum(a["id"] not in earned for a in q) / len(q), 3) if q else None for q in quart],
+            "earner_supply_failed_share": round(supply_fails / buys, 3) if buys else None,
+            "futile_repeats": futile, "not_at_market": not_at_market}
+
+
 def diagnose(events: list) -> dict:
     pop = events[0].data.get("population", {}) if events and events[0].kind == "genesis" else {}
     own = {i: frozenset(re.findall(r"[a-z]+", a["name"].lower())) for i, a in enumerate(pop.get("agents", ()))}
@@ -113,7 +150,7 @@ def diagnose(events: list) -> dict:
     return {"plans_after_first": plans, "plan_copy_rate": round(copies / plans, 3) if plans else None,
             "core_entries": entries, "value_word_share": round(bare / entries, 3) if entries else None,
             "person_share": round(person / entries, 3) if entries else None,
-            "place_share": round(place / entries, 3) if entries else None, **food(events)}
+            "place_share": round(place / entries, 3) if entries else None, **food(events), **effort(events)}
 
 
 def main():

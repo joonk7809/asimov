@@ -154,3 +154,20 @@ def test_food_diagnostic_counts_meals_by_role_and_food_by_day():
     assert food(ev) == {"meals_per_agent_day_by_role": {"crafter": 0.5, "farmer": 0.5},
                         "buy_attempts": 2, "buy_failed_share": 0.5,
                         "buy_failed_by_why": {"no stock or no coin": 1}, "food_by_day": [day0, day1]}
+
+
+def test_effort_diagnostic_separates_idle_minds_from_the_economy():
+    from asiimov.diagnostics import effort
+    t = {"conscientiousness": 0}
+    ags = [{"id": i, "name": f"N{i}", "role": r, "traits": {**t, "conscientiousness": c}}
+           for i, (r, c) in enumerate([("guard", 100), ("guard", 900), ("crafter", 500), ("child", 0)])]
+    g = Event(0, 0, "genesis", "rule", None, {"population": {"agents": ags}}, [])
+    fail = {"action": "buy_food", "ok": False, "why": "no stock or no coin"}
+    ev = [g, Event(1, 10, "produce", "rule", 1, {"coin": 6}, []), Event(2, 20, "eat", "rule", 1, {}, []),
+          Event(3, 30, "receipt", "rule", 0, fail, []), Event(4, 43, "receipt", "rule", 0, fail, []),
+          Event(5, 50, "receipt", "rule", 1, fail, []),
+          Event(6, 60, "receipt", "rule", 2, {"action": "buy_food", "ok": False, "why": "not at market"}, []),
+          Event(7, 143, "end", "rule", None, {}, [])]
+    assert effort(ev) == {"meals_per_agent_day_working_by_role": {"guard": 1.0}, "idle_share": 0.667,
+                          "idle_share_by_conscientiousness_quartile": [None, 1.0, 1.0, 0.0],
+                          "earner_supply_failed_share": 1.0, "futile_repeats": 1, "not_at_market": 1}
