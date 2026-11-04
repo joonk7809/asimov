@@ -17,7 +17,8 @@ import json
 from collections import defaultdict
 
 from .events import Event, canonical
-from .memory import REFLECT_ASK, assemble_prompt, is_bare_value, prompt_hash, render_soul, tokens
+from .memory import (REFLECT_ASK, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
+                     render_soul, tokens)
 from .minds import MindRequest, ReplayDivergence, dispatch
 from .params import generate_population
 from .rng import Rng
@@ -325,12 +326,15 @@ class Sim:
                       lambda eid, out: self._fall_asleep(a, eid, out))
 
     def _fall_asleep(self, a: dict, eid: int, out: dict | None):
-        promoted, rejected = [], 0
+        promoted, rejected, unknown = [], 0, 0
+        known = known_people(a, self.state)  # before this reflection's day is folded into episodes
         if out and isinstance(out.get("core"), list):
             for c in out["core"][:2]:
                 if isinstance(c, str) and c.strip():
                     if is_bare_value(c):
                         rejected += 1
+                    elif any(not g & known for g in named_people(c, self.state["agents"], a["id"])):
+                        unknown += 1  # names someone the agent's own record never mentions
                     else:
                         promoted.append(c.strip()[:200])
         a["core"] = (a["core"] + promoted)[-6:]
@@ -347,7 +351,8 @@ class Sim:
         a["plan"] = []
         a["asleep"], a["slept_at"] = True, tick
         a["activity"], a["place"], a["override"] = "sleep", a["home"], None
-        self._emit("sleep", "rule", a["id"], {"promoted": len(promoted), "rejected": rejected}, [eid])
+        self._emit("sleep", "rule", a["id"], {"promoted": len(promoted), "rejected": rejected,
+                                                 "unknown_person": unknown}, [eid])
         self._schedule_wake(a, tick)
 
     def _act(self, a: dict):

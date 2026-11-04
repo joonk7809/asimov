@@ -24,6 +24,7 @@ def test_wake_prompt_shows_no_plan_from_an_earlier_day():
 
 
 def test_reflect_ask_only_in_reflect_prompts():
+    assert "add no details" in REFLECT_ASK
     reqs = collect_prompts(agents=20, days=2, seed=3)
     assert all((REFLECT_ASK in r.prompt) == (r.kind == "reflect") for r in reqs)
 
@@ -38,12 +39,36 @@ def test_bare_value_words():
 def test_bare_value_core_entries_are_rejected_and_counted():
     sim = Sim(3, 10, StubMind())
     a = sim.state["agents"][0]
+    friend = sim.state["agents"][5]
+    a["recent"] = [f"09:00 talked with {friend['name']} at the plaza"]
     a["plan"] = [{"activity": "work", "start_h": 8, "end_h": 12}]
-    sim._fall_asleep(a, 0, {"core": ["power, hedonism", "Bo (#3) gave me bread at the plaza"], "summary": ""})
-    assert a["core"] == ["Bo (#3) gave me bread at the plaza"]
+    sim._fall_asleep(a, 0, {"core": ["power, hedonism", f"{friend['name']} told me about the plaza"], "summary": ""})
+    assert a["core"] == [f"{friend['name']} told me about the plaza"]
     sleep = next(e for e in reversed(sim.events) if e.kind == "sleep")
-    assert sleep.data == {"promoted": 1, "rejected": 1}
+    assert sleep.data == {"promoted": 1, "rejected": 1, "unknown_person": 0}
     assert a["plan"] == []
+
+
+def test_core_entries_naming_someone_outside_the_record_are_rejected():
+    """F20: names a person the agent never met, or a #id that doesn't exist, is invented."""
+    sim = Sim(3, 30, StubMind())
+    agents = sim.state["agents"]
+    a = agents[0]
+    kin = next(m for m in sim.state["families"][a["family"]]["members"] if m != a["id"])
+    stranger = next(o for o in agents if o["id"] not in sim.state["families"][a["family"]]["members"]
+                    and str(o["id"]) not in a["relationships"]
+                    and sum(p["name"].split()[0] == o["name"].split()[0] for p in agents) == 1)
+    first = stranger["name"].split()[0]
+    cases = {f"{stranger['name']} showed me a map at the woods": 1, f"{first} waved at me in the market": 1,
+             f"#{stranger['id']} sold me bread": 1, "#999 sold me bread": 1,
+             f"{agents[kin]['name']} gave me food at home": 0, f"#{kin} and I ate at home": 0,
+             f"{a['name']} rested at home all day": 0}
+    for text, unknown in cases.items():
+        a["asleep"] = False
+        sim._fall_asleep(a, 0, {"core": [text], "summary": ""})
+        sleep = next(e for e in reversed(sim.events) if e.kind == "sleep")
+        assert sleep.data["unknown_person"] == unknown, text
+        assert (a["core"][-1:] == [text]) == (not unknown), text
 
 
 def _genesis(names):
