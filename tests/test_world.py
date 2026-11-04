@@ -147,7 +147,8 @@ def test_aborted_run_keeps_its_recorded_events(tmp_path, monkeypatch):
 
 # sha256 of a fixed world's log, per engine version. If this fails, the rules or the log format changed:
 # bump ENGINE_VERSION (old logs then refuse to replay) and record the new hash here.
-GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b"}
+GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b",
+          "2": "6dd170b56c91610ef4359f4850f451a87224fb9ed5cb9edf7ec552d0fe884f4d"}
 
 
 def test_log_changes_bump_the_engine_version():

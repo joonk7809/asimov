@@ -31,7 +31,7 @@ WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "1"
+ENGINE_VERSION = "2"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -145,7 +145,7 @@ class Sim:
     def _request(self, a: dict, kind: str, view: dict, parents, apply):
         """File a mind request for this tick. `apply(eid, out)` runs in the commit phase."""
         assert a["id"] not in self.pending, "one mind request per agent per tick"
-        prompt, counts = assemble_prompt(a, self.state, kind, self._situation(a, view))
+        prompt, counts = assemble_prompt(a, self.state, kind, self._situation(a, view, kind))
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
         req = MindRequest(kind, a["id"], self.state["tick"], prompt, prompt_hash(prompt), view)
@@ -198,7 +198,7 @@ class Sim:
             view["market_food"] = self.state["market_food"]
         return view
 
-    def _situation(self, a: dict, view: dict) -> str:
+    def _situation(self, a: dict, view: dict, kind: str) -> str:
         m = (self.state["tick"] % TICKS_PER_DAY) * 10
         who = ", ".join(f"#{p['id']} ({p['role']})" for p in view["present"]) or "nobody"
         s = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
@@ -209,6 +209,11 @@ class Sim:
         s += f" Your family: {kin or 'none'}."
         if "market_food" in view:
             s += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
+        if kind == "plan":
+            day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
+            bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
+            s += (f" You just woke and will be ready for bed around {bed_h:02d}:00."
+                  f" Plan from {m // 60:02d}:00 to {bed_h:02d}:00.")
         return s
 
     # ------------------------------------------------------------------ tick
@@ -428,6 +433,8 @@ class Sim:
             a["cooldown_until"] = self.state["tick"] + 1
             return self._receipt(a, eid, action, True, "heading to market")
         if action in ("steal", "ask_kin"):
+            if target is None:
+                return self._receipt(a, eid, action, False, "no target named")
             if not _is_int(target) or not 0 <= target < len(agents) or target == a["id"]:
                 return self._receipt(a, eid, action, False, "no such person")
             t = agents[target]

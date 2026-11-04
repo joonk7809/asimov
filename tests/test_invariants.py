@@ -260,3 +260,15 @@ def test_bool_target_is_rejected():
     a = sim.state["agents"][0]
     sim._resolve(a, {"action": "steal", "target": True}, 0)
     assert sim.events[-1].data["why"] == "no such person"
+
+
+def test_missing_target_gets_its_own_receipt_reason():
+    """'You named nobody' and 'nobody by that id' are different mistakes; F4 needs them apart."""
+    sim = Sim(3, 10, StubMind())
+    a = sim.state["agents"][0]
+    for action in ("ask_kin", "steal"):
+        for out in ({"action": action, "target": None}, {"action": action}):
+            sim._resolve(a, out, 0)
+            assert sim.events[-1].data == {"action": action, "ok": False, "why": "no target named"}
+        sim._resolve(a, {"action": action, "target": 99}, 0)
+        assert sim.events[-1].data["why"] == "no such person"

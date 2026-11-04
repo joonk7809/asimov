@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from asiimov.events import read_jsonl, write_jsonl
-from asiimov.llm import SCHEMAS, LLMMind
+from asiimov.llm import SCHEMAS, LLMMind, schema_for
 from asiimov.minds import StubMind
 from asiimov.replay import replay
 from asiimov.sim import TICKS_PER_DAY, Sim
@@ -64,12 +64,54 @@ def test_llm_mind_drives_world_and_replays_without_server(server, tmp_path):
 
 
 def test_schemas_accept_stub_outputs():
-    """The stand-in's outputs fit the LLM schemas, so the two minds speak the same contract."""
+    """The stand-in's outputs fit the LLM schemas, so the two minds speak the same contract.
+    Except plan length: the stub is the frozen baseline and plans one or two blocks, so minItems is
+    left out for it."""
     jsonschema = pytest.importorskip("jsonschema")
     from asiimov.bench import collect_prompts
     stub = StubMind()
+    plan = json.loads(json.dumps(SCHEMAS["plan"]))
+    del plan["properties"]["plan"]["minItems"]
     for req in collect_prompts(agents=30, days=2, seed=3):
-        jsonschema.validate(json.loads(stub.decide(req).raw_output), SCHEMAS[req.kind])
+        schema = plan if req.kind == "plan" else schema_for(req)
+        jsonschema.validate(json.loads(stub.decide(req).raw_output), schema)
+
+
+def test_deliberate_schema_only_takes_targets_the_prompt_lists():
+    """ask_kin names family, steal names someone here, and only buy_food/go_market/wait take null (F4)."""
+    jsonschema = pytest.importorskip("jsonschema")
+    from asiimov.bench import collect_prompts
+    reqs = [r for r in collect_prompts(agents=30, days=2, seed=3) if r.kind == "deliberate"]
+    assert reqs
+    for req in reqs:
+        schema, kin = schema_for(req), [k["id"] for k in req.view["kin"]]
+        ok = lambda out: jsonschema.Draft202012Validator(schema).is_valid(out)
+        for action in ("ask_kin", "steal"):
+            assert not ok({"action": action, "target": None, "reason": "x"})
+        for action in ("buy_food", "go_market", "wait"):
+            assert ok({"action": action, "target": None, "reason": "x"})
+            assert not ok({"action": action, "target": 0, "reason": "x"})
+        unlisted = next(i for i in range(1000) if i not in kin)
+        assert not ok({"action": "ask_kin", "target": unlisted, "reason": "x"})
+        assert all(ok({"action": "ask_kin", "target": k, "reason": "x"}) for k in kin)
+        for k in kin:
+            assert f"(#{k})" in req.prompt
+        for p in req.view["present"]:
+            assert f"#{p['id']} (" in req.prompt
+            assert ok({"action": "steal", "target": p["id"], "reason": "x"})
+    assert any(req.view["kin"] for req in reqs) and any(req.view["present"] for req in reqs)
+
+
+def test_plan_schema_and_prompt_ask_for_the_whole_waking_day():
+    jsonschema = pytest.importorskip("jsonschema")
+    from asiimov.bench import collect_prompts
+    one = {"plan": [{"activity": "work", "start_h": 8, "end_h": 15}]}
+    day = {"plan": [{"activity": "home", "start_h": 6, "end_h": 8}, {"activity": "work", "start_h": 8, "end_h": 15},
+                    {"activity": "socialize", "start_h": 15, "end_h": 22}]}
+    v = jsonschema.Draft202012Validator(SCHEMAS["plan"])
+    assert not v.is_valid(one) and v.is_valid(day)
+    plans = [r for r in collect_prompts(agents=10, days=1, seed=3) if r.kind == "plan"]
+    assert plans and all("ready for bed around" in r.prompt and "back-to-back blocks" in r.prompt for r in plans)
 
 
 def test_llm_mind_retries_a_200_that_is_not_a_completion(monkeypatch):
