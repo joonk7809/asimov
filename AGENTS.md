@@ -32,4 +32,5 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
     python -m asiimov.run --agents 100 --days 7 --seed 1 --fire 3@1 --out runs/demo
     python -m asiimov.run --resume --days 10 --out runs/demo   # continue after a crash, or run longer
     python -m asiimov.scorecard --mind stub --out runs/scorecard-stub   # variety tests, plan/variety-scorecard.md
+    python -m asiimov.diagnostics runs/demo/events.jsonl   # plan copy rate, value-word core share (any engine)
     python -m asiimov.authorship --log runs/demo/events.jsonl --out runs/authorship   # who authors each waking tick (test 7)
