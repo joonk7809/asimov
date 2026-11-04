@@ -14,7 +14,8 @@ import urllib.request
 from .minds import MindReply, MindRequest
 
 ACTIVITIES = ["work", "socialize", "home", "rest", "explore"]
-ACTIONS = ["buy_food", "go_market", "ask_kin", "steal", "wait"]
+
+NO_TARGET = ["buy_food", "go_market", "wait"]
 
 # No maxLength on strings: vLLM 0.11 structured outputs (xgrammar) decode ~15x slower with it
 # (measured on Qwen3-4B, A6000: reflect 18.5 s vs 1.7 s). max_tokens bounds the reply and the
@@ -22,20 +23,14 @@ ACTIONS = ["buy_food", "go_market", "ask_kin", "steal", "wait"]
 SCHEMAS = {
     "plan": {
         "type": "object",
-        "properties": {"plan": {"type": "array", "maxItems": 4, "items": {
+        # minItems: a whole waking day, not one short block (one-block plans were 700/700 at eccd95d).
+        "properties": {"plan": {"type": "array", "minItems": 2, "maxItems": 6, "items": {
             "type": "object",
             "properties": {"activity": {"type": "string", "enum": ACTIVITIES},
                            "start_h": {"type": "integer", "minimum": 0, "maximum": 23},
                            "end_h": {"type": "integer", "minimum": 1, "maximum": 24}},
             "required": ["activity", "start_h", "end_h"], "additionalProperties": False}}},
         "required": ["plan"], "additionalProperties": False,
-    },
-    "deliberate": {
-        "type": "object",
-        "properties": {"action": {"type": "string", "enum": ACTIONS},
-                       "target": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
-                       "reason": {"type": "string"}},
-        "required": ["action", "target", "reason"], "additionalProperties": False,
     },
     "reflect": {
         "type": "object",
@@ -44,6 +39,26 @@ SCHEMAS = {
         "required": ["core", "summary"], "additionalProperties": False,
     },
 }
+
+
+def _deliberate_branch(actions: list[str], target: dict) -> dict:
+    return {"type": "object",
+            "properties": {"action": {"type": "string", "enum": actions}, "target": target,
+                           "reason": {"type": "string"}},
+            "required": ["action", "target", "reason"], "additionalProperties": False}
+
+
+def schema_for(req: MindRequest) -> dict:
+    """The reply schema for one request. A deliberation's target must be an id its prompt lists:
+    family for ask_kin, people here for steal. An action with nobody to aim at is left out."""
+    if req.kind != "deliberate":
+        return SCHEMAS[req.kind]
+    branches = [_deliberate_branch(NO_TARGET, {"type": "null"})]
+    for action, ids in (("ask_kin", [k["id"] for k in req.view["kin"]]),
+                        ("steal", [p["id"] for p in req.view["present"]])):
+        if ids:
+            branches.append(_deliberate_branch([action], {"type": "integer", "enum": sorted(ids)}))
+    return {"anyOf": branches}
 
 
 class LLMMind:
@@ -73,7 +88,7 @@ class LLMMind:
         }
         if self.structured:
             b["response_format"] = {"type": "json_schema", "json_schema": {
-                "name": req.kind, "schema": SCHEMAS[req.kind], "strict": True}}
+                "name": req.kind, "schema": schema_for(req), "strict": True}}
         return b
 
     def post(self, path: str, body: dict) -> dict:
