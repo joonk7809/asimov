@@ -170,4 +170,5 @@ def test_effort_diagnostic_separates_idle_minds_from_the_economy():
           Event(7, 143, "end", "rule", None, {}, [])]
     assert effort(ev) == {"meals_per_agent_day_working_by_role": {"guard": 1.0}, "idle_share": 0.667,
                           "idle_share_by_conscientiousness_quartile": [None, 1.0, 1.0, 0.0],
-                          "earner_supply_failed_share": 1.0, "futile_repeats": 1, "not_at_market": 1}
+                          "earner_supply_failed_attempt_share": 1.0,
+                          "earner_supply_failed_agent_day_share": 1.0, "futile_repeats": 1, "not_at_market": 1}

@@ -156,7 +156,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "2": "6dd170b56c91610ef4359f4850f451a87224fb9ed5cb9edf7ec552d0fe884f4d",  # 42adb9e, never merged
           "3": "7b0e876ed43e135033a9b9b6e819c176e70c2e4aeb3b3b14f9b2f8d3ad71088d",
           "4": "87be8cccf05d032f2dc428e615b7f45ad3981da0c735ff9edb2ce74cb48d3c32",
-          "5": "49abfd07071dbe24572a47b4ce6716dbbee71d069b82cd3f6353679e04a20350"}
+          "5": "49abfd07071dbe24572a47b4ce6716dbbee71d069b82cd3f6353679e04a20350",
+          "6": "8a5538fbeca1bdbb7681e2af7843b68ed98d8019b35ea051c803f458ac6da5f6"}
 
 
 def test_log_changes_bump_the_engine_version():

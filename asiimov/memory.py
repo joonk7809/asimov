@@ -29,6 +29,10 @@ REFLECT_ASK = (" Your day is over. For core, write at most 2 things that happene
                " want to remember, each saying who did what and where, or [] if nothing stood out."
                " Not a value or a trait. Use only what is written under Today and Earlier; add no details"
                " that are not there.")
+# Engine 6 (P3): summary plus core was no more varied with the soul than without it (0.86-1.01 of
+# no_text's similarity at engine 5), so the summary is asked for in the agent's own voice.
+REFLECT_VOICE = (" For summary, write one or two sentences in your own voice about how today sat with the"
+                 " person you are and what matters to you; do not list what you did.")
 
 
 def is_bare_value(text: str) -> bool:
@@ -77,6 +81,24 @@ def _clip(text: str, budget_tokens: int) -> str:
     return text if len(text) <= limit else text[-limit:]
 
 
+def _fit_lines(header: str, lines: list[str], budget_tokens: int) -> str:
+    """The header and as many whole lines, in the given order, as fit the budget. Clipping the tail of
+    the text instead cut the header and every early line mid-word (71% of 4B probe prompts at engine 5)."""
+    out, size = [header], len(header)
+    for line in lines:
+        if size + 1 + len(line) > budget_tokens * 4:
+            break
+        out.append(line)
+        size += 1 + len(line)
+    return "\n".join(out)
+
+
+def rank_relationships(agent: dict) -> list[tuple[str, dict]]:
+    """Strongest feeling first, then the most recent contact, then id: the people a mind keeps in view."""
+    return sorted(agent["relationships"].items(),
+                  key=lambda kv: (-abs(kv[1]["affinity"]), -kv[1].get("last", -1), int(kv[0])))
+
+
 def _level(v: int, low: str, mid: str, high: str) -> str:
     return low if v < 350 else high if v > 650 else mid
 
@@ -106,7 +128,7 @@ def render_files(agent: dict, state: dict) -> dict[str, str]:
     names = {a["id"]: a["name"] for a in state["agents"]}
     rel_lines = [
         f"- {names[int(other)]} (#{other}): affinity {rel['affinity']}, {rel.get('note', '')}".rstrip(", ")
-        for other, rel in sorted(agent["relationships"].items(), key=lambda kv: int(kv[0]))
+        for other, rel in rank_relationships(agent)
     ]
     belief_lines = [f"- {k}: {v}" for k, v in sorted(agent["beliefs"].items())]
     return {
@@ -133,7 +155,8 @@ def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=No
         "soul": files["soul.md"],
         "core": files["core.md"],
         "goals": files["goals.md"],
-        "relationships": files["relationships.md"],
+        "relationships": _fit_lines("# People I know", [x for x in files["relationships.md"].split("\n")[1:] if x],
+                                    SECTION_BUDGETS["relationships"]),
         "beliefs": files["beliefs.md"],
         "episodes": "# Earlier\n" + "\n".join(f"- {e['text']}" for e in top_episodes),
         "recent": files["recent.md"],
