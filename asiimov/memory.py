@@ -72,8 +72,11 @@ def render_files(agent: dict, state: dict) -> dict[str, str]:
     }
 
 
-def assemble_prompt(agent: dict, state: dict, kind: str, situation: str) -> tuple[str, dict]:
-    """Stable sections first (prefix-cacheable), changing tail last."""
+def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=None) -> tuple[str, dict]:
+    """Stable sections first (prefix-cacheable), changing tail last.
+
+    `edit(sections) -> sections` may drop or replace sections before clipping; the world never
+    passes one, so its prompts are unchanged. asiimov.probe uses it for input ablations."""
     files = render_files(agent, state)
     top_episodes = sorted(agent["episodes"], key=lambda e: (-e["importance"], -e["tick"]))[:8]
     sections = {
@@ -87,6 +90,8 @@ def assemble_prompt(agent: dict, state: dict, kind: str, situation: str) -> tupl
         "recent": files["recent.md"],
         "situation": f"# Now ({kind})\n{situation}",
     }
+    if edit is not None:
+        sections = edit(dict(sections))
     parts = [_clip(text, SECTION_BUDGETS[name]) for name, text in sections.items()]
     prompt = "\n\n".join(parts)
     counts = {name: tokens(p) for name, p in zip(sections, parts)}

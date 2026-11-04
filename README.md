@@ -15,4 +15,7 @@ open model served by vLLM on a RunPod GPU. Qwen3-4B and Qwen3-8B have run the 7-
     python -m asiimov.run --mind llm --pod POD_ID --agents 100 --days 7 --seed 1 --fire 3@1 --out runs/llm-4b
     python -m asiimov.run --resume --mind llm --pod NEW_POD_ID --days 7 --out runs/llm-4b  # if the pod died
     python -m asiimov.scorecard --mind llm --pod POD_ID --arms full --out runs/sc-4b  # one arm per process; then --grade-only
+    python -m asiimov.probe pack --log events.jsonl.gz --arm full --out runs/probe/full   # decision probe, no GPU
+    python -m asiimov.probe ask --out runs/probe/full --pod POD_ID         # resumable; K=10 is 60 calls per point
+    python -m asiimov.probe analyze --out runs/probe/full                  # report.md: shift per input vs noise
     python scripts/runpod_pod.py down POD_ID                               # always terminate

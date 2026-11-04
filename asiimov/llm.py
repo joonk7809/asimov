@@ -66,7 +66,8 @@ class LLMMind:
             "temperature": self.temperature, "top_p": self.top_p, "max_tokens": self.max_tokens,
             # Per-request seed from the prompt. vLLM does not promise identical samples across different
             # batch compositions, so this is not a reproducibility guarantee; replay uses the recording.
-            "seed": int(req.prompt_hash[:8], 16),
+            # asiimov.probe sets req.seed to re-ask one prompt with independent samples.
+            "seed": req.seed if req.seed is not None else int(req.prompt_hash[:8], 16),
             # Qwen3 hybrid models: no <think> block; deliberation is the answer itself.
             "chat_template_kwargs": {"enable_thinking": False},
         }
