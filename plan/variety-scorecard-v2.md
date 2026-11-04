@@ -32,10 +32,17 @@ Cheap proxies for test 16's tells, so obvious ones get caught without people:
 - Behavior mix: socializing hours per agent-day, transgressions per agent-week by honesty quartile.
 - The current values for these come from the existing logs, and the report shows them from the next update on.
 
+Mind authorship (test 7's companion, from `python -m asiimov.authorship`, a replay instrument that changes no rule or log):
+- **Divergent mind share:** per agent, the share of waking ticks where a mind-authored activity (plan block or deliberated override) differs from what the habit layer picks at that tick (`Sim._habit` on `_act`'s 6-tick cadence). Whole-day plans make test 7's raw share near 1 even when they copy the habits; this says how much of the day the mind actually changed.
+- **Effective mind share:** the same, counting only changes in place or in work-or-not, the only parts of an activity the rules read ("rest" and "home" differ in name only).
+- Reported as median, mean and share of agents below 0.20, next to test 7's raw numbers, with the plan-vs-habit activity pairs. No gate: the harness v2 decision rule (shared folder plan/mind-harness-v2.md) reads divergent share; test 7's gate stays as frozen.
+- Caveat: the habit pick is counterfactual within the world the mind made, not a twin run, so it measures override of the habit layer, not a different life.
+
 ## Open items for steering
 - 16a people: joon plus one more person (joon, 2026-11-04), about 1.5 h each. The results thread prepares the situation set and the forms once steering signs off.
 - 8, 9, 13 and 15 need twin and intervention runs: paid compute, run by the RunPod thread under the existing approval. The results thread never triggers runs.
-- 7, 10 and 12 need authorship tags and intent records in the log (the intent-loop coding work), so they're inconclusive on current logs except 12's target check.
+- 7 runs on any engine-3 log through `asiimov.authorship` (replay, no log change); its `intent` author stays 0 until the intent loop exists. 10 and 12 need intent records in the log (the intent-loop coding work), so they're inconclusive on current logs except 12's target check.
 
 ## Change log
 - v2 (2026-11-04): tests 7–16 added; v1 numbers unchanged. Tests 14 and 15 carry a pending power check, which must be run (and any change sent back to steering) before either is graded.
+- v2 diagnostics (2026-11-04, T11): divergent and effective mind share added as test 7 diagnostics. No threshold changed, and `plan/variety-thresholds-v2.json` is untouched so its frozen sha256 holds.

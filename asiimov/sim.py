@@ -29,6 +29,7 @@ FARMER_SELL_PRICE = 2
 WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
              "healer": "plaza", "guard": "plaza", "child": "plaza", "elder": "plaza"}
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
+ACTIVITY_PLACE = {"socialize": "plaza", "shop": "market", "explore": "woods"}  # work: WORKPLACE; else home
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
 ENGINE_VERSION = "3"
@@ -348,8 +349,7 @@ class Sim:
             for b in a["plan"]:
                 if b["start_h"] <= hour < b["end_h"]:
                     activity = b["activity"]
-        place = {"work": WORKPLACE[a["role"]], "socialize": "plaza", "shop": "market",
-                 "explore": "woods"}.get(activity, a["home"])
+        place = self._place(a, activity)
         if activity != a["activity"] or place != a["place"]:
             if a["activity"] == "work" and a["role"] == "farmer":
                 self._farmer_sells(a)
@@ -368,6 +368,9 @@ class Sim:
                 else:
                     a["inv"]["coin"] += 2
                     self._emit("produce", "rule", a["id"], {"coin": 2}, [a["plan_event"]])
+
+    def _place(self, a: dict, activity: str) -> str:
+        return WORKPLACE[a["role"]] if activity == "work" else ACTIVITY_PLACE.get(activity, a["home"])
 
     def _food_yield(self, a: dict) -> int:
         """Food from one completed unit of farm work. A hook so experiment arms can change it."""
