@@ -45,13 +45,14 @@ def named_people(text: str, agents: list, self_id: int) -> list[set[int]]:
             groups.append({i} if i < len(agents) else set())
     me = agents[self_id]["name"].lower()
     low = re.sub(rf"\b{re.escape(me)}\b", " ", low)  # the author naming themself
-    for name in sorted({o["name"].lower() for o in agents} - {me}, key=len, reverse=True):
+    # Longest first, ties by name: set order follows PYTHONHASHSEED, and the result feeds world state.
+    for name in sorted({o["name"].lower() for o in agents} - {me}, key=lambda n: (-len(n), n)):
         full = re.compile(rf"\b{re.escape(name)}\b")
         if full.search(low):  # names are unique from engine 4; older worlds can repeat one
             groups.append({o["id"] for o in agents if o["name"].lower() == name})
             low = full.sub(" ", low)
     words = set(re.findall(r"[a-z]+", low)) - {me.split()[0]}  # a bare own first name is the author too
-    for first in {o["name"].split()[0].lower() for o in agents} & words:
+    for first in sorted({o["name"].split()[0].lower() for o in agents} & words):
         ids = {o["id"] for o in agents if o["name"].split()[0].lower() == first and o["id"] != self_id}
         if ids:
             groups.append(ids)

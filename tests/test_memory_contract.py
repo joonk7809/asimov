@@ -116,3 +116,18 @@ def test_author_naming_themself_is_not_someone_else():
     assert named_people("Omar Luriro talked with Anna at the woods", agents, 0) == [{2}]
     assert named_people("Anna Vosavo talked with me", agents, 0) == [{1}]
     assert named_people("Anna waved at Omar Luriro", agents, 2) == [{0, 1}]
+
+
+def test_named_people_does_not_depend_on_hash_seed():
+    """Overlapping names ("Anna Dean" + "Dean Kofi") must resolve the same in every process: the
+    result decides which memories are kept, so it is world state."""
+    import os
+    import subprocess
+    import sys
+    code = ("from asiimov.memory import named_people;"
+            "a=[{'id':0,'name':'Anna Dean'},{'id':1,'name':'Dean Kofi'},{'id':2,'name':'Mia Orne'},"
+            "{'id':3,'name':'Lia Orne'},{'id':4,'name':'Mia Lenro'},{'id':5,'name':'Lia Lenro'}];"
+            "print([sorted(g) for g in named_people('talked with Anna Dean Kofi, then Mia and Lia', a, 3)])")
+    outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                           env={**os.environ, "PYTHONHASHSEED": str(seed)}).stdout for seed in range(1, 9)}
+    assert len(outs) == 1, outs
