@@ -18,6 +18,7 @@ class MindRequest:
     prompt: str
     prompt_hash: str
     view: dict         # perceived facts only (own state, people present, kin)
+    seed: int | None = None  # sampling seed; None lets the mind derive one from the prompt
 
 
 @dataclass
