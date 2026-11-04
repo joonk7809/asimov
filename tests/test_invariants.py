@@ -146,7 +146,7 @@ def stepped_run(sim: Sim, days: int, player: dict):
         eaten = sum(1 for e in new if e.kind == "eat")
         coin_made = sum(e.data.get("coin", 0) for e in new if e.kind == "produce")
         sold = sum(e.data["food"] for e in new if e.kind == "sell")
-        bought = sum(1 for e in new if e.kind == "receipt" and e.data["action"] == "buy_food" and e.data["ok"])
+        bought = sum(e.data["food"] for e in new if e.kind == "receipt" and e.data["action"] == "buy_food" and e.data["ok"])
         food1, coin1 = totals(sim)
         assert food1 - food0 == produced - eaten - burned, f"food ledger broken at tick {tick}"
         assert coin1 - coin0 == coin_made + FARMER_SELL_PRICE * sold - FOOD_PRICE * bought, f"coin ledger at {tick}"
@@ -272,3 +272,72 @@ def test_missing_target_gets_its_own_receipt_reason():
             assert sim.events[-1].data == {"action": action, "ok": False, "why": "no target named"}
         sim._resolve(a, {"action": action, "target": 99}, 0)
         assert sim.events[-1].data["why"] == "no such person"
+
+
+def test_one_buy_covers_the_rest_of_the_day_capped_by_coin_and_stock():
+    sim = Sim(2, 10, StubMind())
+    a = sim.state["agents"][0]
+    a["place"], a["inv"]["food"], a["needs"]["hunger"] = "market", 0, 600
+    a["sleep_tick"] = sim.state["tick"] + 60
+    want = sim._meals_left_today(a)
+    assert want >= 2  # an hour of rising hunger past the next meal
+    a["inv"]["coin"], sim.state["market_food"] = 100, 100
+    sim._resolve(a, {"action": "buy_food"}, 0)
+    assert sim.events[-1].data["food"] == a["inv"]["food"] == want
+    a["inv"]["food"], a["inv"]["coin"] = 0, FOOD_PRICE * (want - 1) + 1  # coin for one fewer
+    sim._resolve(a, {"action": "buy_food"}, 0)
+    assert a["inv"]["food"] == want - 1 and a["inv"]["coin"] == 1
+    a["inv"]["food"], a["inv"]["coin"], sim.state["market_food"] = 0, 100, 1  # one left on the stall
+    sim._resolve(a, {"action": "buy_food"}, 0)
+    assert a["inv"]["food"] == 1 and sim.state["market_food"] == 0
+
+
+def test_a_hungry_child_eats_from_the_family_member_with_most_food():
+    sim = Sim(3, 60, StubMind())
+    fam = next(f["members"] for f in sim.state["families"]
+               if sum(sim.state["agents"][m]["role"] in ("child", "elder") for m in f["members"]) >= 1
+               and len(f["members"]) >= 3)
+    kid = next(sim.state["agents"][m] for m in fam if sim.state["agents"][m]["role"] in ("child", "elder"))
+    others = [sim.state["agents"][m] for m in fam if m != kid["id"]]
+    for o in others:
+        o["inv"]["food"] = 1
+    others[-1]["inv"]["food"] = 4
+    kid["inv"]["food"], kid["needs"]["hunger"] = 0, 700
+    sim._eat(kid)
+    assert sim.events[-1].kind == "eat" and sim.events[-1].data == {"household": others[-1]["id"]}
+    assert others[-1]["inv"]["food"] == 3 and kid["needs"]["hunger"] == 250
+    for o in others:  # everyone down to their last one: they keep it
+        o["inv"]["food"] = 1
+    kid["needs"]["hunger"], n = 700, len(sim.events)
+    sim._eat(kid)
+    assert len(sim.events) == n and kid["needs"]["hunger"] == 700
+
+
+def test_working_adults_do_not_eat_from_the_household():
+    sim = Sim(3, 60, StubMind())
+    fam = next(f["members"] for f in sim.state["families"] if len(f["members"]) >= 2
+               and any(sim.state["agents"][m]["role"] not in ("child", "elder") for m in f["members"]))
+    adult = next(sim.state["agents"][m] for m in fam if sim.state["agents"][m]["role"] not in ("child", "elder"))
+    for m in fam:
+        sim.state["agents"][m]["inv"]["food"] = 5
+    adult["inv"]["food"], adult["needs"]["hunger"], n = 0, 700, len(sim.events)
+    sim._eat(adult)
+    assert len(sim.events) == n
+
+
+def test_a_working_adult_also_buys_what_the_dependants_at_home_still_need():
+    sim = Sim(3, 60, StubMind())
+    sim.run(1)  # everyone has a bedtime
+    fam = next(f["members"] for f in sim.state["families"]
+               if any(sim.state["agents"][m]["role"] in ("child", "elder") for m in f["members"])
+               and any(sim.state["agents"][m]["role"] not in ("child", "elder") for m in f["members"]))
+    ag = [sim.state["agents"][m] for m in fam]
+    adult = next(a for a in ag if a["role"] not in ("child", "elder"))
+    deps = [a for a in ag if a["role"] in ("child", "elder")]
+    for a in ag:
+        a["inv"]["food"], a["needs"]["hunger"], a["sleep_tick"] = 0, 600, sim.state["tick"] + 60
+    deps[0]["inv"]["food"] = 1
+    want = sum(sim._meals_left_today(a) for a in [adult] + deps) - 1
+    adult["place"], adult["inv"]["coin"], sim.state["market_food"] = "market", 1000, 1000
+    sim._resolve(adult, {"action": "buy_food"}, 0)
+    assert adult["inv"]["food"] == want

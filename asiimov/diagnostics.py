@@ -55,18 +55,28 @@ def food(events: list) -> dict:
     roles = {a["id"]: a["role"] for a in pop.get("agents", ())}
     days = events[-1].tick // TICKS_PER_DAY + (events[-1].tick % TICKS_PER_DAY > 0) if events else 0
     meals = {r: 0 for r in sorted(set(roles.values()))}
-    by_day = [{"produced": 0, "sold": 0, "eaten": 0} for _ in range(days)]
+    by_day = [{"produced": 0, "sold": 0, "bought": 0, "eaten": 0, "from_household": 0, "deliberations": 0}
+              for _ in range(days)]
+    buys = failed = 0
     for e in events:
         d = e.tick // TICKS_PER_DAY
         if e.kind == "eat":
             meals[roles[e.actor]] += 1
             by_day[d]["eaten"] += 1
+            by_day[d]["from_household"] += "household" in e.data
+        elif e.kind == "receipt" and e.data["action"] == "buy_food":
+            buys += 1
+            failed += not e.data["ok"]
+            by_day[d]["bought"] += e.data.get("food", 1) if e.data["ok"] else 0
+        elif e.origin == "mind" and e.data["kind"] == "deliberate":
+            by_day[d]["deliberations"] += 1
         elif e.kind == "produce" and "food" in e.data:
             by_day[d]["produced"] += e.data["food"]
         elif e.kind == "sell":
             by_day[d]["sold"] += e.data["food"]
     count = {r: sum(1 for x in roles.values() if x == r) for r in meals}
     return {"meals_per_agent_day_by_role": {r: round(meals[r] / (count[r] * days), 2) for r in meals if days},
+            "buy_attempts": buys, "buy_failed_share": round(failed / buys, 3) if buys else None,
             "food_by_day": by_day}
 
 

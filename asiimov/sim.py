@@ -423,11 +423,34 @@ class Sim:
             self.state["market_food"] += surplus
             self._emit("sell", "rule", a["id"], {"food": surplus}, [a["plan_event"]])
 
+    def _meals_left_today(self, a: dict) -> int:
+        """Meals _eat will take before this agent's bedtime, counting the one due now (at least 1).
+        buy_food buys this many, so one trip to the market feeds the rest of the day."""
+        rise = max(0, a["sleep_tick"] - self.state["tick"]) * (a["body"]["metabolism"] // 100)
+        h = a["needs"]["hunger"] + rise
+        return max(1, (h - 500) // 450 + 1) if h >= 500 else 1
+
     def _eat(self, a: dict):
-        if a["needs"]["hunger"] >= 500 and a["inv"]["food"] > 0:
+        if a["needs"]["hunger"] < 500:
+            return
+        if a["inv"]["food"] > 0:
             a["inv"]["food"] -= 1
             a["needs"]["hunger"] = _clamp(a["needs"]["hunger"] - 450)
             self._emit("eat", "rule", a["id"], {})
+        elif a["role"] in ("child", "elder"):
+            # Dependants eat from the household's stock: the family member carrying the most food,
+            # ties by id, as long as they keep one for themselves.
+            fam = self.state["families"][a["family"]]["members"]
+            donor = max((m for m in fam if m != a["id"]), default=None,
+                        key=lambda m: (self.state["agents"][m]["inv"]["food"], -m))
+            if donor is None or self.state["agents"][donor]["inv"]["food"] <= 1:
+                return
+            d = self.state["agents"][donor]
+            d["inv"]["food"] -= 1
+            a["needs"]["hunger"] = _clamp(a["needs"]["hunger"] - 450)
+            self._emit("eat", "rule", a["id"], {"household": donor})
+            self._note(a["id"], f"ate from {d['name']}'s food")
+            self._note(donor, f"{a['name']} ate from my food")
 
     def _maybe_deliberate(self, a: dict, occupancy: dict):
         tick = self.state["tick"]
@@ -454,11 +477,20 @@ class Sim:
                 return self._receipt(a, eid, action, False, "not at market")
             if self.state["market_food"] <= 0 or a["inv"]["coin"] < FOOD_PRICE:
                 return self._receipt(a, eid, action, False, "no stock or no coin")
-            self.state["market_food"] -= 1
-            a["inv"]["coin"] -= FOOD_PRICE
-            a["inv"]["food"] += 1
+            # Enough for the rest of today, and a working adult also buys what the family's
+            # children and elders still lack, which they then eat from the household (see _eat).
+            want = self._meals_left_today(a)
+            if a["role"] not in ("child", "elder"):
+                for m in self.state["families"][a["family"]]["members"]:
+                    d = self.state["agents"][m]
+                    if m != a["id"] and d["role"] in ("child", "elder") and d["sleep_tick"] is not None:
+                        want += max(0, self._meals_left_today(d) - d["inv"]["food"])
+            n = min(want, a["inv"]["coin"] // FOOD_PRICE, self.state["market_food"])
+            self.state["market_food"] -= n
+            a["inv"]["coin"] -= n * FOOD_PRICE
+            a["inv"]["food"] += n
             self._note(a["id"], "bought food at the market")
-            return self._receipt(a, eid, action, True, "bought")
+            return self._receipt(a, eid, action, True, "bought", extra={"food": n})
         if action == "go_market":
             a["override"] = {"activity": "shop", "until": self.state["tick"] + 6, "event": eid}
             a["cooldown_until"] = self.state["tick"] + 1

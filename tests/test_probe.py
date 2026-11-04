@@ -74,6 +74,8 @@ def test_sampling_spreads_over_kinds_and_agents(logs):
     for k, v in by_kind.items():  # an even split, and a kind with fewer points gives its share to the others
         assert len(v) == avail[k] if avail[k] < 30 else len(v) >= 30, (k, len(v), avail[k])
     for k, v in by_kind.items():  # round-robin over the agents that have points of that kind
+        if len(v) == avail[k]:
+            continue  # every point was taken, so the spread is the log's own
         n = len({e.actor for e in logs["full"] if e.origin == "mind" and e.data["kind"] == k})
         assert max(v.count(a) for a in v) <= -(-len(v) // n), k
 
@@ -127,7 +129,11 @@ def test_planted_soul_effect_is_found_and_a_text_blind_mind_shows_none(pack, tmp
         for v in probe.VARIANTS[1:] + ("null_excess",):
             assert abs(b[v]["mean"]) < swap / 5, (kind, v, b[v])
         assert abs(p["null_excess"]["mean"]) < swap / 5
-    assert planted["deliberate_actions"]["swapped_soul"]["steal"] > planted["deliberate_actions"]["full"]["steal"]
+    # Swapping souls moves the steal share toward the other side of the sample's honesty mix.
+    d = [p["prompts"]["full"] for p in pack if p["kind"] == "deliberate"]
+    lean = sum("scrupulously honest" in t for t in d) - sum("bend the truth" in t for t in d)
+    acts = planted["deliberate_actions"]
+    assert lean and (acts["swapped_soul"]["steal"] - acts["full"]["steal"]) * lean > 0, (lean, acts)
 
 
 def test_ask_resumes_after_a_crash_without_asking_twice(pack, tmp_path):
