@@ -193,7 +193,8 @@ def build_sim(base, mind, arm: str | None = None, genesis: dict | None = None, w
     n = len(pop["agents"])
     if arm is None:
         return Sim(g.data["seed"], n, mind, genesis=pop, order=g.data["order"], workers=workers)
-    from .scorecard import ArmSim, anchors, labeled_population, parse_arm
+    from .scorecard import ArmSim, anchors, check_famine_version, labeled_population, parse_arm
+    check_famine_version(g.data, arm)
     if g.data["order"] != "id":
         raise ValueError("scorecard arms run in id order")
     flat = parse_arm(arm)[0] == "flat_params"

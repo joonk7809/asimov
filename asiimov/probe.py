@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .events import Event
 from .memory import assemble_prompt, prompt_hash, render_soul
 from .minds import MindRequest, ReplayDivergence, ReplayMind
-from .scorecard import FICTION_HEADER, SCHEMA_HEAD, ArmSim, anchors
+from .scorecard import FICTION_HEADER, SCHEMA_HEAD, ArmSim, anchors, check_famine_version
 from .sim import ACTIVITIES, ENGINE_VERSION, Sim
 
 VARIANTS = ("full", "no_soul", "swapped_soul", "no_memory", "situation_only")
@@ -144,6 +144,7 @@ class ProbeSim(ArmSim):
         genesis = events[0].data
         if genesis.get("engine") != ENGINE_VERSION:
             raise ReplayDivergence(f"log was written by engine {genesis.get('engine')}, this is {ENGINE_VERSION}")
+        check_famine_version(genesis, arm)
         if prompt_token_offset:
             events = [Event(**{**e.__dict__, "mind": {**e.mind, "prompt_tokens": e.mind["prompt_tokens"]
                                                       + prompt_token_offset}}) if e.mind else e for e in events]
