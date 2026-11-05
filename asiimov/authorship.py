@@ -53,7 +53,10 @@ class AuthorshipSim(ProbeSim):
             self.souls = {a["id"]: render_soul(a) for a in pop["agents"]}
         # (tick, agent, author, activity, habit pick); the wake tick has no habit pick
         self.records: list[tuple[int, int, str, str, str | None]] = []
-        self.effect = {}  # (agent, activity) -> what the rules read of it: (place, is work)
+        # (tick, agent) -> what the rules read of this tick, and of the habit's pick: ((place, is work), ...).
+        # Per tick, from where the agent actually is: a step's place (visit goes wherever its target is)
+        # isn't a function of the activity label (PR #19 review).
+        self.effect = {}
 
     def _wake(self, a, occupancy):
         super()._wake(a, occupancy)
@@ -75,8 +78,7 @@ class AuthorshipSim(ProbeSim):
         super()._act(a)
         if a["activity"] != expected or (not step and a["habit"] != habit):
             raise AssertionError(f"authorship disagrees with _act at tick {tick}, agent {a['id']}")
-        for act in (a["activity"], habit):
-            self.effect.setdefault((a["id"], act), (self._place(a, act), act == "work"))
+        self.effect[(tick, a["id"])] = ((a["place"], a["activity"] == "work"), (self._place(a, habit), habit == "work"))
         self.records.append((tick, a["id"], author, a["activity"], habit))
 
 
@@ -105,12 +107,12 @@ def _gate_stats(shares: list[float]) -> dict:
 def summarize(sim: AuthorshipSim) -> dict:
     per = defaultdict(lambda: {"ticks": Counter(), "divergent": Counter(), "effective": Counter()})
     pairs = Counter()  # (plan activity, habit pick) over plan ticks
-    for _, aid, author, activity, habit in sim.records:
+    for tick, aid, author, activity, habit in sim.records:
         p = per[aid]
         p["ticks"][author] += 1
         if author in MIND_AUTHORS and activity != habit:
             p["divergent"][author] += 1
-            if sim.effect[(aid, activity)] != sim.effect[(aid, habit)]:
+            if sim.effect[(tick, aid)][0] != sim.effect[(tick, aid)][1]:
                 p["effective"][author] += 1
         if author == "plan":
             pairs[(activity, habit)] += 1

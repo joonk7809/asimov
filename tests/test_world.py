@@ -159,7 +159,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "4": "87be8cccf05d032f2dc428e615b7f45ad3981da0c735ff9edb2ce74cb48d3c32",
           "5": "49abfd07071dbe24572a47b4ce6716dbbee71d069b82cd3f6353679e04a20350",
           "6": "c7dfb5029e3ea1dbff76b179761d367530fc7e3cbd54d3508c04e76b1344ced8",
-          "7": "ed846762264ad4ab9871500be6cab65740affa010297b7d91aefee47114f6fa4"}
+          "7": "0b3a32589883725f55439d837727557df5a288eebba3234aaa59f1f2629d1fb9",  # PR #19
+          "8": "845a7abb49589da562cbd54dbc952d62a7d61606d00f13a390f4d3cc669b5560"}
 
 
 def test_log_changes_bump_the_engine_version():

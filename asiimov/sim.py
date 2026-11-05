@@ -73,7 +73,7 @@ DELIBERATE_ASK = (" Your action happens now; target is a person's #id or null. g
                   " A new goal replaces the intention you have now; to keep it, leave goal empty.")
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "7"
+ENGINE_VERSION = "8"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
