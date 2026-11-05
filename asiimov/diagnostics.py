@@ -96,6 +96,7 @@ def effort(events: list) -> dict:
     earned = {e.actor for e in events if e.kind == "produce"}
     meals, seen = Counter(), set()
     buys = supply_fails = futile = not_at_market = 0
+    buy_days, fail_days = set(), set()  # (agent, day) pairs: the acceptance bar counts a day once
     for e in events:
         if e.kind == "eat":
             meals[e.actor] += 1
@@ -109,6 +110,9 @@ def effort(events: list) -> dict:
                 if e.actor in earned:
                     buys += 1
                     supply_fails += e.data["why"] == "no stock or no coin"
+                    buy_days.add((e.actor, e.tick // TICKS_PER_DAY))
+                    if e.data["why"] == "no stock or no coin":
+                        fail_days.add((e.actor, e.tick // TICKS_PER_DAY))
     working = {}
     for r in sorted({a["role"] for a in ags}):
         w = [a["id"] for a in ags if a["role"] == r and a["id"] in earned]
@@ -120,7 +124,9 @@ def effort(events: list) -> dict:
             "idle_share": round(sum(a["id"] not in earned for a in ags) / len(ags), 3) if ags else None,
             "idle_share_by_conscientiousness_quartile": [
                 round(sum(a["id"] not in earned for a in q) / len(q), 3) if q else None for q in quart],
-            "earner_supply_failed_share": round(supply_fails / buys, 3) if buys else None,
+            # every attempt, repeats included; the frozen T1i bar reads the agent-day share
+            "earner_supply_failed_attempt_share": round(supply_fails / buys, 3) if buys else None,
+            "earner_supply_failed_agent_day_share": round(len(fail_days) / len(buy_days), 3) if buy_days else None,
             "futile_repeats": futile, "not_at_market": not_at_market}
 
 

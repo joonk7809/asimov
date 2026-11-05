@@ -17,7 +17,7 @@ import json
 from collections import defaultdict
 
 from .events import Event, canonical
-from .memory import (REFLECT_ASK, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
+from .memory import (REFLECT_ASK, SECTION_BUDGETS, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
                      render_soul, tokens)
 from .minds import MindRequest, ReplayDivergence, dispatch
 from .params import generate_population
@@ -41,7 +41,7 @@ ACTIVITIES = ("work", "socialize", "home", "rest", "explore")
 ACTIVITY_PLACE = {"socialize": "plaza", "shop": "market", "explore": "woods"}  # work: WORKPLACE; else home
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "5"
+ENGINE_VERSION = "6"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -167,6 +167,12 @@ class Sim:
     def _rel(self, a: dict, other: int) -> dict:
         return a["relationships"].setdefault(str(other), {"affinity": 0, "note": ""})
 
+    def _met(self, a: dict, other: int) -> dict:
+        """The relationship, stamped with this tick as the last contact (it ranks the People section)."""
+        r = self._rel(a, other)
+        r["last"] = self.state["tick"]
+        return r
+
     def _request(self, a: dict, kind: str, view: dict, parents, apply):
         """File a mind request for this tick. `apply(eid, out)` runs in the commit phase."""
         assert a["id"] not in self.pending, "one mind request per agent per tick"
@@ -224,28 +230,65 @@ class Sim:
         return view
 
     def _situation(self, a: dict, view: dict, kind: str) -> str:
+        """The "# Now" section. Everything but the list of people here comes first; that list then gets
+        whatever room the section budget leaves, and the view (so the reply schema) is cut to match.
+        Tail-clipping a crowded situation (85+ people in one place) had cut the head off and left the
+        schema offering steal targets the prompt no longer showed (PR #15 review)."""
         m = (self.state["tick"] % TICKS_PER_DAY) * 10
-        who = ", ".join(f"#{p['id']} ({p['role']})" for p in view["present"]) or "nobody"
-        s = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
-             f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
-             f"Here: {who}.")
         agents = self.state["agents"]
         kin = ", ".join(f"{agents[k['id']]['name']} (#{k['id']})" for k in view["kin"])
-        s += f" Your family: {kin or 'none'}."
+        rest = f" Your family: {kin or 'none'}. " + self._economy(a)
         if "market_food" in view:
-            s += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
+            rest += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
             # Here, not in the shared SCHEMA: plan wording there shifted deliberate choices (PR #8 A/B,
             # results/raw/pr8-4b-2d), so deliberate prompts keep main's SCHEMA byte for byte.
-            s += (f" You just woke and will be ready for bed around {bed_h:02d}:00."
-                  f" Plan your whole day from {m // 60:02d}:00 to {bed_h:02d}:00 in 2 to 6 back-to-back blocks,"
-                  ' like {"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,'
-                  '"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}.')
+            rest += (f" You just woke and will be ready for bed around {bed_h:02d}:00."
+                     f" Plan your whole day from {m // 60:02d}:00 to {bed_h:02d}:00 in 2 to 6 back-to-back blocks,"
+                     ' like {"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,'
+                     '"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}.')
         elif kind == "reflect":
-            s += REFLECT_ASK
-        return s
+            rest += REFLECT_ASK
+        head = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
+                f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
+                f"Here: ")
+        room = SECTION_BUDGETS["situation"] * 4 - len(f"# Now ({kind})\n") - len(head) - len(rest) - 2
+        # Kin first, then the strongest feelings, then id: the people one would notice in a crowd.
+        rel = a["relationships"]
+        ranked = sorted(view["present"], key=lambda p: (not p["kin"], -abs(rel.get(str(p["id"]), {}).get("affinity", 0)),
+                                                        p["id"]))
+        shown, size = [], 0
+        for i, p in enumerate(ranked):
+            more = len(ranked) - i - 1
+            size += len(f"#{p['id']} ({p['role']})") + (2 if shown else 0)
+            if size + (len(f" and {more} others") if more else 0) > room:
+                break
+            shown.append(p)
+        shown.sort(key=lambda p: p["id"])  # listed in id order, as before
+        text = ", ".join(f"#{p['id']} ({p['role']})" for p in shown)
+        omitted = len(ranked) - len(shown)
+        if omitted:
+            text += f" and {omitted} others" if shown else f"{omitted} people"
+            view["present"] = shown
+        return head + (text or "nobody") + "." + rest
+
+    def _economy(self, a: dict) -> str:
+        """What any villager knows about making a living: what this role's work pays, and where food is
+        sold. Not in SCHEMA (L11). At engine 5, 4B planned no work on 39% of non-farm plan-days, hungry
+        and broke, because nothing in the prompt said work earns coin."""
+        rate = max(1, a["body"]["strength"] * a["body"]["stamina"] // 1000)
+        hours = max(1, (-(-3000 // rate) * 10 + 30) // 60)  # ticks per unit of work, in whole hours
+        where = WORKPLACE.get(a["role"])
+        if a["role"] == "farmer":
+            s = (f"Working at the {where} yields {self._food_yield(a)} food about every {hours} hours; what you"
+                 f" don't keep you sell at {FARMER_SELL_PRICE} coin each.")
+        elif where is None or a["role"] in ("child", "elder"):
+            s = "You don't work for pay; when you have no food you eat from your family's."
+        else:
+            s = f"Working at the {where} pays {WORK_WAGE} coin about every {hours} hours."
+        return s + f" Food costs {FOOD_PRICE} coin and is sold only at the market."
 
     # ------------------------------------------------------------------ tick
     def run(self, days: int, player_events: dict | None = None):
@@ -541,12 +584,12 @@ class Sim:
                 a["inv"]["food"] += 1
                 self._note(a["id"], f"{t['name']} gave me food")
                 self._note(t["id"], f"gave food to {a['name']}")
-                r = self._rel(a, t["id"])
+                r = self._met(a, t["id"])
                 r["affinity"] = min(1000, r["affinity"] + 50)
                 return self._receipt(a, eid, action, True, "kin gave food", "chance",
                                      {"stream": stream, "index": idx, "roll": roll, "limit": limit})
             self._note(a["id"], f"{t['name']} refused to share food")
-            r = self._rel(a, t["id"])
+            r = self._met(a, t["id"])
             r["affinity"] = max(-1000, r["affinity"] - 50)
             return self._receipt(a, eid, action, False, "kin refused", "chance",
                                  {"stream": stream, "index": idx, "roll": roll, "limit": limit})
@@ -572,7 +615,7 @@ class Sim:
         if success:
             t["last_food_loss_event"] = rid
         if noticed:
-            rel = self._rel(t, a["id"])
+            rel = self._met(t, a["id"])
             rel["affinity"] = max(-1000, rel["affinity"] - 400)
             rel["note"] = "stole from me" if success else "tried to rob me"
             rel["cause"] = rid
@@ -623,7 +666,7 @@ class Sim:
                                  sorted(set(sources)))
                 for x, y in ((a, b), (b, a)):
                     x["needs"]["loneliness"] = _clamp(x["needs"]["loneliness"] - 200)
-                    r = self._rel(x, y["id"])
+                    r = self._met(x, y["id"])
                     r["affinity"] = min(1000, r["affinity"] + 20)
                 for x, y, k in transfers:
                     x["beliefs"][k] = y["beliefs"][k].split(" (heard")[0] + f" (heard from {y['name']})"
