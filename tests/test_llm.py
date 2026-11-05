@@ -78,27 +78,35 @@ def test_schemas_accept_stub_outputs():
 
 
 def test_deliberate_schema_only_takes_targets_the_prompt_lists():
-    """ask_kin names family, steal names someone here, and only buy_food/go_market/wait take null (F4)."""
+    """ask_kin names family, steal names someone here, the other person actions anyone the prompt lists,
+    and only the actions without a person take null (F4). Intent steps name a listed person or nobody."""
     jsonschema = pytest.importorskip("jsonschema")
     from asiimov.bench import collect_prompts
     reqs = [r for r in collect_prompts(agents=30, days=2, seed=3) if r.kind == "deliberate"]
     assert reqs
     for req in reqs:
-        schema, kin = schema_for(req), [k["id"] for k in req.view["kin"]]
-        ok = lambda out: jsonschema.Draft202012Validator(schema).is_valid(out)
-        for action in ("ask_kin", "steal"):
-            assert not ok({"action": action, "target": None, "reason": "x"})
-        for action in ("buy_food", "go_market", "wait"):
-            assert ok({"action": action, "target": None, "reason": "x"})
-            assert not ok({"action": action, "target": 0, "reason": "x"})
+        schema, kin, people = schema_for(req), [k["id"] for k in req.view["kin"]], req.view["people"]
+        ok = lambda out, then=(): jsonschema.Draft202012Validator(schema).is_valid(  # noqa: E731
+            {"reason": "x", "goal": "", "then": list(then), **out})
+        for action in ("ask_kin", "steal", "seek", "give_food", "give_coin", "avoid"):
+            assert not ok({"action": action, "target": None})
+        for action in ("buy_food", "go_market", "work", "rest", "wait"):
+            assert ok({"action": action, "target": None})
+            assert not ok({"action": action, "target": 0})
         unlisted = next(i for i in range(1000) if i not in kin)
-        assert not ok({"action": "ask_kin", "target": unlisted, "reason": "x"})
-        assert all(ok({"action": "ask_kin", "target": k, "reason": "x"}) for k in kin)
+        assert not ok({"action": "ask_kin", "target": unlisted})
+        assert all(ok({"action": "ask_kin", "target": k}) for k in kin)
+        assert not ok({"action": "seek", "target": next(i for i in range(1000) if i not in people)})
         for k in kin:
             assert f"(#{k})" in req.prompt
         for p in req.view["present"]:
             assert f"#{p['id']} (" in req.prompt
-            assert ok({"action": "steal", "target": p["id"], "reason": "x"})
+            assert ok({"action": "steal", "target": p["id"]})
+        for i in people:
+            assert f"#{i})" in req.prompt or f"#{i} (" in req.prompt
+            assert ok({"action": "seek", "target": i}, [{"do": "give_food", "target": i}, {"do": "shop", "target": None}])
+        assert not ok({"action": "wait", "target": None}, [{"do": "rest", "target": None}] * 4)  # at most 3 more
+        assert not ok({"action": "wait", "target": None}, [{"do": "fly", "target": None}])
     assert any(req.view["kin"] for req in reqs) and any(req.view["present"] for req in reqs)
 
 

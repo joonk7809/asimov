@@ -4,7 +4,8 @@ A replay instrument, like the probe's ProbeSim: it replays a recorded log, verif
 reads authorship off the state `Sim._act` decides from. No rule or log changes, so it works on every
 log of this engine. Authors (test 7, plan/variety-scorecard-v2.md):
 
-  deliberate  an active override (a deliberated go_market)                     mind
+  deliberate  an active override: a deliberated one-off step (go_market, seek, work, ...)   mind
+  intent      the current step of an intent the mind set (engine 7)                       mind
   plan        a block of the agent's morning plan covers the hour             mind
   habit       neither: `Sim._habit`, the no-LLM needs-and-traits layer        code
   forced      the wake tick, which the world sets to "home" before any choice  world
@@ -37,7 +38,7 @@ from .minds import ReplayDivergence
 from .probe import ProbeSim, read_log
 from .scorecard import ARMS, RESPONSE_ARMS, labeled_population, load_thresholds
 
-MIND_AUTHORS = ("deliberate", "plan")
+MIND_AUTHORS = ("deliberate", "intent", "plan")
 AUTHORS = MIND_AUTHORS + ("habit", "forced")
 V2_THRESHOLDS = os.path.join(os.path.dirname(__file__), "..", "plan", "variety-thresholds-v2.json")
 
@@ -60,17 +61,19 @@ class AuthorshipSim(ProbeSim):
 
     def _act(self, a):
         tick, hour = self.state["tick"], self._hour()
-        override = bool(a["override"]) and tick < a["override"]["until"]
+        # Precedence, read off state independently of Sim._running: override, intent step, plan, habit.
+        step = (a["override"] if a["override"] else
+                a["intent"]["steps"][a["intent"]["i"]] if a["intent"] else None)
         # What the habit layer picks this tick, by _act's own rule, without touching state.
         habit = self._habit(a) if tick % 6 == 0 or a["habit"] is None else a["habit"]
         block = None
         for b in a["plan"]:  # the last covering block wins, as in _act
             if b["start_h"] <= hour < b["end_h"]:
                 block = b
+        expected = (self._step_activity(a, step)[0] if step else block["activity"] if block else habit)
+        author = ("deliberate" if a["override"] else "intent") if step else "plan" if block else "habit"
         super()._act(a)
-        author = "deliberate" if override else "plan" if block else "habit"
-        expected = a["override"]["activity"] if override else block["activity"] if block else habit
-        if a["activity"] != expected or (not override and a["habit"] != habit):
+        if a["activity"] != expected or (not step and a["habit"] != habit):
             raise AssertionError(f"authorship disagrees with _act at tick {tick}, agent {a['id']}")
         for act in (a["activity"], habit):
             self.effect.setdefault((a["id"], act), (self._place(a, act), act == "work"))

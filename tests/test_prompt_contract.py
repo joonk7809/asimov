@@ -1,8 +1,10 @@
 """Engine 6 prompt contract (T14a): economic facts in the situation, relationships clipped by whole
 lines and ranked, crowds cut to fit. The reflection voice ask (c) was dropped: it failed steering's
 bars (plan/t14a-signoff.md, results/raw/t14a-ab-4b-c2)."""
+import re
+
 from asiimov.bench import collect_prompts
-from asiimov.memory import SCHEMA, SECTION_BUDGETS, assemble_prompt, rank_relationships
+from asiimov.memory import SCHEMA, SECTION_BUDGETS, assemble_prompt, rank_relationships, situation_budget
 from asiimov.minds import StubMind
 from asiimov.sim import FOOD_PRICE, WORK_WAGE, Sim
 
@@ -16,7 +18,8 @@ def test_every_prompt_states_what_work_pays_and_where_food_is_sold():
     assert {r.kind for r in reqs} == {"plan", "deliberate", "reflect"}
     for r in reqs:
         now = r.prompt.split("# Now (", 1)[1]
-        assert f"Food costs {FOOD_PRICE} coin and is sold only at the market." in now
+        assert f"Food costs {FOOD_PRICE} coin and is sold only at the market, which is open at all hours." in now
+        assert not re.search(r"\bclosed\b|opening hours|\bcloses\b", now)  # no prompt implies market hours (T15)
         assert ("pays" in now or "yields" in now or "don't work for pay" in now), now
     assert "coin" not in SCHEMA.split("For kind=")[0]  # the facts are not in the shared SCHEMA (L11)
 
@@ -80,7 +83,7 @@ def test_a_crowd_is_cut_to_fit_and_the_schema_offers_only_the_people_shown():
         req = sim.pending[a["id"]][0]
         now = req.prompt.split(f"# Now ({kind})\n", 1)[1]
         assert now.startswith("Day 0, 10:00.") and "others." in now  # the head survives, the cut is said
-        assert len(now) + len(f"# Now ({kind})\n") <= SECTION_BUDGETS["situation"] * 4
+        assert len(now) + len(f"# Now ({kind})\n") <= situation_budget(kind) * 4
         shown = {p["id"] for p in req.view["present"]}
         assert shown and all(f"#{i} (" in now for i in shown) and 119 in shown and set(kin) <= shown
         listed = now.split("Here: ", 1)[1].split(" and ", 1)[0]
@@ -89,3 +92,6 @@ def test_a_crowd_is_cut_to_fit_and_the_schema_offers_only_the_people_shown():
             steal = next(b for b in schema_for(req)["anyOf"]
                          if b["properties"]["action"]["enum"] == ["steal"])
             assert set(steal["properties"]["target"]["enum"]) == shown
+            seek = next(b for b in schema_for(req)["anyOf"] if b["properties"]["action"]["enum"] == ["seek"])
+            assert set(seek["properties"]["target"]["enum"]) == set(req.view["people"])
+            assert shown | set(kin) | {119} <= set(req.view["people"])

@@ -62,11 +62,12 @@ def test_every_event_has_provenance():
         assert all(p in seen for p in e.parents), f"event {e.id} cites a later or missing parent"
         if e.origin == "mind":
             assert {"model", "prompt_hash", "prompt_tokens", "sampling", "raw_output"} <= set(e.mind)
-        if e.kind == "receipt":
-            assert s.events[e.parents[0]].origin == "mind"
+        if e.kind == "receipt":  # a deliberation or plan, or an intent a deliberation set
+            p = s.events[e.parents[0]]
+            assert p.origin == "mind" or (p.kind == "intent_set" and s.events[p.parents[0]].origin == "mind")
         seen.add(e.id)
-    deliberations = sum(1 for e in s.events if e.kind == "mind_deliberate")
-    assert deliberations == sum(1 for e in s.events if e.kind == "receipt")
+    deliberations = {e.id for e in s.events if e.kind == "mind_deliberate"}
+    assert deliberations == {e.parents[0] for e in s.events if e.kind == "receipt"} & deliberations  # each has one
 
 
 def test_individual_rhythms_are_stable_within_and_different_between_agents():
@@ -157,7 +158,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "3": "7b0e876ed43e135033a9b9b6e819c176e70c2e4aeb3b3b14f9b2f8d3ad71088d",
           "4": "87be8cccf05d032f2dc428e615b7f45ad3981da0c735ff9edb2ce74cb48d3c32",
           "5": "49abfd07071dbe24572a47b4ce6716dbbee71d069b82cd3f6353679e04a20350",
-          "6": "c7dfb5029e3ea1dbff76b179761d367530fc7e3cbd54d3508c04e76b1344ced8"}
+          "6": "c7dfb5029e3ea1dbff76b179761d367530fc7e3cbd54d3508c04e76b1344ced8",
+          "7": "0b3a32589883725f55439d837727557df5a288eebba3234aaa59f1f2629d1fb9"}
 
 
 def test_log_changes_bump_the_engine_version():

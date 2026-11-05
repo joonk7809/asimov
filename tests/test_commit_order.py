@@ -106,7 +106,8 @@ def _two_hungry_at_market(order, seed=1):
         a["inv"]["food"] = 0
     for aid in (2, 4):
         a = sim.state["agents"][aid]
-        a.update(place="market", activity="shop", override={"activity": "shop", "until": 10**6, "event": 0})
+        # Already shopping at the market, so no step or arrival buys in the rules phase: the commit decides.
+        a.update(place="market", activity="shop", plan=[{"activity": "shop", "start_h": 0, "end_h": 24}])
         a["inv"]["coin"] = 50
         a["needs"]["hunger"] = 990
     return sim
