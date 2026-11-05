@@ -61,7 +61,7 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "food_missing": "some of your food went missing", "fire": "a fire burned your family's food",
     "gift": "{who} gave you {detail}", "refused": "{who} refused to share food with you",
     "failed": "you could not {detail}", "person": "{who}, whom you {detail}, is here",
-    "step_done": "you finished a step of what you set out to do: {detail}",
+    "step_done": "you finished a step of what you set out to do ({detail})",
     "intent_done": "you did what you set out to do: {detail}",
     "blocked": "you had to give up on what you set out to do: {detail}",
 }
@@ -70,7 +70,8 @@ DELIBERATE_ASK = (" Your action happens now; target is a person's #id or null. g
                   " and buys what you need. seek finds a person and talks with them; give_food or give_coin hands"
                   f" them 1 food or {GIFT_COIN} coin; avoid keeps you away from them; work, socialize, home, rest and"
                   " explore last a few hours. To pursue something over hours or days, set goal and up to 3 more"
-                  " steps in then (these words, or shop), done in order; for a one-off, leave goal empty and then [].")
+                  " steps in then (these words, or shop), done in order; for a one-off, leave goal empty and then []."
+                  " A new goal replaces the intention you have now; to keep it, leave goal empty.")
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
 ENGINE_VERSION = "7"
@@ -563,7 +564,9 @@ class Sim:
             a["intent"] = None
             return self._occasion(a, "intent_done", 350 + c // 4, detail=it["goal"])
         it["left"] = STEP_TICKS.get(it["steps"][it["i"]]["do"], DEFAULT_STEP_TICKS)
-        self._occasion(a, "step_done", 200 + c // 4, detail=it["goal"])
+        nxt = it["steps"][it["i"]]
+        nxt = nxt["do"].replace("_", " ") + (f" {self._who(nxt['target'])}" if nxt["target"] is not None else "")
+        self._occasion(a, "step_done", 200 + c // 4, detail=f"{it['goal']}; next: {nxt}")
 
     def _place(self, a: dict, activity: str) -> str:
         return WORKPLACE[a["role"]] if activity == "work" else ACTIVITY_PLACE.get(activity, a["home"])

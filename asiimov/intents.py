@@ -43,7 +43,7 @@ def summarize(events: list) -> dict:
         other = None
         if e.kind == "meet":
             other, k = e.data["with"], "seek"
-        elif e.kind == "receipt" and e.data["action"] in ("give_food", "give_coin") and e.data["ok"]:
+        elif e.kind == "receipt" and e.data["action"] in ("give_food", "give_coin") and e.data["why"] == "gave":
             other, k = e.data["to"], e.data["action"]
         elif e.kind == "receipt" and e.data["action"] in ("ask_kin", "steal") and "roll" in e.data:
             other, k = e.data.get("victim", e.data.get("to")), e.data["action"]
