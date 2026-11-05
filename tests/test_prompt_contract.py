@@ -1,7 +1,8 @@
 """Engine 6 prompt contract (T14a): economic facts in the situation, relationships clipped by whole
-lines and ranked, the reflection summary asked in the agent's own voice."""
+lines and ranked, crowds cut to fit. The reflection voice ask (c) was dropped: it failed steering's
+bars (plan/t14a-signoff.md, results/raw/t14a-ab-4b-c2)."""
 from asiimov.bench import collect_prompts
-from asiimov.memory import REFLECT_VOICE, SCHEMA, SECTION_BUDGETS, assemble_prompt, rank_relationships
+from asiimov.memory import SCHEMA, SECTION_BUDGETS, assemble_prompt, rank_relationships
 from asiimov.minds import StubMind
 from asiimov.sim import FOOD_PRICE, WORK_WAGE, Sim
 
@@ -57,10 +58,6 @@ def test_every_warm_relationship_carries_its_last_contact():
     rels = [r for a in sim.state["agents"] for r in a["relationships"].values()]
     assert rels and all(r.get("last", -1) >= 0 for r in rels if r["affinity"] > 0)
 
-
-def test_the_summary_voice_ask_is_only_in_reflect_prompts():
-    reqs = collect_prompts(agents=20, days=2, seed=3)
-    assert all((REFLECT_VOICE in r.prompt) == (r.kind == "reflect") for r in reqs)
 
 
 def test_a_crowd_is_cut_to_fit_and_the_schema_offers_only_the_people_shown():

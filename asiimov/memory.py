@@ -29,11 +29,6 @@ REFLECT_ASK = (" Your day is over. For core, write at most 2 things that happene
                " want to remember, each saying who did what and where, or [] if nothing stood out."
                " Not a value or a trait. Use only what is written under Today and Earlier; add no details"
                " that are not there.")
-# Engine 6 (P3): summary plus core was no more varied with the soul than without it (0.86-1.01 of
-# no_text's similarity at engine 5), so the summary is asked for in the agent's own voice. It must not
-# name traits or values: "what matters to you" made 61% of summaries quote a top value (steering, t14a-signoff).
-REFLECT_VOICE = (" For summary, write one or two sentences in your own voice about how today felt to you;"
-                 " do not list what you did, and do not name your traits or values.")
 
 
 def is_bare_value(text: str) -> bool:

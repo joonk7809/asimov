@@ -17,7 +17,7 @@ import json
 from collections import defaultdict
 
 from .events import Event, canonical
-from .memory import (REFLECT_ASK, REFLECT_VOICE, SECTION_BUDGETS, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
+from .memory import (REFLECT_ASK, SECTION_BUDGETS, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
                      render_soul, tokens)
 from .minds import MindRequest, ReplayDivergence, dispatch
 from .params import generate_population
@@ -250,7 +250,7 @@ class Sim:
                      ' like {"plan":[{"activity":A1,"start_h":WAKE,"end_h":H1},{"activity":A2,"start_h":H1,'
                      '"end_h":H2},{"activity":A3,"start_h":H2,"end_h":BED}]}.')
         elif kind == "reflect":
-            rest += REFLECT_ASK + REFLECT_VOICE
+            rest += REFLECT_ASK
         head = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
                 f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
                 f"Here: ")
