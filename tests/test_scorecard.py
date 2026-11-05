@@ -293,7 +293,7 @@ def test_famine_caps_the_village_farm_output_per_day_and_stays_hungry():
 
     class Diligent(sc.ArmSim):  # farmers who worked every hour would still be held to the cap
         def _food_yield(self, a):
-            return 50 * super()._food_yield(a)
+            return 7 * super()._food_yield(a)
 
     proto = dict(TH["protocol"], days=5)
     ev = sc.run_arm("famine", StubMind(), proto)
@@ -314,6 +314,21 @@ def test_famine_caps_the_village_farm_output_per_day_and_stays_hungry():
         if e.kind == "produce" and "food" in e.data:
             big[e.tick // TICKS_PER_DAY] += e.data["food"]
     assert big[2] == big[3] == sc.FAMINE_DAILY_FOOD and big[1] > sc.FAMINE_DAILY_FOOD
+
+
+def test_a_famine_farmer_is_told_when_the_day_is_spent():
+    """The prompt stays true (T14a): once today's village cap is gone, a farmer's economy line says so."""
+    proto = dict(TH["protocol"], days=3)
+    pop = sc.labeled_population(proto["seed"], proto["agents"])
+    sim = sc.ArmSim(proto["seed"], proto["agents"], StubMind(), pop, "famine", {})
+    sim.run(2)
+    farmer = next(a for a in sim.state["agents"] if a["role"] == "farmer")
+    assert "yields 1 food" in sim._economy(farmer)
+    sim.state["famine_made"] = {"day": 2, "food": sc.FAMINE_DAILY_FOOD}
+    assert sim._economy(farmer).startswith("The field will give no more food today.")
+    assert sim._harvest(farmer) == 0 and sim.state["famine_made"]["food"] == sc.FAMINE_DAILY_FOOD
+    sim.state["tick"] += TICKS_PER_DAY  # a new day refills the yield
+    assert "yields 1 food" in sim._economy(farmer)
 
 
 def test_a_famine_log_from_before_the_cap_refuses_to_replay_by_name():

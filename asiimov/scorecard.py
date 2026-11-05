@@ -176,20 +176,23 @@ class ArmSim(Sim):
         return parse_arm(self.arm)[1]
 
     def _food_yield(self, a):
+        """Per unit of farm work, with no side effects (the prompt reads it). In a famine it is what
+        is left of today's village cap, so the prompt stops promising food once the cap is gone."""
         if self.base == "famine" and self.state["tick"] >= FAMINE_FROM_DAY * TICKS_PER_DAY:
-            return FAMINE_YIELD
+            made = self.state.get("famine_made", {})
+            today = made.get("food", 0) if made.get("day") == self.state["tick"] // TICKS_PER_DAY else 0
+            return min(FAMINE_YIELD, max(0, FAMINE_DAILY_FOOD - today))
         return super()._food_yield(a)
 
     def _harvest(self, a):
-        food = super()._harvest(a)
-        if self.base != "famine" or self.state["tick"] < FAMINE_FROM_DAY * TICKS_PER_DAY:
-            return food
-        day = self.state["tick"] // TICKS_PER_DAY
-        made = self.state.setdefault("famine_made", {"day": day, "food": 0})  # world state: hashed, and forks copy it
-        if made["day"] != day:
-            made["day"], made["food"] = day, 0
-        food = min(food, FAMINE_DAILY_FOOD - made["food"])
-        made["food"] += food
+        food = super()._harvest(a)  # _food_yield, already within today's cap
+        if self.base == "famine" and self.state["tick"] >= FAMINE_FROM_DAY * TICKS_PER_DAY:
+            day = self.state["tick"] // TICKS_PER_DAY
+            made = self.state.setdefault("famine_made", {"day": day, "food": 0})  # world state: hashed, forks copy it
+            if made["day"] != day:
+                made["day"], made["food"] = day, 0
+            food = min(food, FAMINE_DAILY_FOOD - made["food"])  # holds even if a subclass raises the yield
+            made["food"] += food
         return food
 
     def _emit(self, kind, origin, actor, data, parents=(), mind=None):

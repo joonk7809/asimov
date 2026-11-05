@@ -281,7 +281,9 @@ class Sim:
         rate = max(1, a["body"]["strength"] * a["body"]["stamina"] // 1000)
         hours = max(1, (-(-3000 // rate) * 10 + 30) // 60)  # ticks per unit of work, in whole hours
         where = WORKPLACE.get(a["role"])
-        if a["role"] == "farmer":
+        if a["role"] == "farmer" and self._food_yield(a) == 0:  # only a capped famine arm gets here
+            s = f"The {where} will give no more food today."
+        elif a["role"] == "farmer":
             s = (f"Working at the {where} yields {self._food_yield(a)} food about every {hours} hours; what you"
                  f" don't keep you sell at {FARMER_SELL_PRICE} coin each.")
         elif where is None or a["role"] in ("child", "elder"):
