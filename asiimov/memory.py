@@ -12,12 +12,14 @@ from .params import VALUES
 SECTION_BUDGETS = {  # approximate tokens (chars / 4)
     "schema": 300, "soul": 400, "core": 300, "goals": 200, "relationships": 150,
     "beliefs": 150, "recent": 400, "episodes": 300, "situation": 300,
+    # A deliberation's situation also says why the mind was asked and what its actions do (engine 7).
+    "situation_deliberate": 450,
 }
 
 SCHEMA = """# How you act
 You are one person living in a village. Reply with JSON only.
-For kind=plan: {"plan":[{"activity":"work|socialize|home|rest|explore","start_h":H,"end_h":H}]}
-For kind=deliberate: {"action":"buy_food|go_market|ask_kin|steal|wait","target":ID_or_null,"reason":"..."}
+For kind=plan: {"plan":[{"activity":"work|socialize|home|rest|explore|shop","start_h":H,"end_h":H}]}
+For kind=deliberate: {"action":"buy_food|go_market|ask_kin|steal|give_food|give_coin|seek|avoid|work|socialize|home|rest|explore|wait","target":ID_or_null,"reason":"...","goal":"..." or "","then":[{"do":"...","target":ID_or_null}]}
 For kind=reflect: {"core":["..."] or [], "summary":"..."}
 You only know what is written below. Claims count only if the world confirms them."""
 
@@ -77,16 +79,23 @@ def _clip(text: str, budget_tokens: int) -> str:
     return text if len(text) <= limit else text[-limit:]
 
 
+def _fit_count(header: str, lines: list[str], budget_tokens: int) -> int:
+    size = len(header)
+    for n, line in enumerate(lines):
+        if size + 1 + len(line) > budget_tokens * 4:
+            return n
+        size += 1 + len(line)
+    return len(lines)
+
+
 def _fit_lines(header: str, lines: list[str], budget_tokens: int) -> str:
     """The header and as many whole lines, in the given order, as fit the budget. Clipping the tail of
     the text instead cut the header and every early line mid-word (71% of 4B probe prompts at engine 5)."""
-    out, size = [header], len(header)
-    for line in lines:
-        if size + 1 + len(line) > budget_tokens * 4:
-            break
-        out.append(line)
-        size += 1 + len(line)
-    return "\n".join(out)
+    return "\n".join([header] + lines[:_fit_count(header, lines, budget_tokens)])
+
+
+def situation_budget(kind: str) -> int:
+    return SECTION_BUDGETS.get(f"situation_{kind}", SECTION_BUDGETS["situation"])
 
 
 def rank_relationships(agent: dict) -> list[tuple[str, dict]]:
@@ -119,19 +128,40 @@ def render_soul(agent: dict) -> str:
     return "\n".join(lines)
 
 
+def _relationship_lines(agent: dict, state: dict) -> list[tuple[int, str]]:
+    names = {a["id"]: a["name"] for a in state["agents"]}
+    return [(int(other), f"- {names[int(other)]} (#{other}): affinity {rel['affinity']}, {rel.get('note', '')}".rstrip(", "))
+            for other, rel in rank_relationships(agent)]
+
+
+def shown_relationships(agent: dict, state: dict) -> list[int]:
+    """The ids the prompt's "People I know" section shows (the lines that fit its budget)."""
+    rel = _relationship_lines(agent, state)
+    return [i for i, _ in rel[:_fit_count("# People I know", [line for _, line in rel], SECTION_BUDGETS["relationships"])]]
+
+
+def render_intent(agent: dict, state: dict) -> str:
+    """The agent's live intent: its goal, the step under way and the steps still to come. The reason
+    the mind gave is not shown back (L12)."""
+    it = agent.get("intent")
+    if not it:
+        return ""
+    names = {a["id"]: a["name"] for a in state["agents"]}
+    desc = [f"{s['do'].replace('_', ' ')}" + (f" {names[s['target']]} (#{s['target']})" if s["target"] is not None else "")
+            for s in it["steps"][it["i"]:]]
+    return "\n\n# My intentions\n" + f"- {it['goal']}: now {desc[0]}" + (f"; then {', '.join(desc[1:])}" if desc[1:] else "")
+
+
 def render_files(agent: dict, state: dict) -> dict[str, str]:
     """Render the agent's markdown map from state."""
-    names = {a["id"]: a["name"] for a in state["agents"]}
-    rel_lines = [
-        f"- {names[int(other)]} (#{other}): affinity {rel['affinity']}, {rel.get('note', '')}".rstrip(", ")
-        for other, rel in rank_relationships(agent)
-    ]
+    rel_lines = [line for _, line in _relationship_lines(agent, state)]
     belief_lines = [f"- {k}: {v}" for k, v in sorted(agent["beliefs"].items())]
     return {
         "soul.md": agent["soul"],
         "core.md": "# Core memories\n" + "\n".join(f"- {c}" for c in agent["core"]),
         "goals.md": "# Today's plan\n" + "\n".join(
-            f"- {b['activity']} {b['start_h']:02d}:00-{b['end_h']:02d}:00" for b in agent["plan"]),
+            f"- {b['activity']} {b['start_h']:02d}:00-{b['end_h']:02d}:00" for b in agent["plan"])
+            + render_intent(agent, state),
         "relationships.md": "# People I know\n" + "\n".join(rel_lines),
         "beliefs.md": "# What I believe\n" + "\n".join(belief_lines),
         "recent.md": "# Today\n" + "\n".join(f"- {r}" for r in agent["recent"]),
@@ -160,7 +190,8 @@ def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=No
     }
     if edit is not None:
         sections = edit(dict(sections))
-    parts = [_clip(text, SECTION_BUDGETS[name]) for name, text in sections.items()]
+    budgets = {**SECTION_BUDGETS, "situation": situation_budget(kind)}
+    parts = [_clip(text, budgets[name]) for name, text in sections.items()]
     prompt = "\n\n".join(parts)
     counts = {name: tokens(p) for name, p in zip(sections, parts)}
     return prompt, counts

@@ -12,10 +12,15 @@ import urllib.error
 import urllib.request
 
 from .minds import MindReply, MindRequest
+from .sim import ACTIVITIES as _ACTIVITIES, STEP_DOS
 
-ACTIVITIES = ["work", "socialize", "home", "rest", "explore"]
+ACTIVITIES = list(_ACTIVITIES)
 
-NO_TARGET = ["buy_food", "go_market", "wait"]
+NO_TARGET = ["buy_food", "go_market", "work", "socialize", "home", "rest", "explore", "wait"]
+# Person actions and the ids each may name: family for ask_kin, people here for steal, and anyone the
+# prompt lists (family, here, People I know) for the rest.
+PERSON_ACTIONS = (("ask_kin", "kin"), ("steal", "present"), ("give_food", "people"), ("give_coin", "people"),
+                  ("seek", "people"), ("avoid", "people"))
 
 # No maxLength on strings: vLLM 0.11 structured outputs (xgrammar) decode ~15x slower with it
 # (measured on Qwen3-4B, A6000: reflect 18.5 s vs 1.7 s). max_tokens bounds the reply and the
@@ -41,23 +46,34 @@ SCHEMAS = {
 }
 
 
-def _deliberate_branch(actions: list[str], target: dict) -> dict:
+def _deliberate_branch(actions: list[str], target: dict, then: dict) -> dict:
     return {"type": "object",
             "properties": {"action": {"type": "string", "enum": actions}, "target": target,
-                           "reason": {"type": "string"}},
-            "required": ["action", "target", "reason"], "additionalProperties": False}
+                           "reason": {"type": "string"}, "goal": {"type": "string"}, "then": then},
+            "required": ["action", "target", "reason", "goal", "then"], "additionalProperties": False}
+
+
+def _ids(view: dict, key: str) -> list[int]:
+    return sorted(view.get(key, [])) if key == "people" else sorted(x["id"] for x in view[key])
 
 
 def schema_for(req: MindRequest) -> dict:
     """The reply schema for one request. A deliberation's target must be an id its prompt lists:
-    family for ask_kin, people here for steal. An action with nobody to aim at is left out."""
+    family for ask_kin, people here for steal, anyone listed for the other person actions. An action
+    with nobody to aim at is left out. Intent steps may name anyone listed, or nobody; the world drops
+    a person step without a target."""
     if req.kind != "deliberate":
         return SCHEMAS[req.kind]
-    branches = [_deliberate_branch(NO_TARGET, {"type": "null"})]
-    for action, ids in (("ask_kin", [k["id"] for k in req.view["kin"]]),
-                        ("steal", [p["id"] for p in req.view["present"]])):
+    people = _ids(req.view, "people")
+    step_target = {"anyOf": [{"type": "null"}, {"type": "integer", "enum": people}]} if people else {"type": "null"}
+    then = {"type": "array", "maxItems": 3, "items": {
+        "type": "object", "properties": {"do": {"type": "string", "enum": list(STEP_DOS)}, "target": step_target},
+        "required": ["do", "target"], "additionalProperties": False}}
+    branches = [_deliberate_branch(NO_TARGET, {"type": "null"}, then)]
+    for action, key in PERSON_ACTIONS:
+        ids = _ids(req.view, key)
         if ids:
-            branches.append(_deliberate_branch([action], {"type": "integer", "enum": sorted(ids)}))
+            branches.append(_deliberate_branch([action], {"type": "integer", "enum": ids}, then))
     return {"anyOf": branches}
 
 

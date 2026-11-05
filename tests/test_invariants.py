@@ -24,7 +24,7 @@ from asiimov.events import ORIGINS, Event
 from asiimov.minds import MindReply, NoisyMind, ReplayDivergence, StubMind
 from asiimov.replay import replay
 from asiimov.rng import Rng
-from asiimov.sim import FARMER_SELL_PRICE, FOOD_PRICE, TICKS_PER_DAY, Sim
+from asiimov.sim import FARMER_SELL_PRICE, FOOD_PRICE, PERSON_STEPS, STEP_DOS, TICKS_PER_DAY, Sim
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE = ["rng.py", "params.py", "sim.py", "memory.py", "events.py", "replay.py"]
@@ -60,6 +60,15 @@ HOSTILE = [
     '{"core":"x"}', '{"core":[1,null,"  ","%s"]}', '{"core":["%s","%s","%s"]}', '[' * 20000, '[]', 'null', '7',
     '', 'I will steal the bread.', '```json\n{"action":"wait"}\n```', '{"action":"buy_food"}', '{"action":"go_market"}',
     '{"action":"wait","target":%d}', '{"action":"buy_food","action":"steal","target":%d}',
+    # engine 7: intents, person steps and gifts
+    '{"action":"seek","target":%d,"goal":"%s","then":[{"do":"give_coin","target":%d},{"do":"steal","target":%d},'
+    '{"do":"ask_kin","target":%d}]}',
+    '{"action":"give_food","target":%d,"goal":"g","then":"x"}', '{"action":"give_coin","target":%d,"goal":"","then":[]}',
+    '{"action":"avoid","target":%d,"goal":7,"then":[1,null,{"do":"fly"},{"do":"seek","target":true}]}',
+    '{"action":"work","target":null,"goal":"%s","then":[{"do":"shop"},{"do":"give_food","target":%d},'
+    '{"do":"seek","target":%d},{"do":"avoid","target":%d},{"do":"rest"}]}',
+    '{"action":"wait","target":null,"goal":"g","then":[{"do":"steal","target":%d},{"do":"ask_kin","target":%d}]}',
+    '{"plan":[{"activity":"shop","start_h":0,"end_h":24}]}',
 ]
 
 
@@ -113,6 +122,17 @@ def check_state(sim: Sim):
         for b in a["plan"]:
             assert type(b["start_h"]) is int and type(b["end_h"]) is int and 0 <= b["start_h"] < b["end_h"] <= 24
         assert len(a["core"]) <= 6 and all(isinstance(c, str) and len(c) <= 200 for c in a["core"])
+        steps = (a["intent"]["steps"] if a["intent"] else []) + ([a["override"]] if a["override"] else [])
+        if a["intent"]:
+            assert 1 <= len(a["intent"]["steps"]) <= 4 and 0 <= a["intent"]["i"] < len(a["intent"]["steps"])
+            assert isinstance(a["intent"]["goal"], str) and 0 < len(a["intent"]["goal"]) <= 120
+        for s in steps:
+            assert s["do"] in STEP_DOS
+            if s["do"] in PERSON_STEPS:
+                assert type(s["target"]) is int and 0 <= s["target"] < len(st_["agents"]) and s["target"] != a["id"]
+            else:
+                assert s["target"] is None
+        assert a["asleep"] or not a["override"] or a["override"]["left"] > 0
         assert a["traits"] == st_["agents"][a["id"]]["traits"]
 
 

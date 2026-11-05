@@ -51,12 +51,39 @@ class StubMind:
             start = hour + 1 + (1 if t["conscientiousness"] < 300 else 0)
             end = min(start + hours, 21)
             blocks = [{"activity": "work", "start_h": start, "end_h": end}]
-            if t["extraversion"] > 550:
+            if v["food"] < 2 and v["coin"] >= 2 * v["food_price"] and end < 23:
+                blocks.append({"activity": "shop", "start_h": end, "end_h": end + 1})  # plannable shopping
+                end += 1
+            if t["extraversion"] > 550 and end < 23:
                 blocks.append({"activity": "socialize", "start_h": end,
                                "end_h": min(end + 1 + t["extraversion"] // 400, 23)})
         return {"plan": blocks}
 
     def _deliberate(self, v: dict) -> dict:
+        out = self._intent(v)
+        if out is None and (v.get("occasion") or {}).get("why", "hungry") not in ("hungry", "hungry_coin"):
+            out = {"action": "wait", "target": None, "reason": "nothing to do about it"}
+        return {"goal": "", "then": [], **(out or self._food(v))}
+
+    def _intent(self, v: dict) -> dict | None:
+        """Occasions other than hunger: a liked person is sought out, a disliked one or a thief avoided,
+        a giver thanked in kind; a conscientious agent who finished or lost an intent sets a working one."""
+        t, occ = v["traits"], v.get("occasion") or {}
+        why, who = occ.get("why"), occ.get("who")
+        if why == "person" and occ.get("detail") in ("like", "are fond of", "care about") and t["extraversion"] > 400:
+            return {"action": "seek", "target": who, "reason": "good to see a friend", "goal": "spend time with a friend",
+                    "then": [{"do": "socialize", "target": None}]}
+        if (why in ("robbed", "rob_tried") or occ.get("detail") in ("dislike", "can't stand")) and who is not None:
+            return {"action": "avoid", "target": who, "reason": "keep clear", "goal": "keep clear of trouble",
+                    "then": [{"do": "work", "target": None}]}
+        if why == "gift" and v["food"] > 1:
+            return {"action": "give_food", "target": who, "reason": "return the favour", "goal": "", "then": []}
+        if why in ("intent_done", "blocked", "fire", "food_missing") and t["conscientiousness"] > 500:
+            return {"action": "work", "target": None, "reason": "back to it", "goal": "earn for tomorrow",
+                    "then": [{"do": "shop", "target": None}, {"do": "rest", "target": None}]}
+        return None
+
+    def _food(self, v: dict) -> dict:
         t = v["traits"]
         if v["coin"] >= v["food_price"] and v["at_market"] and v.get("market_food", 0) > 0:
             return {"action": "buy_food", "target": None, "reason": "hungry, have coin"}
