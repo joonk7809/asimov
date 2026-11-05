@@ -430,7 +430,7 @@ class Sim:
             if a["work_progress"] >= 3000:
                 a["work_progress"] -= 3000
                 if a["role"] == "farmer":
-                    food = self._food_yield(a)
+                    food = self._harvest(a)
                     if food:
                         a["inv"]["food"] += food
                         self._emit("produce", "rule", a["id"], {"food": food}, [a["plan_event"]])
@@ -443,6 +443,11 @@ class Sim:
 
     def _place(self, a: dict, activity: str) -> str:
         return WORKPLACE[a["role"]] if activity == "work" else ACTIVITY_PLACE.get(activity, a["home"])
+
+    def _harvest(self, a: dict) -> int:
+        """Food actually made by one completed unit of farm work. A hook so an arm can cap the day's
+        total; the prompt reads the per-unit _food_yield, which has no side effects."""
+        return self._food_yield(a)
 
     def _food_yield(self, a: dict) -> int:
         """Food from one completed unit of farm work. A hook so experiment arms can change it."""

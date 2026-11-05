@@ -283,3 +283,49 @@ def test_famine_spoils_the_market_once_at_its_start():
     assert len(blights) == 1 and blights[0].tick == sc.FAMINE_FROM_DAY * TICKS_PER_DAY
     assert blights[0].data["market_food_lost"] > 0
     assert not any(e.kind == "blight" for e in sc.run_arm("full", StubMind(), dict(PROTO, days=3)))
+
+
+def test_famine_caps_the_village_farm_output_per_day_and_stays_hungry():
+    """T1k acceptance at $0: whatever hours farmers work, a famine day makes at most FAMINE_DAILY_FOOD,
+    and the stub's 100-agent famine averages under 2.0 meals per agent-day, under 1.5 from day 2."""
+    from collections import Counter
+    from asiimov.diagnostics import food
+
+    class Diligent(sc.ArmSim):  # farmers who worked every hour would still be held to the cap
+        def _food_yield(self, a):
+            return 50 * super()._food_yield(a)
+
+    proto = dict(TH["protocol"], days=5)
+    ev = sc.run_arm("famine", StubMind(), proto)
+    made = Counter()
+    for e in ev:
+        if e.kind == "produce" and "food" in e.data:
+            made[e.tick // TICKS_PER_DAY] += e.data["food"]
+    assert all(made[d] <= sc.FAMINE_DAILY_FOOD for d in range(sc.FAMINE_FROM_DAY, 5))
+    by_day = food(ev)["food_by_day"]
+    n = proto["agents"]
+    assert sum(d["eaten"] for d in by_day) / (n * len(by_day)) < 2.0
+    late = by_day[sc.FAMINE_FROM_DAY:]
+    assert sum(d["eaten"] for d in late) / (n * len(late)) < 1.5
+    sim = Diligent(1, 30, StubMind(), sc.labeled_population(1, 30), "famine", {})
+    sim.run(4)
+    big = Counter()
+    for e in sim.events:
+        if e.kind == "produce" and "food" in e.data:
+            big[e.tick // TICKS_PER_DAY] += e.data["food"]
+    assert big[2] == big[3] == sc.FAMINE_DAILY_FOOD and big[1] > sc.FAMINE_DAILY_FOOD
+
+
+def test_a_famine_log_from_before_the_cap_refuses_to_replay_by_name():
+    from asiimov.fork import build_sim
+    from asiimov.minds import ReplayDivergence
+    from asiimov.probe import ProbeSim
+    ev = sc.run_arm("famine", StubMind(), dict(PROTO, days=1))
+    assert ev[0].data["famine"] == sc.FAMINE_VERSION
+    assert "famine" not in sc.run_arm("full", StubMind(), dict(PROTO, days=1))[0].data  # other arms unchanged
+    old = [type(ev[0])(**{**ev[0].__dict__, "data": {k: v for k, v in ev[0].data.items() if k != "famine"}})] + ev[1:]
+    with pytest.raises(ReplayDivergence, match="famine version 1"):
+        build_sim(old, StubMind(), "famine")
+    with pytest.raises(ReplayDivergence, match="famine version 1"):
+        ProbeSim(old, "famine", set())
+    build_sim(ev, StubMind(), "famine")  # the current version builds
