@@ -248,3 +248,24 @@ def test_a_null_twin_of_an_engine_7_log_is_byte_identical():
     twin, mind = run_twin(sim.events, StubMind())
     assert [e.to_json() for e in twin.events] == [e.to_json() for e in sim.events]
     assert mind.counts.get("live", 0) == 0
+
+
+def test_a_visit_is_scored_by_where_the_agent_actually_went():
+    """PR #19 review: the effective-share memo keyed places by activity label, so every visit counted as
+    the agent's own home. Now each tick is scored from the place the agent is actually at."""
+    from asiimov.params import generate_population
+    pop = generate_population(4, 40)
+    for p in pop["agents"]:
+        p["cognition"]["deliberation_threshold"] = 0
+    def answer(req):
+        who = req.view["people"][-1] if req.view["people"] else None
+        return {"action": "seek", "target": who, "goal": "g", "then": []} if who is not None else None
+    sim = Sim(4, 40, Scripted(answer), genesis=pop)
+    sim.run(2)
+    sim.finish()
+    au_sim = au.replay_authorship(sim.events)
+    homes = {a["id"]: a["home"] for a in sim.state["agents"]}
+    visits = [(t, x) for t, x, author, act, _ in au_sim.records if act == "visit"]
+    away = [k for k in visits if au_sim.effect[k][0][0] != homes[k[1]]]
+    assert away, "some visits must leave home"
+    assert all(au_sim.effect[k][0] != au_sim.effect[k][1] for k in away if au_sim.effect[k][1][0] == homes[k[1]])

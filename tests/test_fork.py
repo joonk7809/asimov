@@ -213,14 +213,14 @@ def test_two_records_for_one_agent_tick_are_refused():
 
 def test_stub_twins_are_full_reruns(monkeypatch):
     # StubMind reads who carries food from its view, which the prompt doesn't show. Served from the
-    # record, its twin keeps an old answer where a full rerun changes it (seed 6, family 3, yield 1 at
-    # engine 7; family 9 at engine 6), so stub controls run with serve=False.
+    # record, its twin keeps an old answer where a full rerun changes it (seed 6, family 11, yield 1 at
+    # engine 8; 3 at engine 7, 9 at engine 6), so stub controls run with serve=False.
     monkeypatch.setattr(sim_mod, "FARM_YIELD", 1)
     base = Sim(6, 50, StubMind()); base.run(4); base.finish()
-    truth = Sim(6, 50, StubMind()); truth.run(4, fire(3)); truth.finish()
-    served, _ = run_twin(base.events, StubMind(), player=fire(3))
+    truth = Sim(6, 50, StubMind()); truth.run(4, fire(11)); truth.finish()
+    served, _ = run_twin(base.events, StubMind(), player=fire(11))
     assert logs(served.events) != logs(truth.events)
-    rerun, mind = run_twin(base.events, StubMind(), player=fire(3), serve=False)
+    rerun, mind = run_twin(base.events, StubMind(), player=fire(11), serve=False)
     assert logs(rerun.events) == logs(truth.events) and mind.counts["base"] == 0
     s = summary(base.events, rerun.events)
     assert s["agents_diverged"] == len(divergence(base.events, truth.events))

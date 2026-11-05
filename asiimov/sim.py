@@ -61,7 +61,6 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "food_missing": "some of your food went missing", "fire": "a fire burned your family's food",
     "gift": "{who} gave you {detail}", "refused": "{who} refused to share food with you",
     "failed": "you could not {detail}", "person": "{who}, whom you {detail}, is here",
-    "step_done": "you finished a step of what you set out to do ({detail})",
     "intent_done": "you did what you set out to do: {detail}",
     "blocked": "you had to give up on what you set out to do: {detail}",
 }
@@ -74,7 +73,7 @@ DELIBERATE_ASK = (" Your action happens now; target is a person's #id or null. g
                   " A new goal replaces the intention you have now; to keep it, leave goal empty.")
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "7"
+ENGINE_VERSION = "8"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -563,10 +562,9 @@ class Sim:
             self._emit("intent_done", "rule", a["id"], {"steps": it["i"]}, [it["event"]])
             a["intent"] = None
             return self._occasion(a, "intent_done", 350 + c // 4, detail=it["goal"])
+        # The next step starts on its own. A finished step is not an occasion: at 4B, waking the mind
+        # there replaced 101 of 117 replaced intents with a new goal (t15-accept-4b-2; steering ruling).
         it["left"] = STEP_TICKS.get(it["steps"][it["i"]]["do"], DEFAULT_STEP_TICKS)
-        nxt = it["steps"][it["i"]]
-        nxt = nxt["do"].replace("_", " ") + (f" {self._who(nxt['target'])}" if nxt["target"] is not None else "")
-        self._occasion(a, "step_done", 200 + c // 4, detail=f"{it['goal']}; next: {nxt}")
 
     def _place(self, a: dict, activity: str) -> str:
         return WORKPLACE[a["role"]] if activity == "work" else ACTIVITY_PLACE.get(activity, a["home"])
