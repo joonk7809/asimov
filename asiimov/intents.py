@@ -10,8 +10,9 @@ Definitions, fixed before any engine-7 model run was read (plan/t15-intent-loop-
   completed_share     intent_done / (intent_done + intent_failed + intent_dropped), over ended intents.
   mind_calls          mind events per (agent, calendar day); the bar reads the maximum.
   person_directed     interactions a mind chose, between two people: meet events (seek), gifts that went
-                      through (give_food / give_coin receipts with ok), and ask_kin and steal attempts that
-                      reached their target (receipts carrying a chance roll). Counted per unordered pair.
+                      through (give_food / give_coin receipts with ok), and ask_kin, ask_food, buy_from
+                      and steal attempts that reached their target (receipts carrying a chance roll).
+                      Counted per unordered pair.
 
 python -m asiimov.intents results/raw/<run>/full/events.jsonl.gz [more logs...]
 """
@@ -45,7 +46,7 @@ def summarize(events: list) -> dict:
             other, k = e.data["with"], "seek"
         elif e.kind == "receipt" and e.data["action"] in ("give_food", "give_coin") and e.data["why"] == "gave":
             other, k = e.data["to"], e.data["action"]
-        elif e.kind == "receipt" and e.data["action"] in ("ask_kin", "steal") and "roll" in e.data:
+        elif e.kind == "receipt" and e.data["action"] in ("ask_kin", "ask_food", "buy_from", "steal") and "roll" in e.data:
             other, k = e.data.get("victim", e.data.get("to")), e.data["action"]
         if other is not None:
             pairs[tuple(sorted((e.actor, other)))] += 1

@@ -90,9 +90,15 @@ def test_deliberate_schema_only_takes_targets_the_prompt_lists():
             {"reason": "x", "goal": "", "then": list(then), **out})
         for action in ("ask_kin", "steal", "seek", "give_food", "give_coin", "avoid"):
             assert not ok({"action": action, "target": None})
-        for action in ("buy_food", "go_market", "work", "rest", "wait"):
+        for action in ("work", "rest", "wait"):
             assert ok({"action": action, "target": None})
             assert not ok({"action": action, "target": 0})
+        for action in ("buy_food", "go_market"):  # offered only when they can work (engine 10)
+            assert ok({"action": action, "target": None}) == (action in req.view["offer"])
+        for action in ("ask_food", "buy_from"):
+            for p in req.view["present"]:
+                assert ok({"action": action, "target": p["id"]}) == (action in req.view["offer"])
+            assert not ok({"action": action, "target": None})
         unlisted = next(i for i in range(1000) if i not in kin)
         assert not ok({"action": "ask_kin", "target": unlisted})
         assert all(ok({"action": "ask_kin", "target": k}) for k in kin)
@@ -104,7 +110,8 @@ def test_deliberate_schema_only_takes_targets_the_prompt_lists():
             assert ok({"action": "steal", "target": p["id"]})
         for i in people:
             assert f"#{i})" in req.prompt or f"#{i} (" in req.prompt
-            assert ok({"action": "seek", "target": i}, [{"do": "give_food", "target": i}, {"do": "shop", "target": None}])
+            assert ok({"action": "seek", "target": i}, [{"do": "give_food", "target": i}])
+            assert ok({"action": "seek", "target": i}, [{"do": "shop", "target": None}]) == ("go_market" in req.view["offer"])
         assert not ok({"action": "wait", "target": None}, [{"do": "rest", "target": None}] * 4)  # at most 3 more
         assert not ok({"action": "wait", "target": None}, [{"do": "fly", "target": None}])
     assert any(req.view["kin"] for req in reqs) and any(req.view["present"] for req in reqs)

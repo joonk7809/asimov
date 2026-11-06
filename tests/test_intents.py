@@ -313,6 +313,7 @@ def test_the_market_belief_says_what_the_agent_last_saw_there_today():
     assert sim._market_belief(a) == " When you were at the market at 10:00, it had no food."
     view = sim._view(a, {})
     view["occasion"] = {"why": "hungry_coin", "who": None, "detail": ""}
+    view["offer"] = sim._offer(a, view)
     assert "it had no food." in sim._situation(a, dict(view), "deliberate")
     assert "it had no food." not in sim._situation(a, dict(view), "plan")  # deliberations only, as A/B'd (T16c)
     a["market_seen"] = {"tick": 70, "food": 4}  # seen stocked again later: the belief is gone
