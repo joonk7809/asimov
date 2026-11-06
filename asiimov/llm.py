@@ -17,10 +17,11 @@ from .sim import ACTIVITIES as _ACTIVITIES, STEP_DOS
 ACTIVITIES = list(_ACTIVITIES)
 
 NO_TARGET = ["buy_food", "go_market", "work", "socialize", "home", "rest", "explore", "wait"]
-# Person actions and the ids each may name: family for ask_kin, people here for steal, and anyone the
-# prompt lists (family, here, People I know) for the rest.
-PERSON_ACTIONS = (("ask_kin", "kin"), ("steal", "present"), ("give_food", "people"), ("give_coin", "people"),
-                  ("seek", "people"), ("avoid", "people"))
+# Person actions and the ids each may name: family for ask_kin, people here for ask_food, buy_from and
+# steal, and anyone the prompt lists (family, here, People I know) for the rest. A deliberation's view
+# "offer" (engine 10) cuts both lists to what can work now.
+PERSON_ACTIONS = (("ask_kin", "kin"), ("ask_food", "present"), ("buy_from", "present"), ("steal", "present"),
+                  ("give_food", "people"), ("give_coin", "people"), ("seek", "people"), ("avoid", "people"))
 
 # No maxLength on strings: vLLM 0.11 structured outputs (xgrammar) decode ~15x slower with it
 # (measured on Qwen3-4B, A6000: reflect 18.5 s vs 1.7 s). max_tokens bounds the reply and the
@@ -65,14 +66,18 @@ def schema_for(req: MindRequest) -> dict:
     if req.kind != "deliberate":
         return SCHEMAS[req.kind]
     people = _ids(req.view, "people")
+    offer = req.view.get("offer", NO_TARGET + [x for x, _ in PERSON_ACTIONS])
+    # Steps follow the offer too: a shop step buys like go_market, and buy_from needs the same coin.
+    dos = [d for d in STEP_DOS if not (d == "shop" and "go_market" not in offer
+                                       or d == "buy_from" and "buy_from" not in offer)]
     step_target = {"anyOf": [{"type": "null"}, {"type": "integer", "enum": people}]} if people else {"type": "null"}
     then = {"type": "array", "maxItems": 3, "items": {
-        "type": "object", "properties": {"do": {"type": "string", "enum": list(STEP_DOS)}, "target": step_target},
+        "type": "object", "properties": {"do": {"type": "string", "enum": dos}, "target": step_target},
         "required": ["do", "target"], "additionalProperties": False}}
-    branches = [_deliberate_branch(NO_TARGET, {"type": "null"}, then)]
+    branches = [_deliberate_branch([x for x in NO_TARGET if x in offer], {"type": "null"}, then)]
     for action, key in PERSON_ACTIONS:
         ids = _ids(req.view, key)
-        if ids:
+        if ids and action in offer:
             branches.append(_deliberate_branch([action], {"type": "integer", "enum": ids}, then))
     return {"anyOf": branches}
 

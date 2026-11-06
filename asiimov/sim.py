@@ -42,11 +42,11 @@ WORKPLACE = {"farmer": "field", "crafter": "workshop", "trader": "market",
 # can be planned: at engine 6 it took a hunger crisis, and 13 of 22 4B guard-days had none.
 ACTIVITIES = ("work", "socialize", "home", "rest", "explore", "shop")
 ACTIVITY_PLACE = {"socialize": "plaza", "shop": "market", "explore": "woods"}  # work: WORKPLACE; else home
-# Intent steps (engine 7). Person steps name a target. seek, give_* and avoid move the agent; ask_kin
-# and steal act on the tick the step starts, where the agent already is.
-PERSON_STEPS = ("seek", "avoid", "give_food", "give_coin", "ask_kin", "steal")
+# Intent steps (engine 7). Person steps name a target. seek, give_* and avoid move the agent; ask_kin,
+# ask_food, buy_from and steal act on the tick the step starts, where the agent already is.
+PERSON_STEPS = ("seek", "avoid", "give_food", "give_coin", "ask_kin", "ask_food", "buy_from", "steal")
 STEP_DOS = ACTIVITIES + PERSON_STEPS
-INSTANT_STEPS = ("ask_kin", "steal")
+INSTANT_STEPS = ("ask_kin", "ask_food", "buy_from", "steal")
 REACH_STEPS = ("seek", "give_food", "give_coin")  # go where the target is, then act when both are there
 STEP_TICKS = {"avoid": 24}  # how long a step lasts (activities, avoid) or may take to get done (the rest)
 DEFAULT_STEP_TICKS = 18     # 3 hours
@@ -68,16 +68,54 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "intent_done": "you did what you set out to do: {detail}",
     "blocked": "you had to give up on what you set out to do: {detail}",
 }
+# What a deliberation may answer, in the order its prompt lists them (engine 10). Only the ones that can
+# work now are offered (_offer): with impossible ones listed, 63% of 4B famine answers chose buy_food away
+# from the market or facing an empty one (T16e), and cutting them sent minds to people instead (T16f).
+DELIBERATE_ACTIONS = ("buy_food", "go_market", "ask_kin", "ask_food", "buy_from", "steal", "give_food", "give_coin",
+                      "seek", "avoid", "work", "socialize", "home", "rest", "explore", "wait")
+# One factual clause per offered action, no trait or value words (L11); T16e's wording where it exists.
 # Deliberate-only wording lives in the situation, not the shared SCHEMA (L11).
-DELIBERATE_ASK = (" Your action happens now; target is a person's #id or null. go_market takes you to the market"
-                  " and buys what you need. seek finds a person and talks with them; give_food or give_coin hands"
-                  f" them 1 food or {GIFT_COIN} coin; avoid keeps you away from them; work, socialize, home, rest and"
-                  " explore last a few hours. To pursue something over hours or days, set goal and up to 3 more"
-                  " steps in then (these words, or shop), done in order; for a one-off, leave goal empty and then []."
-                  " A new goal replaces the intention you have now; to keep it, leave goal empty.")
+ACTION_CLAUSES = {
+    "buy_food": "buy_food buys food if you are at the market, carry enough coin and it has some",
+    "go_market": "go_market takes you to the market, where you can buy food if you carry enough coin and it has some",
+    "ask_kin": "ask_kin asks family here for 1 food",
+    "ask_food": "ask_food asks a person here for 1 food; they may say no",
+    "buy_from": f"buy_from offers a person here {FOOD_PRICE} coin for 1 food; they may say no",
+    "steal": "steal tries to take 1 food from a person here, and you may be caught",
+    "give_food": "give_food hands them 1 food",
+    "give_coin": f"give_coin hands them {GIFT_COIN} coin",
+    "seek": "seek finds a person and talks with them",
+    "avoid": "avoid keeps you away from them",
+    "work": "work goes to your work for a few hours",
+    "socialize": "socialize spends a few hours with others",
+    "home": "home takes you home for a few hours",
+    "rest": "rest lasts a few hours",
+    "explore": "explore lasts a few hours",
+    "wait": "wait does nothing for now",
+}
+assert set(ACTION_CLAUSES) == set(DELIBERATE_ACTIONS)
+NO_COIN_LINE = " You have too little coin to buy food."  # why buy_food, go_market and buy_from are withheld
+
+
+def deliberate_ask(offer) -> str:
+    """The deliberate ask for the offered actions. A shop step buys like go_market, so it goes with it."""
+    shop = ", or shop" if "go_market" in offer else ""
+    return (" Your action happens now; target is a person's #id or null. "
+            + ". ".join(ACTION_CLAUSES[x] for x in offer) + "."
+            f" To pursue something over hours or days, set goal and up to 3 more steps in then (these words{shop}),"
+            " done in order; for a one-off, leave goal empty and then []."
+            " A new goal replaces the intention you have now; to keep it, leave goal empty.")
+
+
+# Asking anyone here for food (engine 10, T19). Code decides, as for ask_kin, with a seeded draw: the
+# asker is given food when the roll falls under this limit (out of 1000). The target must carry at least
+# 2 food. Numbers proposed in the PR and checked by steering before any model run.
+SHARE_BASE = {"ask_food": 100, "buy_from": 350}  # buy_from: the coin makes a yes likelier
+SHARE_KIN = 200                                   # family are likelier to agree than strangers
+SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "9"
+ENGINE_VERSION = "10"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -217,7 +255,10 @@ class Sim:
         if a["calls"]["day"] != day:
             a["calls"] = {"day": day, "n": 0}
         a["calls"]["n"] += 1
-        prompt, counts = assemble_prompt(a, self.state, kind, self._situation(a, view, kind))
+        actions = None
+        if kind == "deliberate":  # what it may answer: only actions that can work now
+            actions = view["offer"] = self._offer(a, view)
+        prompt, counts = assemble_prompt(a, self.state, kind, self._situation(a, view, kind), actions=actions)
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
         req = MindRequest(kind, a["id"], self.state["tick"], prompt, prompt_hash(prompt), view)
@@ -240,7 +281,10 @@ class Sim:
         for aid in self._order(aids):
             req, parents, prompt_tokens, apply = pending[aid]
             reply = replies[aid]
-            eid = self._emit(f"mind_{req.kind}", "mind", aid, {"kind": req.kind}, parents, mind={
+            data = {"kind": req.kind}
+            if req.kind == "deliberate":  # what the prompt didn't offer, so infeasible choices are countable
+                data["withheld"] = [x for x in DELIBERATE_ACTIONS if x not in req.view["offer"]]
+            eid = self._emit(f"mind_{req.kind}", "mind", aid, data, parents, mind={
                 "model": reply.model, "prompt_hash": req.prompt_hash, "prompt_tokens": prompt_tokens,
                 "output_tokens": tokens(reply.raw_output), "sampling": reply.sampling,
                 "raw_output": reply.raw_output})
@@ -284,7 +328,9 @@ class Sim:
         if "market_food" in view:
             rest += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
         if kind == "deliberate":
-            rest += self._occasion_text(a, view.get("occasion")) + DELIBERATE_ASK
+            if a["inv"]["coin"] < FOOD_PRICE:
+                rest += NO_COIN_LINE
+            rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"])
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
@@ -333,6 +379,23 @@ class Sim:
         who = self._who(occ["who"]) if occ.get("who") is not None else "someone"
         text = OCCASIONS[occ["why"]].format(who=who, detail=occ.get("detail", ""))
         return f" Why you stop to think: {text}."
+
+    def _offer(self, a: dict, view: dict) -> list[str]:
+        """The actions a deliberation offers: those that can work now, by what the agent knows (T16f's F1).
+        buy_food only at the market with enough coin and food on show; go_market not without enough coin,
+        nor when today's belief or the stall in front of you says it is empty; buy_from only with the coin.
+        The situation says why each is withheld: NO_COIN_LINE, the belief line, the market's shown stock,
+        or "sold only at the market"."""
+        coin_ok = a["inv"]["coin"] >= FOOD_PRICE
+        shown = view.get("market_food")
+        drop = set()
+        if not (view["at_market"] and coin_ok and shown):
+            drop.add("buy_food")
+        if not coin_ok or self._market_belief(a) or shown == 0:
+            drop.add("go_market")
+        if not coin_ok:
+            drop.add("buy_from")
+        return [x for x in DELIBERATE_ACTIONS if x not in drop]
 
     def _market_belief(self, a: dict) -> str:
         """What the agent last saw of the market today, if it was empty (T16c's Y1). The latest look wins,
@@ -669,11 +732,17 @@ class Sim:
                   detail: str = ""):
         """Something happened to `a` that may be worth thinking about. Code appraises it: it can wake the
         mind only if its salience reaches the agent's deliberation_threshold, and a pending occasion keeps
-        its place unless this one is more salient or the pending one has faded."""
+        its place unless this one is more salient or the pending one has faded.
+
+        A refusal always reaches the mind (T19): it is what makes a hungry agent weigh other means. It
+        fades only OCCASION_TICKS after the agent may next deliberate, since an ask made in a deliberation
+        is refused during that deliberation's cooldown, and it outranks hunger then (_maybe_deliberate)."""
+        tick, cur = self.state["tick"], a["occasion"]
+        if why == "refused":
+            salience, tick = max(salience, a["cognition"]["deliberation_threshold"]), max(tick, a["cooldown_until"])
         if salience < a["cognition"]["deliberation_threshold"]:
             return
-        tick, cur = self.state["tick"], a["occasion"]
-        if cur and tick - cur["tick"] < OCCASION_TICKS and cur["salience"] >= salience:
+        if cur and self.state["tick"] - cur["tick"] < OCCASION_TICKS and cur["salience"] >= salience:
             return
         a["occasion"] = {"why": why, "salience": salience, "who": who, "event": event, "detail": detail,
                          "tick": tick}
@@ -712,12 +781,13 @@ class Sim:
         if tick < a["cooldown_until"] or calls >= DAILY_MIND_CALLS - 2:
             return
         trigger = 550 + a["cognition"]["deliberation_threshold"] // 3
-        if a["inv"]["food"] == 0 and a["needs"]["hunger"] >= trigger:
+        pending = a["occasion"] if a["occasion"] and tick - a["occasion"]["tick"] < OCCASION_TICKS else None
+        refused = pending is not None and pending["why"] == "refused"
+        if a["inv"]["food"] == 0 and a["needs"]["hunger"] >= trigger and not refused:
             occ = {"why": "hungry_coin" if a["inv"]["coin"] >= FOOD_PRICE else "hungry", "who": None,
                    "event": a["last_food_loss_event"]}
         else:
-            occ = a["occasion"] if a["occasion"] and tick - a["occasion"]["tick"] < OCCASION_TICKS else None
-            occ = occ or self._notice(a, occupancy)
+            occ = pending or self._notice(a, occupancy)
             if occ is None:
                 a["occasion"] = None
                 return
@@ -733,7 +803,7 @@ class Sim:
         data = {"action": action, "ok": ok, "why": why}
         data.update(extra or {})
         rid = self._emit("receipt", origin, a["id"], data, [eid])
-        if not ok and why not in ("kin refused", "caught"):  # those two have occasions of their own
+        if not ok and why not in ("kin refused", "refused", "caught"):  # those have occasions of their own
             self._occasion(a, "failed", 300 + a["traits"]["conscientiousness"] // 3, event=rid,
                            detail=f"{action.replace('_', ' ')} ({BUY_FAIL_TEXT.get(why, why)})")
         return rid
@@ -829,8 +899,10 @@ class Sim:
             a["override"] = {**first, "event": eid, "left": STEP_TICKS.get(first["do"], DEFAULT_STEP_TICKS)}
 
     def _person_act(self, a: dict, action: str, target: int, eid: int) -> int:
-        """ask_kin or steal, with a valid target id. Returns the receipt's event id."""
+        """ask_kin, ask_food, buy_from or steal, with a valid target id. Returns the receipt's event id."""
         t = self.state["agents"][target]
+        if action in SHARE_BASE:
+            return self._ask_share(a, t, action, eid)
         if action == "steal":
             # Live places, not the tick-start occupancy: the target may already have moved this tick.
             if t["place"] != a["place"]:
@@ -860,6 +932,45 @@ class Sim:
         r["affinity"] = max(-1000, r["affinity"] - 50)
         rid = self._receipt(a, eid, action, False, "kin refused", "chance",
                             {"stream": stream, "index": idx, "roll": roll, "limit": limit, "to": t["id"]})
+        self._occasion(a, "refused", 450 + (1000 - a["traits"]["agreeableness"]) // 4, t["id"], rid)
+        return rid
+
+    def _ask_share(self, a: dict, t: dict, action: str, eid: int) -> int:
+        """ask_food or buy_from: ask a person here, kin or not, for 1 food (buy_from pays FOOD_PRICE coin
+        for it). Code decides with a seeded draw logged on the receipt; a refusal is the "refused" occasion."""
+        to = {"to": t["id"]}
+        if t["place"] != a["place"]:  # live places (L2)
+            return self._receipt(a, eid, action, False, "target not here", extra=to)
+        if t["asleep"]:
+            return self._receipt(a, eid, action, False, "target asleep", extra=to)
+        if action == "buy_from" and a["inv"]["coin"] < FOOD_PRICE:
+            return self._receipt(a, eid, action, False, "no coin", extra=to)
+        if t["inv"]["food"] <= 1:  # they keep one for themselves
+            return self._receipt(a, eid, action, False, "nothing to spare", extra=to)
+        kin = t["id"] in self.state["families"][a["family"]]["members"]
+        stream = f"share:{t['id']}"
+        idx, roll = self.rng.draw(stream, 0, 999)
+        limit = _clamp(SHARE_BASE[action] + t["traits"]["agreeableness"] // 4 + self._rel(t, a["id"])["affinity"] // 4
+                       + (SHARE_KIN if kin else 0), 0, SHARE_MAX)
+        extra = {"stream": stream, "index": idx, "roll": roll, "limit": limit, "kin": kin, **to}
+        r = self._met(a, t["id"])
+        self._met(t, a["id"])
+        if roll < limit:
+            t["inv"]["food"] -= 1
+            a["inv"]["food"] += 1
+            if action == "buy_from":
+                a["inv"]["coin"] -= FOOD_PRICE
+                t["inv"]["coin"] += FOOD_PRICE
+                self._note(a["id"], f"bought 1 food from {t['name']} for {FOOD_PRICE} coin")
+                self._note(t["id"], f"sold 1 food to {a['name']} for {FOOD_PRICE} coin")
+            else:
+                self._note(a["id"], f"{t['name']} gave me 1 food when I asked")
+                self._note(t["id"], f"gave 1 food to {a['name']}, who asked")
+            r["affinity"] = min(1000, r["affinity"] + 50)
+            return self._receipt(a, eid, action, True, "sold" if action == "buy_from" else "gave", "chance", extra)
+        self._note(a["id"], f"{t['name']} refused to {'sell me' if action == 'buy_from' else 'give me'} food")
+        r["affinity"] = max(-1000, r["affinity"] - 50)
+        rid = self._receipt(a, eid, action, False, "refused", "chance", extra)
         self._occasion(a, "refused", 450 + (1000 - a["traits"]["agreeableness"]) // 4, t["id"], rid)
         return rid
 

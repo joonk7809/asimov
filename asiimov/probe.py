@@ -125,10 +125,12 @@ def edit_for(variant: str, agent: dict, arm: str = "full", donor: dict | None = 
 
 
 def variant_prompt(agent: dict, state: dict, kind: str, situation: str, variant: str, arm: str,
-                   donor: dict | None = None) -> str:
-    """The prompt the world would have sent, with one input set changed."""
+                   donor: dict | None = None, actions=None) -> str:
+    """The prompt the world would have sent, with one input set changed. `actions`: what a deliberation
+    offered (its request view's "offer")."""
     soul = _soul_text(agent, arm)
-    prompt, _ = assemble_prompt({**agent, "soul": soul}, state, kind, situation, edit_for(variant, agent, arm, donor))
+    prompt, _ = assemble_prompt({**agent, "soul": soul}, state, kind, situation, edit_for(variant, agent, arm, donor),
+                                actions)
     if arm == "fiction":
         assert prompt.startswith(SCHEMA_HEAD)
         prompt = FICTION_HEADER + prompt[len(SCHEMA_HEAD):]
@@ -171,7 +173,8 @@ class ProbeSim(ArmSim):
         req = self.pending[a["id"]][0]
         agents = self.state["agents"]
         donor = donor_for(a, agents)
-        prompts = {v: variant_prompt(a, self.state, kind, self._last_situation, v, self.arm, donor)
+        prompts = {v: variant_prompt(a, self.state, kind, self._last_situation, v, self.arm, donor,
+                                     req.view.get("offer"))
                    for v in VARIANTS}
         if prompts["full"] != req.prompt:
             raise ReplayDivergence(f"variant hook does not rebuild the recorded prompt at {key}")

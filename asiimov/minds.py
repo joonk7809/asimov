@@ -85,9 +85,10 @@ class StubMind:
 
     def _food(self, v: dict) -> dict:
         t = v["traits"]
-        if v["coin"] >= v["food_price"] and v["at_market"] and v.get("market_food", 0) > 0:
+        offer = v.get("offer", ())
+        if "buy_food" in offer:
             return {"action": "buy_food", "target": None, "reason": "hungry, have coin"}
-        if v["coin"] >= v["food_price"] and not v["at_market"]:
+        if "go_market" in offer and not v["at_market"]:
             return {"action": "go_market", "target": None, "reason": "need food"}
         holders = [p for p in v["present"] if p["has_food"] and not p["kin"]]
         if t["honesty"] < 350 and holders:
@@ -95,6 +96,9 @@ class StubMind:
         kin = [p for p in v["kin"] if p["has_food"]]
         if kin:
             return {"action": "ask_kin", "target": kin[0]["id"], "reason": "family helps"}
+        if holders:  # a stranger here with food: offer coin if there is some, else ask
+            action = "buy_from" if "buy_from" in offer else "ask_food"
+            return {"action": action, "target": holders[0]["id"], "reason": "they have food"}
         return {"action": "wait", "target": None, "reason": "nothing to do"}
 
     def _reflect(self, v: dict) -> dict:

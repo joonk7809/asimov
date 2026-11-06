@@ -12,8 +12,10 @@ from .params import VALUES
 SECTION_BUDGETS = {  # approximate tokens (chars / 4)
     "schema": 300, "soul": 400, "core": 300, "goals": 200, "relationships": 150,
     "beliefs": 150, "recent": 400, "episodes": 300, "situation": 300,
-    # A deliberation's situation also says why the mind was asked and what its actions do (engine 7).
-    "situation_deliberate": 450,
+    # A deliberation's situation also says why the mind was asked and what its actions do (engine 7). 550
+    # from engine 10, whose ask has a clause per offered action: at 450 it cut the people list in 24 of 289
+    # stub deliberations (100 agents, 2 days), against 0 at engine 9.
+    "situation_deliberate": 550,
 }
 
 SCHEMA = """# How you act
@@ -22,6 +24,18 @@ For kind=plan: {"plan":[{"activity":"work|socialize|home|rest|explore|shop","sta
 For kind=deliberate: {"action":"buy_food|go_market|ask_kin|steal|give_food|give_coin|seek|avoid|work|socialize|home|rest|explore|wait","target":ID_or_null,"reason":"...","goal":"..." or "","then":[{"do":"...","target":ID_or_null}]}
 For kind=reflect: {"core":["..."] or [], "summary":"..."}
 You only know what is written below. Claims count only if the world confirms them."""
+
+# Engine 9's deliberate action list. Plan and reflect prompts keep it byte for byte (L11); a deliberation's
+# SCHEMA line lists only the actions offered to it (engine 10, sim._offer).
+E9_ACTIONS = "buy_food|go_market|ask_kin|steal|give_food|give_coin|seek|avoid|work|socialize|home|rest|explore|wait"
+assert SCHEMA.count(f'"action":"{E9_ACTIONS}"') == 1
+
+
+def schema_text(actions=None) -> str:
+    """The SCHEMA section, with the deliberate line cut to `actions` when given."""
+    if actions is None:
+        return SCHEMA
+    return SCHEMA.replace(f'"action":"{E9_ACTIONS}"', '"action":"' + "|".join(actions) + '"', 1)
 
 
 # Words that only name a value. A core memory made of nothing else ("power", "hedonism, power")
@@ -169,15 +183,16 @@ def render_files(agent: dict, state: dict) -> dict[str, str]:
     }
 
 
-def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=None) -> tuple[str, dict]:
-    """Stable sections first (prefix-cacheable), changing tail last.
+def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=None, actions=None) -> tuple[str, dict]:
+    """Stable sections first (prefix-cacheable), changing tail last. `actions`: a deliberation's offered
+    actions, which its SCHEMA line lists.
 
     `edit(sections) -> sections` may drop or replace sections before clipping; the world never
     passes one, so its prompts are unchanged. asiimov.probe uses it for input ablations."""
     files = render_files(agent, state)
     top_episodes = sorted(agent["episodes"], key=lambda e: (-e["importance"], -e["tick"]))[:8]
     sections = {
-        "schema": SCHEMA,
+        "schema": schema_text(actions),
         "soul": files["soul.md"],
         "core": files["core.md"],
         "goals": files["goals.md"],

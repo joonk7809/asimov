@@ -69,6 +69,9 @@ HOSTILE = [
     '{"do":"seek","target":%d},{"do":"avoid","target":%d},{"do":"rest"}]}',
     '{"action":"wait","target":null,"goal":"g","then":[{"do":"steal","target":%d},{"do":"ask_kin","target":%d}]}',
     '{"plan":[{"activity":"shop","start_h":0,"end_h":24}]}',
+    # engine 10: asking or buying food from anyone here, as an action and as steps
+    '{"action":"ask_food","target":%d}', '{"action":"buy_from","target":%d}', '{"action":"buy_from","target":null}',
+    '{"action":"ask_food","target":%d,"goal":"%s","then":[{"do":"buy_from","target":%d},{"do":"ask_food","target":%d}]}',
 ]
 
 
