@@ -111,7 +111,7 @@ def deliberate_ask(offer) -> str:
 # asker is given food when the roll falls under this limit (out of 1000). The target must carry at least
 # 2 food. Numbers proposed in the PR and checked by steering before any model run.
 SHARE_BASE = {"ask_food": 100, "buy_from": 350}  # buy_from: the coin makes a yes likelier
-SHARE_KIN = 200                                   # family are likelier to agree than strangers
+SHARE_KIN = 200                                   # family are likelier to agree (buy_from; ask_food uses ask_kin's rule)
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
@@ -917,7 +917,7 @@ class Sim:
             return self._receipt(a, eid, action, False, "kin has nothing to spare")
         stream = f"kin:{t['id']}"
         idx, roll = self.rng.draw(stream, 0, 999)
-        limit = 400 + t["traits"]["agreeableness"] // 2 + self._rel(t, a["id"])["affinity"] // 4
+        limit = self._kin_limit(t, a)
         if roll < limit:
             t["inv"]["food"] -= 1
             a["inv"]["food"] += 1
@@ -935,6 +935,10 @@ class Sim:
         self._occasion(a, "refused", 450 + (1000 - a["traits"]["agreeableness"]) // 4, t["id"], rid)
         return rid
 
+    def _kin_limit(self, t: dict, a: dict) -> int:
+        """How likely family member `t` is to give `a` food when asked, out of 1000 (ask_kin's rule)."""
+        return 400 + t["traits"]["agreeableness"] // 2 + self._rel(t, a["id"])["affinity"] // 4
+
     def _ask_share(self, a: dict, t: dict, action: str, eid: int) -> int:
         """ask_food or buy_from: ask a person here, kin or not, for 1 food (buy_from pays FOOD_PRICE coin
         for it). Code decides with a seeded draw logged on the receipt; a refusal is the "refused" occasion."""
@@ -950,8 +954,11 @@ class Sim:
         kin = t["id"] in self.state["families"][a["family"]]["members"]
         stream = f"share:{t['id']}"
         idx, roll = self.rng.draw(stream, 0, 999)
-        limit = _clamp(SHARE_BASE[action] + t["traits"]["agreeableness"] // 4 + self._rel(t, a["id"])["affinity"] // 4
-                       + (SHARE_KIN if kin else 0), 0, SHARE_MAX)
+        if action == "ask_food" and kin:  # the same odds as ask_kin for the same ask (steering, T19)
+            limit = self._kin_limit(t, a)
+        else:
+            limit = _clamp(SHARE_BASE[action] + t["traits"]["agreeableness"] // 4
+                           + self._rel(t, a["id"])["affinity"] // 4 + (SHARE_KIN if kin else 0), 0, SHARE_MAX)
         extra = {"stream": stream, "index": idx, "roll": roll, "limit": limit, "kin": kin, **to}
         r = self._met(a, t["id"])
         self._met(t, a["id"])

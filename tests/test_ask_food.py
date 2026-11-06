@@ -113,8 +113,11 @@ def test_family_and_liked_people_say_yes_more_often():
     k = sim.state["agents"][kin]
     k.update(asleep=False, place="plaza", sleep_tick=10**6)
     k["inv"]["food"], k["traits"]["agreeableness"] = 3, 600
-    deliberate_now(sim, a, {"action": "ask_food", "target": kin})
-    assert [e for e in sim.events if e.kind == "receipt"][-1].data["limit"] == SHARE_BASE["ask_food"] + 150 + SHARE_KIN
+    deliberate_now(sim, a, {"action": "ask_food", "target": kin})  # family: ask_kin's odds, whichever word
+    assert [e for e in sim.events if e.kind == "receipt"][-1].data["limit"] == 400 + 600 // 2
+    k["inv"]["food"] = 3
+    deliberate_now(sim, a, {"action": "buy_from", "target": kin})
+    assert [e for e in sim.events if e.kind == "receipt"][-1].data["limit"] == SHARE_BASE["buy_from"] + 150 + SHARE_KIN
     sim._rel(b, a["id"])["affinity"] = 400
     deliberate_now(sim, a, {"action": "ask_food", "target": b["id"]})
     assert [e for e in sim.events if e.kind == "receipt"][-1].data["limit"] == SHARE_BASE["ask_food"] + 150 + 100
