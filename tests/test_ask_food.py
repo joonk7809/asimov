@@ -152,3 +152,18 @@ def test_ask_food_as_a_step_acts_where_the_agent_stands():
     b["place"] = "woods"
     deliberate_now(sim, a, {"action": "ask_food", "target": b["id"]})
     assert [e for e in sim.events if e.kind == "receipt"][-1].data["why"] == "target not here"
+
+
+def test_the_prompt_the_reply_schema_and_withheld_agree_on_what_is_offered():
+    """A person action with nobody to name is not offered (PR #22 review: 7.6% of famine deliberations listed
+    steal, ask_food, buy_from or ask_kin while the reply schema dropped them)."""
+    from asiimov.bench import collect_prompts
+    from asiimov.llm import schema_for
+    reqs = [r for r in collect_prompts(agents=30, days=2, seed=3) if r.kind == "deliberate"]
+    assert any(not r.view["present"] for r in reqs)
+    for req in reqs:
+        grammar = {x for b in schema_for(req)["anyOf"] for x in b["properties"]["action"]["enum"]}
+        assert set(req.view["offer"]) == grammar
+        assert offered_line(req.prompt) == req.view["offer"]
+        if not req.view["present"]:
+            assert not {"steal", "ask_food", "buy_from"} & grammar

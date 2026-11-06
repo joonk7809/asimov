@@ -78,7 +78,7 @@ DELIBERATE_ACTIONS = ("buy_food", "go_market", "ask_kin", "ask_food", "buy_from"
 ACTION_CLAUSES = {
     "buy_food": "buy_food buys food if you are at the market, carry enough coin and it has some",
     "go_market": "go_market takes you to the market, where you can buy food if you carry enough coin and it has some",
-    "ask_kin": "ask_kin asks family here for 1 food",
+    "ask_kin": "ask_kin asks a family member for 1 food",  # not "here": ask_kin has no place check (PR #22 review)
     "ask_food": "ask_food asks a person here for 1 food; they may say no",
     "buy_from": f"buy_from offers a person here {FOOD_PRICE} coin for 1 food; they may say no",
     "steal": "steal tries to take 1 food from a person here, and you may be caught",
@@ -258,7 +258,11 @@ class Sim:
         actions = None
         if kind == "deliberate":  # what it may answer: only actions that can work now
             actions = view["offer"] = self._offer(a, view)
-        prompt, counts = assemble_prompt(a, self.state, kind, self._situation(a, view, kind), actions=actions)
+        situation = self._situation(a, view, kind)
+        if actions is not None and actions != self._offer(a, view):  # a crowd cut to nobody shown (rare)
+            actions = view["offer"] = self._offer(a, view)
+            situation = self._situation(a, view, kind)
+        prompt, counts = assemble_prompt(a, self.state, kind, situation, actions=actions)
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
         req = MindRequest(kind, a["id"], self.state["tick"], prompt, prompt_hash(prompt), view)
@@ -395,6 +399,14 @@ class Sim:
             drop.add("go_market")
         if not coin_ok:
             drop.add("buy_from")
+        # A person action with nobody it may name is not offered either, so the prompt, the reply schema
+        # (llm.PERSON_ACTIONS) and `withheld` agree (PR #22 review: 7.6% of famine deliberations).
+        if not view["present"]:
+            drop |= {"ask_food", "buy_from", "steal"}
+        if not view["kin"]:
+            drop.add("ask_kin")
+        if "people" in view and not view["people"]:  # set by _situation; _request checks the offer again after it
+            drop |= {"give_food", "give_coin", "seek", "avoid"}
         return [x for x in DELIBERATE_ACTIONS if x not in drop]
 
     def _market_belief(self, a: dict) -> str:
