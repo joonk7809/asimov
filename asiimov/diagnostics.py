@@ -27,6 +27,8 @@ import re
 from .memory import is_bare_value
 from .sim import TICKS_PER_DAY, WORKPLACE, valid_blocks
 
+# A failed buy at the market: one reason up to engine 8, split into its two causes from engine 9.
+SUPPLY_FAILS = frozenset({"no stock or no coin", "no stock", "no coin"})
 PLACES = frozenset(WORKPLACE.values()) | {"market", "plaza", "woods", "home"}
 
 
@@ -109,9 +111,9 @@ def effort(events: list) -> dict:
                 not_at_market += e.data["why"] == "not at market"
                 if e.actor in earned:
                     buys += 1
-                    supply_fails += e.data["why"] == "no stock or no coin"
+                    supply_fails += e.data["why"] in SUPPLY_FAILS
                     buy_days.add((e.actor, e.tick // TICKS_PER_DAY))
-                    if e.data["why"] == "no stock or no coin":
+                    if e.data["why"] in SUPPLY_FAILS:
                         fail_days.add((e.actor, e.tick // TICKS_PER_DAY))
     working = {}
     for r in sorted({a["role"] for a in ags}):

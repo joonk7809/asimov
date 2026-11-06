@@ -121,7 +121,7 @@ def test_id_order_gives_the_last_food_to_the_lower_id():
     sim = _two_hungry_at_market("id")
     sim.step()
     assert buyer(sim) == 2
-    assert [e.data["why"] for e in sim.events if e.kind == "receipt" and e.actor == 4] == ["no stock or no coin"]
+    assert [e.data["why"] for e in sim.events if e.kind == "receipt" and e.actor == 4] == ["no stock"]
 
 
 def test_shuffle_lets_either_agent_win():

@@ -269,3 +269,60 @@ def test_a_visit_is_scored_by_where_the_agent_actually_went():
     away = [k for k in visits if au_sim.effect[k][0][0] != homes[k[1]]]
     assert away, "some visits must leave home"
     assert all(au_sim.effect[k][0] != au_sim.effect[k][1] for k in away if au_sim.effect[k][1][0] == homes[k[1]])
+
+
+# ------------------------------------------------------------------ engine 9 (T17): what a failed buy tells the mind
+def test_a_failed_buy_says_whether_stock_or_coin_was_missing():
+    sim = Sim(1, 12, StubMind())
+    a, b = awake(sim, [0, 1], place="market")
+    for x in (a, b):
+        x["cognition"]["deliberation_threshold"] = 0
+        x["inv"]["food"] = 0
+    a["inv"]["coin"], b["inv"]["coin"] = 30, 1
+    sim.state["market_food"] = 5
+    sim._buy(b, 0)
+    sim.state["market_food"] = 0
+    sim._buy(a, 0)
+    fails = {e.actor: e.data["why"] for e in sim.events if e.kind == "receipt" and not e.data["ok"]}
+    assert fails == {0: "no stock", 1: "no coin"}
+    assert sim._occasion_text(b, b["occasion"]).endswith("you could not buy food (not enough coin).")
+    assert sim._occasion_text(a, a["occasion"]).endswith("you could not buy food (no food for sale).")
+
+
+def test_a_shop_step_that_finds_no_food_says_so_on_the_blocked_line():
+    sim = Sim(1, 12, StubMind())
+    (a,) = awake(sim, [0])
+    a["cognition"]["deliberation_threshold"] = 0
+    a["inv"].update(food=0, coin=30)
+    sim.state["market_food"] = 0
+    deliberate_now(sim, a, {"action": "go_market", "target": None, "goal": "feed the family",
+                            "then": [{"do": "rest", "target": None}]})
+    sim._act(a)
+    assert a["occasion"]["why"] == "blocked"
+    assert sim._occasion_text(a, a["occasion"]).endswith("give up on what you set out to do: feed the family (no food for sale).")
+
+
+def test_the_market_belief_says_what_the_agent_last_saw_there_today():
+    sim = Sim(1, 12, StubMind())
+    (a,) = awake(sim, [0], place="market")
+    a.update(activity="shop", plan=[{"activity": "shop", "start_h": 0, "end_h": 24}])  # stays, no arrival buy
+    sim.state["tick"] = 60  # 10:00
+    sim.state["market_food"] = 0
+    sim.step()  # a is at the market as the tick ends, and it is empty
+    assert a["market_seen"] == {"tick": 60, "food": 0}
+    assert sim._market_belief(a) == " When you were at the market at 10:00, it had no food."
+    view = sim._view(a, {})
+    view["occasion"] = {"why": "hungry_coin", "who": None, "detail": ""}
+    assert "it had no food." in sim._situation(a, dict(view), "deliberate")
+    assert "it had no food." not in sim._situation(a, dict(view), "plan")  # deliberations only, as A/B'd (T16c)
+    a["market_seen"] = {"tick": 70, "food": 4}  # seen stocked again later: the belief is gone
+    sim.state["tick"] = 80
+    assert sim._market_belief(a) == ""
+    a["market_seen"] = {"tick": 70, "food": 0}
+    sim.state["tick"] = TICKS_PER_DAY + 10  # a new day
+    assert sim._market_belief(a) == ""
+
+
+def test_diagnostics_count_both_engine_9_supply_failures():
+    from asiimov.diagnostics import SUPPLY_FAILS
+    assert {"no stock", "no coin", "no stock or no coin"} == SUPPLY_FAILS

@@ -53,6 +53,10 @@ DEFAULT_STEP_TICKS = 18     # 3 hours
 MAX_STEPS = 4
 GIFT_COIN = FOOD_PRICE      # give_coin hands over one meal's price
 DAILY_MIND_CALLS = 15       # per agent and calendar day, plans and reflections included
+# What a mind reads for a failed buy (engine 9). At engine 8 one bundled "no stock or no coin" left an
+# agent holding coin unable to tell why it failed (T16b: 95% of famine agents who had failed to buy went
+# back to the empty market).
+BUY_FAIL_TEXT = {"no stock": "no food for sale", "no coin": "not enough coin"}
 OCCASION_TICKS = 12         # an occasion the mind hasn't been asked about yet fades after 2 hours
 OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "hungry_coin": "you are hungry with no food, and carry enough coin to buy some",
@@ -73,7 +77,7 @@ DELIBERATE_ASK = (" Your action happens now; target is a person's #id or null. g
                   " A new goal replaces the intention you have now; to keep it, leave goal empty.")
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "8"
+ENGINE_VERSION = "9"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -121,7 +125,7 @@ class Sim:
                 "soul": render_soul(p), "core": [], "recent": [], "episodes": [],
                 "relationships": {}, "beliefs": {}, "cooldown_until": 0,
                 "last_food_loss_event": None, "belief_causes": {}, "habit": None,
-                "intent": None, "occasion": None, "noticed": {"day": -1, "ids": []}, "calls": {"day": -1, "n": 0},
+                "intent": None, "occasion": None, "market_seen": None, "noticed": {"day": -1, "ids": []}, "calls": {"day": -1, "n": 0},
             })
             self.state["agents"].append(a)
         self._emit("genesis", "chance", None,
@@ -275,6 +279,8 @@ class Sim:
         agents = self.state["agents"]
         kin = ", ".join(f"{agents[k['id']]['name']} (#{k['id']})" for k in view["kin"])
         rest = f" Your family: {kin or 'none'}. " + self._economy(a)
+        if kind == "deliberate":
+            rest += self._market_belief(a)
         if "market_food" in view:
             rest += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
         if kind == "deliberate":
@@ -327,6 +333,15 @@ class Sim:
         who = self._who(occ["who"]) if occ.get("who") is not None else "someone"
         text = OCCASIONS[occ["why"]].format(who=who, detail=occ.get("detail", ""))
         return f" Why you stop to think: {text}."
+
+    def _market_belief(self, a: dict) -> str:
+        """What the agent last saw of the market today, if it was empty (T16c's Y1). The latest look wins,
+        so a market seen empty and then stocked again says nothing. Deliberations only, as A/B'd."""
+        seen, tick = a["market_seen"], self.state["tick"]
+        if not seen or seen["food"] > 0 or seen["tick"] >= tick or seen["tick"] // TICKS_PER_DAY != tick // TICKS_PER_DAY:
+            return ""
+        m = (seen["tick"] % TICKS_PER_DAY) * 10
+        return f" When you were at the market at {m // 60:02d}:{m % 60:02d}, it had no food."
 
     def _economy(self, a: dict) -> str:
         """What any villager knows about making a living: what this role's work pays, and where food is
@@ -382,6 +397,9 @@ class Sim:
 
         self._commit()
         self._talk()
+        for a in agents:  # what everyone awake at the market saw of its stock as the tick ended
+            if a["place"] == "market" and not a["asleep"]:
+                a["market_seen"] = {"tick": tick, "food": st["market_food"]}
         for a in agents:
             if not a["asleep"]:
                 self.metrics["activity"][(tick // TICKS_PER_DAY, self._hour())][a["activity"]] += 1
@@ -555,7 +573,8 @@ class Sim:
             self._emit("intent_failed", "rule", a["id"], {"i": it["i"], "do": it["steps"][it["i"]]["do"], "why": why},
                        [it["event"]])
             a["intent"] = None
-            return self._occasion(a, "blocked", 450 + c // 4, detail=it["goal"])
+            reason = f" ({BUY_FAIL_TEXT[why]})" if why in BUY_FAIL_TEXT else ""  # a shop step that couldn't buy
+            return self._occasion(a, "blocked", 450 + c // 4, detail=it["goal"] + reason)
         self._emit("intent_step", "rule", a["id"], {"i": it["i"], "do": it["steps"][it["i"]]["do"]}, [it["event"]])
         it["i"] += 1
         if it["i"] == len(it["steps"]):
@@ -716,7 +735,7 @@ class Sim:
         rid = self._emit("receipt", origin, a["id"], data, [eid])
         if not ok and why not in ("kin refused", "caught"):  # those two have occasions of their own
             self._occasion(a, "failed", 300 + a["traits"]["conscientiousness"] // 3, event=rid,
-                           detail=f"{action.replace('_', ' ')} ({why})")
+                           detail=f"{action.replace('_', ' ')} ({BUY_FAIL_TEXT.get(why, why)})")
         return rid
 
     def _buy(self, a: dict, eid: int) -> tuple[bool, str]:
@@ -727,8 +746,11 @@ class Sim:
             self._receipt(a, eid, "buy_food", False, "not at market")
             return False, "not at market"
         if self.state["market_food"] <= 0 or a["inv"]["coin"] < FOOD_PRICE:
-            self._receipt(a, eid, "buy_food", False, "no stock or no coin")
-            return False, "no stock or no coin"
+            why = "no stock" if self.state["market_food"] <= 0 else "no coin"  # both: the stock is what failed
+            if why == "no stock":
+                a["market_seen"] = {"tick": self.state["tick"], "food": 0}
+            self._receipt(a, eid, "buy_food", False, why)
+            return False, why
         want = max(0, self._meals_left_today(a) - a["inv"]["food"])
         if a["role"] not in ("child", "elder"):
             for m in self.state["families"][a["family"]]["members"]:
