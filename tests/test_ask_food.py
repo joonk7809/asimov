@@ -167,3 +167,32 @@ def test_the_prompt_the_reply_schema_and_withheld_agree_on_what_is_offered():
         assert offered_line(req.prompt) == req.view["offer"]
         if not req.view["present"]:
             assert not {"steal", "ask_food", "buy_from"} & grammar
+
+
+def test_a_no_moves_an_intent_on_unless_the_ask_was_its_last_step():
+    sim, a, b = share_world(False)  # every draw says no
+    sim.mind = Scripted(lambda req: {"action": "wait", "target": None})
+    deliberate_now(sim, a, {"action": "wait", "target": None, "goal": "find food",
+                            "then": [{"do": "ask_food", "target": b["id"]}, {"do": "rest", "target": None}]})
+    sim.step()
+    it = a["intent"]
+    assert it is not None and it["i"] == 1 and it["steps"][1]["do"] == "rest"
+    step = [e for e in sim.events if e.kind == "intent_step"][-1]
+    assert step.data == {"i": 0, "do": "ask_food", "why": "refused"}
+    assert sim.mind.asked[-1].view["occasion"]["why"] == "refused"  # the mind still hears of it and may drop it
+    b["inv"]["food"] = 1  # nothing to spare, as the last step: the intent fails as before
+    deliberate_now(sim, a, {"action": "wait", "target": None, "goal": "find food",
+                            "then": [{"do": "buy_from", "target": b["id"]}]})
+    sim.step()
+    assert a["intent"] is None
+    failed = [e for e in sim.events if e.kind == "intent_failed"][-1]
+    assert failed.data["why"] == "nothing to spare"
+
+
+def test_a_caught_steal_still_ends_the_intent():
+    sim, a, b = share_world(False)
+    sim.rng.draw = lambda stream, lo, hi: (0, 999)  # the steal fails and is noticed
+    deliberate_now(sim, a, {"action": "wait", "target": None, "goal": "eat",
+                            "then": [{"do": "steal", "target": b["id"]}, {"do": "rest", "target": None}]})
+    sim.step()
+    assert a["intent"] is None and [e for e in sim.events if e.kind == "intent_failed"][-1].data["why"] == "caught"

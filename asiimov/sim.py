@@ -51,6 +51,11 @@ REACH_STEPS = ("seek", "give_food", "give_coin")  # go where the target is, then
 STEP_TICKS = {"avoid": 24}  # how long a step lasts (activities, avoid) or may take to get done (the rest)
 DEFAULT_STEP_TICKS = 18     # 3 hours
 MAX_STEPS = 4
+# A person who can't or won't give doesn't end an intent whose ask was not its last step: the intent moves
+# on (steering, T19 world A: refusals are common by design, and ending on them cut intents spanning a day
+# from 0.269 to 0.171). A caught steal or any other failure still ends it.
+ASK_STEPS = ("ask_food", "buy_from", "ask_kin")
+ASK_NOS = ("nothing to spare", "refused", "kin refused", "kin has nothing to spare")
 GIFT_COIN = FOOD_PRICE      # give_coin hands over one meal's price
 DAILY_MIND_CALLS = 15       # per agent and calendar day, plans and reflections included
 # What a mind reads for a failed buy (engine 9). At engine 8 one bundled "no stock or no coin" left an
@@ -644,6 +649,13 @@ class Sim:
             return
         it = a["intent"]
         c = a["traits"]["conscientiousness"]
+        soft = not ok and it["steps"][it["i"]]["do"] in ASK_STEPS and why in ASK_NOS and it["i"] + 1 < len(it["steps"])
+        if soft:  # a "no" moves on to the next step; a refusal has already fired its own occasion
+            self._emit("intent_step", "rule", a["id"], {"i": it["i"], "do": it["steps"][it["i"]]["do"], "why": why},
+                       [it["event"]])
+            it["i"] += 1
+            it["left"] = STEP_TICKS.get(it["steps"][it["i"]]["do"], DEFAULT_STEP_TICKS)
+            return
         if not ok:
             self._emit("intent_failed", "rule", a["id"], {"i": it["i"], "do": it["steps"][it["i"]]["do"], "why": why},
                        [it["event"]])
