@@ -9,6 +9,9 @@ One tick = 10 sim-minutes, 144 ticks per day. A tick has two phases:
    takes effect on the tick it was asked, and its mind_* event carries that tick.
 Arrival order never matters, so a log is the same whatever the server's latency, and
 mind outputs are recorded so a replay reproduces the world bit-for-bit without a model.
+Places sit on a tile map (asiimov/worldmap.py, recorded in genesis). Changing place is a walk that
+takes ticks and ends with an `arrive` event; a walker is at no place, so it meets, asks, robs and
+talks with nobody until it arrives (`_together`).
 A complete log starts with genesis (which names the engine version) and ends with `end`,
 whose tick is the first tick not run. `snapshot()`/`restore()` let a world continue
 in another process; asiimov.persist uses them to resume runs after a crash.
