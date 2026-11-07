@@ -120,7 +120,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "11"
+ENGINE_VERSION = "12"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -181,6 +181,7 @@ class Sim:
             raise ValueError(f"order must be one of {ORDERS}")
         self.seed = seed
         self.rng = Rng(seed)
+        self._asks = (-1, {})  # (tick, {ask key: asks so far this tick}), see _ask_roll
         self.mind = mind
         self.order = order
         self.workers = workers  # concurrent mind calls per tick; never changes the log
@@ -938,9 +939,7 @@ class Sim:
             return self._receipt(a, eid, action, False, "not kin")
         if t["inv"]["food"] <= 1:
             return self._receipt(a, eid, action, False, "kin has nothing to spare")
-        stream = f"kin:{t['id']}:{a['id']}"  # keyed: other askers of t don't shift this roll (T22)
-        idx = self.state["tick"]
-        roll = self.rng.at(stream, idx, 0, 999)
+        stream, idx, roll = self._ask_roll(f"kin:{t['id']}:{a['id']}")
         limit = self._kin_limit(t, a)
         if roll < limit:
             t["inv"]["food"] -= 1
@@ -959,6 +958,19 @@ class Sim:
         self._occasion(a, "refused", 450 + (1000 - a["traits"]["agreeableness"]) // 4, t["id"], rid)
         return rid
 
+    def _ask_roll(self, key: str) -> tuple[str, int, int]:
+        """The roll for an ask, keyed by (target, asker, tick) so other askers of the target don't shift
+        it (T22), plus how often this asker already asked this target this tick: a refused ask can
+        wake the mind, which may ask again in the same tick, and must get a fresh roll (engine 12).
+        Only the asker's own asks move that count. Snapshots fall on tick starts, where it is empty."""
+        tick = self.state["tick"]
+        if self._asks[0] != tick:
+            self._asks = (tick, {})
+        n = self._asks[1].get(key, 0)
+        self._asks[1][key] = n + 1
+        stream = key if n == 0 else f"{key}:{n}"
+        return stream, tick, self.rng.at(stream, tick, 0, 999)
+
     def _kin_limit(self, t: dict, a: dict) -> int:
         """How likely family member `t` is to give `a` food when asked, out of 1000 (ask_kin's rule)."""
         return 400 + t["traits"]["agreeableness"] // 2 + self._rel(t, a["id"])["affinity"] // 4
@@ -976,9 +988,7 @@ class Sim:
         if t["inv"]["food"] <= 1:  # they keep one for themselves
             return self._receipt(a, eid, action, False, "nothing to spare", extra=to)
         kin = t["id"] in self.state["families"][a["family"]]["members"]
-        stream = f"share:{t['id']}:{a['id']}"  # keyed: other askers of t don't shift this roll (T22)
-        idx = self.state["tick"]
-        roll = self.rng.at(stream, idx, 0, 999)
+        stream, idx, roll = self._ask_roll(f"share:{t['id']}:{a['id']}")
         if action == "ask_food" and kin:  # the same odds as ask_kin for the same ask (steering, T19)
             limit = self._kin_limit(t, a)
         else:
