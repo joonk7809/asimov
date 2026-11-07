@@ -172,3 +172,76 @@ def test_effort_diagnostic_separates_idle_minds_from_the_economy():
                           "idle_share_by_conscientiousness_quartile": [None, 1.0, 1.0, 0.0],
                           "earner_supply_failed_attempt_share": 1.0,
                           "earner_supply_failed_agent_day_share": 1.0, "futile_repeats": 1, "not_at_market": 1}
+
+
+def _known_people_reference(agent: dict, state: dict) -> set[int]:
+    """known_people before block B8: one regex per name per text (O(agents² × texts)). Kept as the oracle."""
+    import re
+    agents = state["agents"]
+    known = set(state["families"][agent["family"]]["members"]) | {int(k) for k in agent["relationships"]}
+    for text in list(agent["recent"]) + [e["text"] for e in agent["episodes"]]:
+        known |= {o["id"] for o in agents if re.search(rf"\b{re.escape(o['name'])}\b", text)}
+    return known
+
+
+def _name_world(names, texts, kin, rel):
+    agents = [{"id": i, "name": n, "family": 0, "relationships": {}, "recent": [], "episodes": []}
+              for i, n in enumerate(names)]
+    me = agents[0]
+    me["relationships"] = {str(i % len(agents)): {} for i in rel}
+    me["recent"], me["episodes"] = texts[::2], [{"text": t} for t in texts[1::2]]
+    return me, {"agents": agents, "families": {0: {"members": [i % len(agents) for i in kin]}}}
+
+
+def test_known_people_matches_the_regex_per_name_oracle():
+    """Exact equivalence on adversarial names: punctuation at either end, wordless names, unicode
+    letters, repeats, names inside other names, case changes, and texts stitched from name pieces."""
+    from hypothesis import given, settings
+    from hypothesis import strategies as st
+    from asiimov.memory import known_people
+    piece = st.sampled_from(["Anna", "anna", "Dean", "Ann", "Kofi", "Zoë", "ß", "_x", "O'", "-", "'", ".",
+                             " ", "  ", "é", "Mia", "Lia", "Orne", "7", "Anna Dean", "Dean Kofi", "#3"])
+    name = st.lists(piece, min_size=1, max_size=4).map("".join)
+    text = st.lists(st.one_of(piece, st.text(max_size=3)), max_size=12).map("".join)
+
+    @settings(max_examples=3000, deadline=None, database=None)
+    @given(st.lists(name, min_size=1, max_size=12), st.lists(text, max_size=6),
+           st.lists(st.integers(0, 20), max_size=3), st.lists(st.integers(0, 20), max_size=3))
+    def check(names, texts, kin, rel):
+        me, state = _name_world(names, texts, kin, rel)
+        assert known_people(me, state) == _known_people_reference(me, state)
+    check()
+
+
+def test_known_people_matches_the_oracle_in_stub_worlds():
+    """Every reflection of a 100-agent, 3-day stub world, on generated names and real notes."""
+    from asiimov import memory
+    calls = []
+    real = memory.known_people
+
+    def both(agent, state):
+        got = real(agent, state)
+        assert got == _known_people_reference(agent, state)
+        calls.append(len(got))
+        return got
+    import asiimov.sim as sim_mod
+    orig, sim_mod.known_people = sim_mod.known_people, both
+    try:
+        Sim(seed=5, n_agents=100, mind=StubMind()).run(days=3)
+    finally:
+        sim_mod.known_people = orig
+    assert len(calls) >= 250 and max(calls) > 5
+
+
+def test_known_people_does_not_depend_on_hash_seed():
+    """It decides which core memories are kept, so it is world state (L15)."""
+    import os
+    import subprocess
+    import sys
+    code = ("from asiimov.memory import known_people;"
+            "a=[{'id':i,'name':n} for i,n in enumerate(['Anna Dean','Dean Kofi','Mia Orne','Lia Orne','Anna Dean'])];"
+            "me={'family':0,'relationships':{'2':{}},'recent':['met Anna Dean Kofi'],'episodes':[{'text':'Lia Orne!'}]};"
+            "print(sorted(known_people(me,{'agents':a,'families':{0:{'members':[0]}}})))")
+    outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                           env={**os.environ, "PYTHONHASHSEED": str(seed)}).stdout for seed in range(1, 9)}
+    assert outs == {"[0, 1, 2, 3, 4]\n"}, outs

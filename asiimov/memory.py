@@ -4,6 +4,7 @@ Rule: anything code computes on lives in structured state; anything only the min
 is rendered as markdown. Files are rendered from state, so they are versioned by the
 event log for free.
 """
+import functools
 import hashlib
 import re
 
@@ -75,12 +76,33 @@ def named_people(text: str, agents: list, self_id: int) -> list[set[int]]:
     return groups
 
 
+@functools.lru_cache(maxsize=None)
+def _name_matcher(name: str) -> tuple[str | None, frozenset, re.Pattern]:
+    """A name's first word, all its words, and the exact pattern known_people tests it with."""
+    words = re.findall(r"\w+", name)
+    return (words[0] if words else None), frozenset(words), re.compile(rf"\b{re.escape(name)}\b")
+
+
 def known_people(agent: dict, state: dict) -> set[int]:
-    """Everyone the agent's own record mentions: kin, relationships, today's notes and episodes."""
-    agents = state["agents"]
+    """Everyone the agent's own record mentions: kin, relationships, today's notes and episodes.
+
+    A name matches where it occurs as a whole word (_name_matcher's pattern), and then each of its words
+    is a whole word of the text. So only names whose words all occur are tested, with that same pattern:
+    linear in the number of names, where a pattern per name per text was 96% of a 1,000-agent stub day."""
     known = set(state["families"][agent["family"]]["members"]) | {int(k) for k in agent["relationships"]}
+    by_first, wordless = {}, []
+    for o in state["agents"]:
+        first, words, pattern = _name_matcher(o["name"])
+        if first is None:
+            wordless.append((o["id"], pattern))
+        else:
+            by_first.setdefault(first, []).append((o["id"], words, pattern))
     for text in list(agent["recent"]) + [e["text"] for e in agent["episodes"]]:
-        known |= {o["id"] for o in agents if re.search(rf"\b{re.escape(o['name'])}\b", text)}
+        present = set(re.findall(r"\w+", text))
+        for first in present & by_first.keys():
+            known.update(i for i, words, pattern in by_first[first]
+                         if i not in known and words <= present and pattern.search(text))
+        known.update(i for i, pattern in wordless if pattern.search(text))
     return known
 
 
