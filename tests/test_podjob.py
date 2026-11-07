@@ -170,3 +170,20 @@ def test_refuses_bad_keys_reused_names_and_paths_out_of_the_job(pod):
     assert not (root.parent / "escape").exists() and not (root / "escape").exists()
     with pytest.raises(SystemExit):
         podjob.request(rec, "GET", "/jobs/j6/tar?path=../../")
+
+
+def test_a_job_that_ends_while_its_status_is_read_is_done_not_lost(tmp_path, monkeypatch):
+    # The CI race on c81971c: exit missing, then the wrapper writes it and exits before the process scan.
+    spec = importlib.util.spec_from_file_location("pod_agent", AGENT)
+    agent = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(agent)
+    monkeypatch.setattr(agent, "ROOT", str(tmp_path))
+    (tmp_path / "j").mkdir()
+    (tmp_path / "j" / "job.json").write_text(json.dumps({"id": "j", "cmd": "x", "pid": 1, "pid_start": "b:1"}))
+
+    def wrapper_finishes(pgid, start):
+        (tmp_path / "j" / "exit").write_text("0\n")
+        return []
+
+    monkeypatch.setattr(agent, "_members", wrapper_finishes)
+    assert (agent.status("j")["status"], agent.status("j")["rc"]) == ("done", 0)

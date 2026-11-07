@@ -32,16 +32,24 @@ def status(job: str) -> dict:
     d = os.path.join(ROOT, job)
     with open(os.path.join(d, "job.json")) as f:
         out = json.load(f)
-    try:
-        with open(os.path.join(d, "exit")) as f:
-            out.update(status="done", rc=int(f.read().strip()), ended=os.path.getmtime(os.path.join(d, "exit")))
-        return out
-    except (FileNotFoundError, ValueError):
-        pass  # no exit code yet, or a torn write: decide by the process
-    # Running means some process of the job's group is alive. The group is the job's session (pgid = the
-    # wrapper's pid); after a container restart that pid can be reused, so members must be on the same
-    # boot and no older than the wrapper.
-    out["status"] = "running" if _members(out["pid"], out.get("pid_start")) else "lost"
+    # Read the exit code both before and after looking at the processes: the wrapper can write it and exit
+    # in between, and a finished job must not read as lost.
+    for look in (False, True):
+        try:
+            with open(os.path.join(d, "exit")) as f:
+                out.update(status="done", rc=int(f.read().strip()), ended=os.path.getmtime(os.path.join(d, "exit")))
+            return out
+        except (FileNotFoundError, ValueError):
+            pass  # no exit code yet, or a torn write: decide by the process
+        if look:
+            break
+        # Running means some process of the job's group is alive. The group is the job's session (pgid =
+        # the wrapper's pid); after a container restart that pid can be reused, so members must be on the
+        # same boot and no older than the wrapper.
+        if _members(out["pid"], out.get("pid_start")):
+            out["status"] = "running"
+            return out
+    out["status"] = "lost"
     return out
 
 
