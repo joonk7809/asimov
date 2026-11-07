@@ -106,10 +106,14 @@ def test_the_log_resumes_from_any_offset_and_follow_ends_with_the_job(pod):
 
 
 def test_a_job_outlives_its_runner_and_is_still_tracked_after_the_runner_restarts(pod):
-    rec, restart, _ = pod
-    podjob.request(rec, "POST", "/jobs", {"name": "j3", "cmd": "sleep 1; echo finished", "code": _code({})})
+    rec, restart, root = pod
+    # The job waits for the test's go-ahead, not a fixed sleep: on a slow machine the restart alone can
+    # outlast a sleep, and then the job is legitimately done before the status check.
+    podjob.request(rec, "POST", "/jobs", {"name": "j3", "cmd": "until [ -e go ]; do sleep 0.05; done; echo finished",
+                                          "code": _code({})})
     restart()
     assert podjob.request(rec, "GET", "/jobs/j3")["status"] == "running"
+    (root / "j3" / "go").touch()
     s = _until(rec, "j3", "done")
     assert s["rc"] == 0 and podjob.request(rec, "GET", "/jobs/j3/log") == b"finished\n"
 
@@ -147,9 +151,14 @@ def test_kill_returns_only_once_no_process_of_the_job_is_left(pod, cmd):
 
 
 def test_a_job_whose_wrapper_died_but_whose_children_run_on_is_running_not_lost(pod):
-    rec, _, _ = pod
-    s = podjob.request(rec, "POST", "/jobs", {"name": "j9", "cmd": "sleep 30", "code": _code({})})
-    os.kill(s["pid"], 9)  # only the wrapper; its sleep child keeps the group alive
+    rec, _, root = pod
+    # The job says when its child exists: killing the wrapper before it has forked leaves an empty group,
+    # and then "lost" is the right answer.
+    s = podjob.request(rec, "POST", "/jobs", {"name": "j9", "cmd": "sleep 30 & touch started; wait", "code": _code({})})
+    t0 = time.time()
+    while not (root / "j9" / "started").exists() and time.time() - t0 < 10:
+        time.sleep(0.02)
+    os.kill(s["pid"], 9)  # only the wrapper; its children keep the group alive
     time.sleep(0.2)
     assert podjob.request(rec, "GET", "/jobs/j9")["status"] == "running"
     podjob.request(rec, "POST", "/jobs/j9/kill", {}, timeout=60)
