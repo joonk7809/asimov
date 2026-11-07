@@ -148,7 +148,7 @@ class LLMMind:
                            "finish_reason": choice.get("finish_reason")})
         sampling = {"temperature": self.temperature, "top_p": self.top_p, "max_tokens": self.max_tokens,
                     "seed": body["seed"], "structured": self.structured}
-        return MindReply(text.strip(), resp.get("model", self.model), sampling)
+        return MindReply(text.strip(), resp.get("model", self.model), sampling, choice.get("finish_reason"))
 
     def stats(self) -> dict:
         if not self.calls:

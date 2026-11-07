@@ -164,7 +164,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "9": "a852794a80a740798ff7d47b30f8a1346cd6fb2f148d500da799ab52d4cc8179",
           "10": "afe795e982af567282a9742b9b5488e0a377cdfce28e8652bb6c564cdd5a39ac",
           "11": "25de1d51e9406c0aeb94bdae72a9c31a000fd4bca37d133846943404207e8ef5",  # T22 keyed draws
-          "12": "a3e7b1d70f26733666ce084896eafa6adfc259a54bf33597b12bda520622ae53"}  # a repeat ask in a tick rolls fresh
+          "12": "a3e7b1d70f26733666ce084896eafa6adfc259a54bf33597b12bda520622ae53",  # a repeat ask in a tick rolls fresh
+          "13": "584b0b9d44368685d8b1ec6b439d3b34f702eb3ddce73cab95005642a94c4584"}  # T21 reflect retry, finish_reason
 
 
 def test_log_changes_bump_the_engine_version():

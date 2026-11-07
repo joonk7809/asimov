@@ -16,6 +16,7 @@ in another process; asiimov.persist uses them to resume runs after a crash.
 import hashlib
 import json
 from collections import defaultdict
+from dataclasses import replace
 
 from .events import Event, canonical
 from .memory import (REFLECT_ASK, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
@@ -120,9 +121,18 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "12"
+ENGINE_VERSION = "13"
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
+
+
+def _parse(reply) -> dict | None:
+    """A mind reply as the engine reads it: a JSON object, or None."""
+    try:
+        out = json.loads(reply.raw_output)
+    except (ValueError, RecursionError):  # JSONDecodeError, or nesting deep enough to blow the stack
+        return None
+    return out if isinstance(out, dict) else None
 
 
 def _clamp(v, lo=0, hi=1000):
@@ -286,6 +296,16 @@ class Sim:
         """Ask every pending request at once, then validate and apply replies in `_order`."""
         aids = sorted(self.pending)
         replies = dict(zip(aids, dispatch(self.mind, [self.pending[i][0] for i in aids], self.workers)))
+        # A reflection cut off at max_tokens, or that doesn't parse, is asked once more with a keyed seed
+        # (T21): the prompt-hash seed would repeat the same loop. Asked together, applied in _order below.
+        retry = {}
+        for aid in aids:
+            req = self.pending[aid][0]
+            if req.kind == "reflect" and (replies[aid].finish_reason == "length" or _parse(replies[aid]) is None):
+                day = self.state["tick"] // TICKS_PER_DAY
+                retry[aid] = replace(req, attempt=1, seed=self.rng.raw(f"reflect-retry:{aid}", day) % 2 ** 32)
+        r_ids = sorted(retry)
+        retried = dict(zip(r_ids, dispatch(self.mind, [retry[i] for i in r_ids], self.workers)))
         pending, self.pending = self.pending, {}
         for aid in self._order(aids):
             req, parents, prompt_tokens, apply = pending[aid]
@@ -293,17 +313,19 @@ class Sim:
             data = {"kind": req.kind}
             if req.kind == "deliberate":  # what the prompt didn't offer, so infeasible choices are countable
                 data["withheld"] = [x for x in DELIBERATE_ACTIONS if x not in req.view["offer"]]
-            eid = self._emit(f"mind_{req.kind}", "mind", aid, data, parents, mind={
-                "model": reply.model, "prompt_hash": req.prompt_hash, "prompt_tokens": prompt_tokens,
-                "output_tokens": tokens(reply.raw_output), "sampling": reply.sampling,
-                "raw_output": reply.raw_output})
-            try:
-                out = json.loads(reply.raw_output)
-                if not isinstance(out, dict):
-                    out = None
-            except (ValueError, RecursionError):  # JSONDecodeError, or nesting deep enough to blow the stack
-                out = None
-            apply(eid, out)
+            if aid in retried:
+                data["retried"] = True  # superseded by the next event; readers of reflections skip it
+            eid = self._emit_mind(req, reply, data, parents, prompt_tokens)
+            if aid in retried:
+                req, reply = retry[aid], retried[aid]
+                eid = self._emit_mind(req, reply, {"kind": req.kind, "attempt": 1}, [eid], prompt_tokens)
+            apply(eid, _parse(reply))
+
+    def _emit_mind(self, req: MindRequest, reply, data: dict, parents, prompt_tokens: int) -> int:
+        return self._emit(f"mind_{req.kind}", "mind", req.agent_id, data, parents, mind={
+            "model": reply.model, "prompt_hash": req.prompt_hash, "prompt_tokens": prompt_tokens,
+            "output_tokens": tokens(reply.raw_output), "sampling": reply.sampling,
+            "finish_reason": reply.finish_reason, "raw_output": reply.raw_output})
 
     # ------------------------------------------------------------------ views
     def _hour(self):
