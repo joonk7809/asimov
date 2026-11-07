@@ -86,6 +86,7 @@ def share_world(roll_under):
     for x in (a, b):  # both stay at the plaza
         x.update(activity="socialize", plan=[{"activity": "socialize", "start_h": 0, "end_h": 24}])
     sim.rng.draw = lambda stream, lo, hi: (0, 0 if roll_under else 999)
+    sim.rng.at = lambda stream, index, lo, hi: 0 if roll_under else 999  # the keyed form (engine 11)
     return sim, a, b
 
 

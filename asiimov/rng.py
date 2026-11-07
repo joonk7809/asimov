@@ -24,6 +24,14 @@ class Rng:
         self.counters[stream] = index + 1
         return index, lo + self.raw(stream, index) % (hi - lo + 1)
 
+    def at(self, stream: str, index: int, lo: int, hi: int) -> int:
+        """A keyed draw: lo <= value <= hi from (stream, index) alone, without advancing any counter.
+        For draws that must not depend on how many draws came before (a twin with one more person
+        at a place must not shift anyone else's dice). The caller logs (stream, index)."""
+        if hi < lo:
+            raise ValueError("empty range")
+        return lo + self.raw(stream, index) % (hi - lo + 1)
+
     def normal_milli(self, stream: str, sd: int) -> int:
         """Approximate N(0, sd) in integers (Irwin-Hall sum of 12 uniforms)."""
         total = sum(self.draw(stream, 0, 9999)[1] for _ in range(12))

@@ -149,9 +149,11 @@ def test_stub_world_keeps_ledger_and_invariants_for_a_week():
 
 
 # ------------------------------------------------------------------ determinism
-def test_world_hash_does_not_depend_on_python_hash_seed():
+@pytest.mark.parametrize("order", ["id", "shuffle"])
+def test_world_hash_does_not_depend_on_python_hash_seed(order):
     code = ("from asiimov.sim import Sim; from asiimov.minds import StubMind; "
-            "s = Sim(4, 40, StubMind()); s.run(2, {200: [{'kind': 'fire', 'family': 1}]}); print(s.state_hash())")
+            f"s = Sim(4, 40, StubMind(), order={order!r}); s.run(2, {{200: [{{'kind': 'fire', 'family': 1}}]}}); "
+            "print(s.state_hash())")
     out = set()
     for h in ("0", "1", "987654"):
         env = dict(os.environ, PYTHONHASHSEED=h)
