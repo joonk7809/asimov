@@ -65,6 +65,7 @@ ACT_FIELDS = {
     "eat": ("household",),
     "sleep": (),
     "wake": ("place",),
+    "arrive": ("place",),
     "produce": ("food", "coin"),
     "sell": ("food",),
 }

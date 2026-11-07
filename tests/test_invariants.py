@@ -28,7 +28,7 @@ from asiimov.rng import Rng
 from asiimov.sim import FARMER_SELL_PRICE, FOOD_PRICE, TICKS_PER_DAY, Sim
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORE = ["rng.py", "params.py", "sim.py", "memory.py", "events.py", "replay.py"]
+CORE = ["rng.py", "params.py", "sim.py", "memory.py", "events.py", "replay.py", "worldmap.py"]
 SLOW = settings(max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 
 
@@ -204,6 +204,7 @@ def test_kin_affinity_stays_bounded():
     sim = Sim(3, 30, StubMind())
     fam = next(f for f in sim.state["families"] if len(f["members"]) >= 2)
     a, t = (sim.state["agents"][i] for i in fam["members"][:2])
+    a["place"], t["place"], t["asleep"] = "plaza", "plaza", False  # ask_kin needs them together
     for _ in range(200):
         t["inv"]["food"] = 5
         sim._resolve(a, {"action": "ask_kin", "target": t["id"]}, 0)

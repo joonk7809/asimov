@@ -23,6 +23,7 @@ from .memory import (REFLECT_ASK, assemble_prompt, is_bare_value, known_people, 
 from .minds import MindRequest, ReplayDivergence, dispatch
 from .params import generate_population
 from .rng import Rng
+from .worldmap import build_map, position, travel_ticks
 
 TICKS_PER_DAY = 144
 VILLAGE_WAKE_MIN = 390  # 06:30
@@ -48,6 +49,7 @@ PERSON_STEPS = ("seek", "avoid", "give_food", "give_coin", "ask_kin", "ask_food"
 STEP_DOS = ACTIVITIES + PERSON_STEPS
 INSTANT_STEPS = ("ask_kin", "ask_food", "buy_from", "steal")
 REACH_STEPS = ("seek", "give_food", "give_coin")  # go where the target is, then act when both are there
+WAIT_STEPS = REACH_STEPS + ("shop",)  # steps that wait to arrive somewhere, and fail if their time runs out
 STEP_TICKS = {"avoid": 24}  # how long a step lasts (activities, avoid) or may take to get done (the rest)
 DEFAULT_STEP_TICKS = 18     # 3 hours
 MAX_STEPS = 4
@@ -83,7 +85,7 @@ DELIBERATE_ACTIONS = ("buy_food", "go_market", "ask_kin", "ask_food", "buy_from"
 ACTION_CLAUSES = {
     "buy_food": "buy_food buys food if you are at the market, carry enough coin and it has some",
     "go_market": "go_market takes you to the market, where you can buy food if you carry enough coin and it has some",
-    "ask_kin": "ask_kin asks a family member for 1 food",  # not "here": ask_kin has no place check (PR #22 review)
+    "ask_kin": "ask_kin asks a family member here for 1 food",  # "here" since the map's place check
     "ask_food": "ask_food asks a person here for 1 food; they may say no",
     "buy_from": f"buy_from offers a person here {FOOD_PRICE} coin for 1 food; they may say no",
     "steal": "steal tries to take 1 food from a person here, and you may be caught",
@@ -120,7 +122,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "11"
+ENGINE_VERSION = "map-1"  # branch label on engine 11 (plan/t6-map-spec.md); takes the next integer when it merges
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -164,15 +166,16 @@ class Sim:
                 "rhythm_event": None,
                 "inv": {"food": p["start"]["food"], "coin": p["start"]["coin"]},
                 "work_progress": 0, "plan": [], "plan_event": None, "override": None,
-                "activity": "sleep", "place": fam["home"], "home": fam["home"],
+                "activity": "sleep", "place": fam["home"], "home": fam["home"], "route": None,
                 "soul": render_soul(p), "core": [], "recent": [], "episodes": [],
                 "relationships": {}, "beliefs": {}, "cooldown_until": 0,
                 "last_food_loss_event": None, "belief_causes": {}, "habit": None,
                 "intent": None, "occasion": None, "market_seen": None, "noticed": {"day": -1, "ids": []}, "calls": {"day": -1, "n": 0},
             })
             self.state["agents"].append(a)
+        self.map = build_map([f["home"] for f in pop["families"]])
         self._emit("genesis", "chance", None,
-                   {"engine": ENGINE_VERSION, "seed": seed, "order": order, "population": pop}, [])
+                   {"engine": ENGINE_VERSION, "seed": seed, "order": order, "population": pop, "map": self.map}, [])
         for a in self.state["agents"]:
             self._schedule_wake(a, 0, first=True)
 
@@ -210,6 +213,7 @@ class Sim:
         sim = cls.__new__(cls)
         sim._setup(snap["seed"], mind, expected, snap["order"], workers)
         sim.state = json.loads(json.dumps(snap["state"]))
+        sim.map = build_map([f["home"] for f in sim.state["families"]])
         sim.rng.counters = dict(snap["rng"])
         sim.events = list(events[:snap["n_events"]])
         for d, h, act, n in snap["activity"]:
@@ -351,7 +355,8 @@ class Sim:
                      " A shop block takes you to the market, where you buy the food you need.")
         elif kind == "reflect":
             rest += REFLECT_ASK
-        head = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. You are at {a['place']}. "
+        where = f"You are at {a['place']}." if a["place"] else f"You are on your way to the {a['route']['to']}."
+        head = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. {where} "
                 f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
                 f"Here: ")
         room = situation_budget(kind) * 4 - len(f"# Now ({kind})\n") - len(head) - len(rest) - 2
@@ -407,7 +412,7 @@ class Sim:
         # (llm.PERSON_ACTIONS) and `withheld` agree (PR #22 review: 7.6% of famine deliberations).
         if not view["present"]:
             drop |= {"ask_food", "buy_from", "steal"}
-        if not view["kin"]:
+        if not any(p["kin"] for p in view["present"]):  # family here (the map's place check)
             drop.add("ask_kin")
         if "people" in view and not view["people"]:  # set by _situation; _request checks the offer again after it
             drop |= {"give_food", "give_coin", "seek", "avoid"}
@@ -457,9 +462,13 @@ class Sim:
         agents = st["agents"]
         for act in player_actions:
             self._player(act)
-        occupancy = defaultdict(list)
         for a in agents:
-            occupancy[a["place"]].append(a["id"])
+            if a["route"] and tick >= a["route"]["arrive"]:
+                self._arrive(a)
+        occupancy = defaultdict(list)  # who has arrived where; walkers are nowhere
+        for a in agents:
+            if a["place"] is not None:
+                occupancy[a["place"]].append(a["id"])
 
         for a in agents:
             self._body(a, occupancy)
@@ -468,7 +477,10 @@ class Sim:
                     self._wake(a, occupancy)
                 continue
             if tick >= a["sleep_tick"] or a["needs"]["fatigue"] >= 1000:
-                self._sleep(a, occupancy)
+                if a["place"] == a["home"]:
+                    self._sleep(a, occupancy)
+                else:
+                    self._bedtime_walk(a)
                 continue
             self._act(a)
             self._eat(a)
@@ -476,7 +488,7 @@ class Sim:
 
         self._commit()
         self._talk()
-        for a in agents:  # what everyone awake at the market saw of its stock as the tick ended
+        for a in agents:  # what everyone awake at the market saw of its stock as the tick ended (walkers: None)
             if a["place"] == "market" and not a["asleep"]:
                 a["market_seen"] = {"tick": tick, "food": st["market_food"]}
         for a in agents:
@@ -486,6 +498,56 @@ class Sim:
             self._spoil()
             self._emit("checkpoint", "rule", None, {"day": tick // TICKS_PER_DAY, "hash": self.state_hash()})
         st["tick"] = tick + 1
+
+    # ------------------------------------------------------------------ map
+    def _dest(self, a: dict) -> str:
+        """Where the agent is, or where it is walking to."""
+        return a["route"]["to"] if a["route"] else a["place"]
+
+    def _pos(self, a: dict) -> list[int]:
+        places = self.map["places"]
+        if not a["route"]:
+            return places[a["place"]]["anchor"]
+        return position(a["route"], places[a["route"]["to"]]["anchor"], self.state["tick"])
+
+    def _together(self, a: dict, b: dict) -> bool:
+        """Both have arrived at one place. Two walkers are never together. Every person action, talk and
+        notice reads presence through here or through the tick's occupancy, which holds arrivals only."""
+        return a["place"] is not None and a["place"] == b["place"]
+
+    def _set_activity(self, a: dict, activity: str, place: str, parents):
+        """Start `activity` at `place`: there at once if the agent is already there or headed there, else a
+        walk from where it is now (which turns a walker around mid-route). The event's `arrive` is the tick
+        it gets there."""
+        tick = self.state["tick"]
+        if place != self._dest(a):
+            frm = self._pos(a)
+            arrive = tick + travel_ticks(frm, self.map["places"][place]["anchor"])
+            a["place"], a["route"] = (place, None) if arrive == tick else \
+                (None, {"from": frm, "to": place, "depart": tick, "arrive": arrive, "event": None})
+        a["activity"] = activity
+        data = {"activity": activity, "place": place, "arrive": a["route"]["arrive"] if a["route"] else tick}
+        new_route = a["route"] is not None and a["route"]["depart"] == tick
+        if new_route:  # where the walk starts, so a reader of the log can place the walker at any tick
+            data["from"] = a["route"]["from"]
+        eid = self._emit("activity", "rule", a["id"], data, parents)
+        if new_route:
+            a["route"]["event"] = eid
+
+    def _bedtime_walk(self, a: dict):
+        """Bedtime away from home: the world walks the agent home, and it eats on the way. It reflects and
+        falls asleep when it gets there. No plan, step or habit authors these ticks."""
+        if self._dest(a) != a["home"]:
+            self._set_activity(a, "home", a["home"], [a["rhythm_event"]])
+        self._eat(a)
+
+    def _arrive(self, a: dict):
+        """At the start of the arrival tick, before anyone acts. A planned shop block buys on arrival."""
+        r = a["route"]
+        a["place"], a["route"] = r["to"], None
+        self._emit("arrive", "rule", a["id"], {"place": a["place"]}, [r["event"]])
+        if a["activity"] == "shop" and a["place"] == "market" and self._running(a)[1] is None:
+            self._buy(a, a["plan_event"])  # the receipt cites the plan, as a shop block's always has
 
     def _schedule_wake(self, a: dict, after: int, first: bool = False):
         """Pick the next wake tick at the agent's preferred time, after enough sleep."""
@@ -575,12 +637,12 @@ class Sim:
     def _step_activity(self, a: dict, step: dict) -> tuple[str, str]:
         """What a step has the agent do, and where. Reads where its target is now (L2); no side effects."""
         do, t = step["do"], step["target"]
-        if do in INSTANT_STEPS:  # acts where the agent already is
-            return a["activity"], a["place"]
-        if do in REACH_STEPS:
-            return "visit", self.state["agents"][t]["place"]
+        if do in INSTANT_STEPS:  # acts where the agent already is, or is headed
+            return a["activity"], self._dest(a)
+        if do in REACH_STEPS:  # where the target is, or is walking to
+            return "visit", self._dest(self.state["agents"][t])
         if do == "avoid":
-            return ("explore", ACTIVITY_PLACE["explore"]) if self.state["agents"][t]["place"] == a["home"] \
+            return ("explore", ACTIVITY_PLACE["explore"]) if self._dest(self.state["agents"][t]) == a["home"] \
                 else ("home", a["home"])
         return do, self._place(a, do)
 
@@ -597,14 +659,11 @@ class Sim:
             place = self._place(a, activity)
         else:
             (activity, place), parent = self._step_activity(a, step), holder["event"]
-        changed = activity != a["activity"] or place != a["place"]
-        if changed:
-            a["activity"], a["place"] = activity, place
-            self._emit("activity", "rule", a["id"], {"activity": activity, "place": place},
-                       [parent] if parent is not None else [])
-            if activity == "shop" and step is None:  # a planned shop block buys on arrival
-                self._buy(a, parent)
-        if activity == "work" and a["role"] not in ("child", "elder"):
+        if activity != a["activity"] or place != self._dest(a):
+            self._set_activity(a, activity, place, [parent] if parent is not None else [])
+            if activity == "shop" and step is None and a["place"] == "market":  # a planned shop block buys
+                self._buy(a, parent)                                             # here, or on arrival
+        if activity == "work" and a["role"] not in ("child", "elder") and a["place"] == WORKPLACE[a["role"]]:
             a["work_progress"] += a["body"]["strength"] * a["body"]["stamina"] // 1000
             if a["work_progress"] >= 3000:
                 a["work_progress"] -= 3000
@@ -625,14 +684,14 @@ class Sim:
     def _progress(self, a: dict, author: str, step: dict, holder: dict):
         """Advance the running step after the agent has acted this tick."""
         do, t = step["do"], step["target"]
-        if do == "shop":
+        if do == "shop" and a["place"] == "market":
             return self._end_step(a, author, *self._buy(a, holder["event"]))
         if do in INSTANT_STEPS:
             rid = self._person_act(a, do, t, holder["event"])
             return self._end_step(a, author, self.events[rid].data["ok"], self.events[rid].data["why"])
         if do in REACH_STEPS:
             b = self.state["agents"][t]
-            if b["place"] == a["place"] and not b["asleep"]:
+            if self._together(a, b) and not b["asleep"]:
                 if do == "seek":
                     self._meet(a, b, holder["event"])
                     return self._end_step(a, author, True, "met")
@@ -640,7 +699,7 @@ class Sim:
                 return self._end_step(a, author, self.events[rid].data["ok"], self.events[rid].data["why"])
         holder["left"] -= 1
         if holder["left"] <= 0:  # activities and avoid are done when their time is up; the rest ran out of it
-            self._end_step(a, author, do not in REACH_STEPS, "time ran out" if do in REACH_STEPS else "done")
+            self._end_step(a, author, do not in WAIT_STEPS, "time ran out" if do in WAIT_STEPS else "done")
 
     def _end_step(self, a: dict, author: str, ok: bool, why: str):
         if author == "deliberate":
@@ -928,7 +987,7 @@ class Sim:
             return self._ask_share(a, t, action, eid)
         if action == "steal":
             # Live places, not the tick-start occupancy: the target may already have moved this tick.
-            if t["place"] != a["place"]:
+            if not self._together(a, t):
                 return self._receipt(a, eid, action, False, "target not here")
             if t["inv"]["food"] <= 0:
                 return self._receipt(a, eid, action, False, "target has no food")
@@ -936,6 +995,10 @@ class Sim:
         fam = self.state["families"][a["family"]]["members"]
         if target not in fam:
             return self._receipt(a, eid, action, False, "not kin")
+        if not self._together(a, t):  # the map's place check (plan/t6-map-spec.md section 5)
+            return self._receipt(a, eid, action, False, "target not here", extra={"to": t["id"]})
+        if t["asleep"]:
+            return self._receipt(a, eid, action, False, "target asleep", extra={"to": t["id"]})
         if t["inv"]["food"] <= 1:
             return self._receipt(a, eid, action, False, "kin has nothing to spare")
         stream = f"kin:{t['id']}:{a['id']}"  # keyed: other askers of t don't shift this roll (T22)
@@ -967,7 +1030,7 @@ class Sim:
         """ask_food or buy_from: ask a person here, kin or not, for 1 food (buy_from pays FOOD_PRICE coin
         for it). Code decides with a seeded draw logged on the receipt; a refusal is the "refused" occasion."""
         to = {"to": t["id"]}
-        if t["place"] != a["place"]:  # live places (L2)
+        if not self._together(a, t):  # live places (L2)
             return self._receipt(a, eid, action, False, "target not here", extra=to)
         if t["asleep"]:
             return self._receipt(a, eid, action, False, "target asleep", extra=to)
@@ -1068,7 +1131,7 @@ class Sim:
         agents = self.state["agents"]
         by_place = defaultdict(list)
         for a in agents:
-            if not a["asleep"] and a["place"] not in (a["home"],) and a["activity"] != "work":
+            if not a["asleep"] and a["place"] not in (a["home"], None) and a["activity"] != "work":
                 by_place[a["place"]].append(a["id"])
         for place in sorted(by_place):
             ids = by_place[place]
