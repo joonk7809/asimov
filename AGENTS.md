@@ -37,3 +37,4 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
     python -m asiimov.fork --base runs/demo/events.jsonl --out runs/twin --fire 2@1 --pod POD_ID   # twin: served where prompts match, live elsewhere (tests 8, 9, 15)
     python -m asiimov.propagation --agents 100 --seed 1 --fire all@1 --out runs/prop   # who acts differently 1, 3, 7 days after a fire (stub twins, $0)
     python -m asiimov.soak --agents 100 --days 24 --seed 1 --out runs/soak   # long run: invariants every tick, replay from disk
+    python -m asiimov.viewer runs/demo/events.jsonl --out runs/demo/view.html   # read-only page: map, timelines, minds, causes (any engine)

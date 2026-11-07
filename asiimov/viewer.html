@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World replay viewer</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #dddcd6; --soft: #efeee9;
+  --accent: #2f5fd0; --warn: #b4441c; --ok: #2c7a4b; --hl: #fff4c2;
+  --r0: #2f5fd0; --r1: #d9822b; --r2: #2c9a7a; --r3: #b54aa6; --r4: #c23b3b; --r5: #7a8a1f; --r6: #6b6b66;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9b9a93; --line: #34342f; --soft: #2a2a27;
+    --accent: #7ea2ff; --warn: #ff8a5c; --ok: #6fcf97; --hl: #4a4220;
+    --r0: #7ea2ff; --r1: #f0a45a; --r2: #4fc8a3; --r3: #d77cc9; --r4: #ef6b6b; --r5: #b5c64a; --r6: #a3a29b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9b9a93; --line: #34342f; --soft: #2a2a27;
+  --accent: #7ea2ff; --warn: #ff8a5c; --ok: #6fcf97; --hl: #4a4220;
+  --r0: #7ea2ff; --r1: #f0a45a; --r2: #4fc8a3; --r3: #d77cc9; --r4: #ef6b6b; --r5: #b5c64a; --r6: #a3a29b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+header h1 { font-size: 16px; margin: 0; }
+header .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.warnbadge { color: var(--warn); }
+main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+@media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 8px; }
+.controls input[type=range] { flex: 1 1 220px; min-width: 0; accent-color: var(--accent); }
+button, select, input[type=search] { font: inherit; color: var(--ink); background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
+button:hover { border-color: var(--accent); }
+.clock { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 132px; }
+svg { width: 100%; height: auto; display: block; }
+.place rect { fill: var(--soft); stroke: var(--line); }
+.place.sel rect { stroke: var(--accent); stroke-width: 2; }
+.place text { fill: var(--muted); font-size: 11px; }
+.place text.big { font-size: 13px; fill: var(--ink); font-weight: 600; }
+.dot { cursor: pointer; }
+.dot.sel { stroke: var(--ink); stroke-width: 2.5; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+.note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+.tabs button.on { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+.list { max-height: 68vh; overflow: auto; }
+.ev { padding: 4px 6px; border-bottom: 1px solid var(--soft); cursor: pointer; }
+.ev:hover { background: var(--soft); }
+.ev.now { background: var(--hl); }
+.ev .t { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-right: 6px; }
+.ev .k { font-size: 11px; color: var(--muted); margin-right: 4px; }
+.ev.mind .k { color: var(--accent); font-weight: 600; }
+.ev.fail .k { color: var(--warn); }
+.reason { display: block; color: var(--muted); font-style: italic; margin: 2px 0 0 0; overflow-wrap: anywhere; }
+.day { position: sticky; top: 0; background: var(--panel); font-weight: 600; font-size: 12px; padding: 6px 6px 2px; border-bottom: 1px solid var(--line); }
+a.p { color: var(--accent); cursor: pointer; text-decoration: none; }
+a.p:hover { text-decoration: underline; }
+.traits { display: grid; grid-template-columns: max-content 1fr max-content; gap: 2px 8px; font-size: 12px; align-items: center; margin: 6px 0; }
+.bar { height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; }
+.bar b { display: block; height: 100%; background: var(--accent); }
+pre { background: var(--soft); padding: 8px; border-radius: 6px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.filters { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; margin-bottom: 6px; align-items: center; }
+.filters input[type=search] { flex: 1 1 160px; min-width: 0; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 12px; }
+.empty { color: var(--muted); padding: 8px 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>World replay viewer</h1>
+  <span class="meta" id="meta"></span>
+</header>
+<main>
+  <section class="card">
+    <div class="controls">
+      <button id="play" title="Play / pause (space)">▶</button>
+      <select id="speed" title="Sim time per second">
+        <option value="1">10 min/s</option><option value="6" selected>1 h/s</option>
+        <option value="36">6 h/s</option><option value="144">1 day/s</option>
+      </select>
+      <button id="prevday" title="Previous day">«</button>
+      <button id="prev" title="Back one tick (←)">‹</button>
+      <span class="clock" id="clock"></span>
+      <button id="next" title="Forward one tick (→)">›</button>
+      <button id="nextday" title="Next day">»</button>
+      <input type="range" id="scrub" min="0" value="0">
+    </div>
+    <svg id="map" role="img" aria-label="Schematic map of places with villagers"></svg>
+    <div class="legend" id="legend"></div>
+    <p class="note">Schematic: the engine has no coordinates yet, so places are named boxes, not geography. A hollow dot is asleep. Click a villager or a place.</p>
+  </section>
+  <section class="card">
+    <div class="tabs">
+      <button data-tab="agent">Villager</button>
+      <button data-tab="feed">Village feed</button>
+      <button data-tab="place">Place</button>
+      <button data-tab="event">Event</button>
+    </div>
+    <div id="pane"></div>
+  </section>
+</main>
+<script id="view" type="application/json">/*__VIEW__*/null</script>
+<script>
+"use strict";
+const V = JSON.parse(document.getElementById("view").textContent);
+const TPD = V.ticks_per_day, END = V.end_tick;
+const E = V.events, A = V.agents;
+const byId = new Map(E.map(e => [e[0], e]));
+const ROLES = [...new Set(A.map(a => a.role))].sort();
+const roleColor = r => `var(--r${ROLES.indexOf(r) % 7})`;
+const famOf = id => V.families[A[id].family];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const who = id => (id === null || id === undefined || !A[id]) ? "nobody" : `<a class="p" data-agent="${id}">${esc(A[id].name)} #${id}</a>`;
+const clock = t => { const m = (t % TPD) * 10; return `day ${Math.floor(t / TPD)} ${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+const evLink = id => `<a class="p" data-ev="${id}">#${id}</a>`;
+
+// ---------------------------------------------------------------- who is where (moves come from the log)
+function posAt(aid, t) {
+  const m = V.moves[aid]; let lo = 0, hi = m.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (m[mid][0] <= t) lo = mid; else hi = mid - 1; }
+  return m[lo];
+}
+
+// ---------------------------------------------------------------- reading mind outputs and events
+function parseRaw(m) { if (!m || m.raw == null) return null; try { return JSON.parse(m.raw); } catch (_) { return null; } }
+function involved(e) {
+  const d = e[5] || {}, out = new Set();
+  if (e[4] !== null) out.add(e[4]);
+  for (const k of ["with", "to", "from", "target"]) if (Number.isInteger(d[k])) out.add(d[k]);
+  if (e[2] === "fire") for (const m of V.families[d.family].members) out.add(m);
+  if (e[2] === "talk") for (const [x] of d.gossip || []) out.add(x);
+  const o = parseRaw(e[7]); if (o && Number.isInteger(o.target)) out.add(o.target);
+  return out;
+}
+const CAT = {
+  mind: k => k.startsWith("mind_"),
+  social: k => ["talk", "meet", "snub"].includes(k),
+  acts: k => ["receipt", "intent_set", "intent_done", "intent_failed", "intent_dropped", "plan_receipt"].includes(k),
+  world: k => ["fire", "spoil", "genesis", "end", "checkpoint"].includes(k),
+  routine: k => ["activity", "wake", "sleep", "eat", "produce", "sell", "intent_step", "day_rhythm"].includes(k),
+};
+const catOf = k => Object.keys(CAT).find(c => CAT[c](k)) || "acts";
+
+function describe(e) {
+  const [id, tick, k, origin, actor, d, parents, m] = e, a = who(actor);
+  const o = parseRaw(m);
+  const rawFallback = () => m && m.raw != null ? `<span class="reason">unparsed output: ${esc(String(m.raw).slice(0, 300))}</span>` : "";
+  switch (k) {
+    case "genesis": return `world begins: engine ${esc(d.engine)}, seed ${esc(d.seed)}, order ${esc(d.order)}`;
+    case "end": return `recording ends (final hash ${esc(String(d.hash).slice(0, 12))}…)`;
+    case "checkpoint": return `end of day ${d.day} (hash ${esc(String(d.hash).slice(0, 12))}…)`;
+    case "day_rhythm": return `${a}'s next wake set for ${clock(d.wake_tick)}`;
+    case "wake": return `${a} woke at ${esc(d.place)}`;
+    case "sleep": return `${a} went to sleep (${d.promoted} memory kept${d.rejected ? `, ${d.rejected} rejected` : ""}${d.unknown_person ? `, ${d.unknown_person} named a stranger` : ""})`;
+    case "activity": return `${a}: ${esc(d.activity)} at ${esc(d.place)}`;
+    case "eat": return `${a} ate${Number.isInteger(d.household) ? ` from ${who(d.household)}'s household food` : ""}`;
+    case "produce": return `${a} made ${d.food ? d.food + " food" : d.coin + " coin"}`;
+    case "sell": return `${a} sold ${d.food} food to the market`;
+    case "spoil": return `market spoilage: ${d.market_food_lost} food lost (cap ${d.cap})`;
+    case "fire": return `fire burns the food of the ${esc(V.families[d.family].surname)} family (${V.families[d.family].members.map(who).join(", ")})`;
+    case "talk": return `${a} talked with ${who(d.with)} at ${esc(d.place)}` + ((d.gossip || []).length ? `; gossip: ${d.gossip.map(([x, b]) => `${who(x)} now believes ${esc(b)}`).join("; ")}` : "");
+    case "meet": return `${a} met ${who(d.with)} at ${esc(d.place)}`;
+    case "snub": return `${a} turned away from ${who(d.with)}`;
+    case "plan_receipt": return `${a}'s plan: ${d.ok ? `${d.blocks} block(s) accepted` : "unusable"}${d.dropped ? `, ${d.dropped} dropped` : ""}`;
+    case "receipt": return `${a} ${esc(d.action)}${Number.isInteger(d.to) ? " → " + who(d.to) : ""}: <b>${d.ok ? "ok" : "failed"}</b> (${esc(d.why)})`;
+    case "intent_set": return `${a} set a goal: “${esc(d.goal || "(none)")}” — ${(d.steps || []).map(s => esc(s.do) + (Number.isInteger(s.target) ? " " + who(s.target) : "")).join(", then ")}${d.dropped ? ` (${d.dropped} step(s) dropped)` : ""}`;
+    case "intent_step": return `${a} step ${d.i + 1}: ${esc(d.do)}${d.why ? ` (${esc(d.why)})` : ""}`;
+    case "intent_done": return `${a} finished their intention (${d.steps} step(s))`;
+    case "intent_failed": return `${a}'s intention failed at ${esc(d.do)}: ${esc(d.why)}`;
+    case "intent_dropped": return `${a} dropped their intention (${esc(d.why)})`;
+    case "mind_plan":
+      if (!o || !Array.isArray(o.plan)) return `${a} planned the day` + rawFallback();
+      return `${a} planned: ` + (o.plan.map(b => `${esc(b.activity)} ${b.start_h}–${b.end_h}h`).join(", ") || "nothing");
+    case "mind_deliberate": {
+      if (!o) return `${a} deliberated` + rawFallback();
+      const tgt = Number.isInteger(o.target) ? " " + who(o.target) : "";
+      const then = (o.then || []).map(s => esc(s.do || s) + (Number.isInteger(s.target) ? " " + who(s.target) : "")).join(", ");
+      const held = (d.withheld || []).length ? `<span class="sub"> (not offered: ${d.withheld.map(esc).join(", ")})</span>` : "";
+      return `${a} decided: <b>${esc(o.action)}</b>${tgt}${o.goal ? `; goal “${esc(o.goal)}”` : ""}${then ? `; then ${then}` : ""}${held}` +
+        (o.reason ? `<span class="reason">“${esc(o.reason)}”</span>` : "");
+    }
+    case "mind_reflect":
+      if (!o) return `${a} reflected` + rawFallback();
+      return `${a} reflected` + (o.summary ? `<span class="reason">“${esc(o.summary)}”</span>` : "") +
+        ((o.core || []).length ? `<span class="reason">core: ${o.core.map(c => "“" + esc(c) + "”").join(" ")}</span>` : "");
+    default: return `${a ? a + " " : ""}${esc(k)} ${esc(JSON.stringify(d))}`;
+  }
+}
+function evRow(e, hl) {
+  const fail = (e[2] === "receipt" && e[5].ok === false) || e[2] === "intent_failed";
+  return `<div class="ev${e[2].startsWith("mind_") ? " mind" : ""}${fail ? " fail" : ""}${hl ? " now" : ""}" data-open="${e[0]}">` +
+    `<span class="t">${clock(e[1])}</span><span class="k">${esc(e[2])}</span>${describe(e)}</div>`;
+}
+
+// ---------------------------------------------------------------- indexes built once
+const byAgent = A.map(() => []);
+for (const e of E) for (const x of involved(e)) if (byAgent[x]) byAgent[x].push(e);
+let children = null;
+function kids(id) {
+  if (!children) { children = new Map(); for (const e of E) for (const p of e[6]) { if (!children.has(p)) children.set(p, []); children.get(p).push(e[0]); } }
+  return children.get(id) || [];
+}
+const firstAt = t => { let lo = 0, hi = E.length; while (lo < hi) { const m = (lo + hi) >> 1; if (E[m][1] < t) lo = m + 1; else hi = m; } return lo; };
+
+// ---------------------------------------------------------------- state
+const S = { t: 0, agent: null, place: null, feedPlace: null, ev: null, tab: "feed", playing: false,
+  feed: { mind: true, social: true, acts: true, world: true, routine: false, q: "", win: 36 },
+  showRoutine: false };
+
+// ---------------------------------------------------------------- map
+const svg = document.getElementById("map");
+const PUBLIC = V.places.filter(p => !p.startsWith("home_"));
+const ORDER = ["field", "workshop", "market", "plaza", "woods"];
+PUBLIC.sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+const HOMES = V.places.filter(p => p.startsWith("home_")).sort((a, b) => +a.slice(5) - +b.slice(5));
+const W = 1000, PAD = 8, BOX = {};
+(function layout() {
+  const pw = (W - PAD * (PUBLIC.length + 1)) / Math.max(PUBLIC.length, 1);
+  PUBLIC.forEach((p, i) => BOX[p] = { x: PAD + i * (pw + PAD), y: PAD, w: pw, h: 170, big: true });
+  const cols = Math.min(10, Math.max(HOMES.length, 1)), hw = (W - PAD * (cols + 1)) / cols, hh = 64;
+  HOMES.forEach((p, i) => BOX[p] = { x: PAD + (i % cols) * (hw + PAD), y: 170 + 2 * PAD + Math.floor(i / cols) * (hh + PAD), w: hw, h: hh });
+  const rows = Math.ceil(HOMES.length / cols);
+  svg.setAttribute("viewBox", `0 0 ${W} ${170 + 3 * PAD + rows * (hh + PAD)}`);
+})();
+const famByHome = Object.fromEntries(V.families.map(f => [f.home, f]));
+function drawMap() {
+  const occ = {};
+  for (const p of V.places) occ[p] = [];
+  for (const a of A) { const [, p, act] = posAt(a.id, S.t); (occ[p] = occ[p] || []).push([a.id, act]); }
+  let out = "";
+  for (const p of Object.keys(BOX)) {
+    const b = BOX[p], here = occ[p] || [], f = famByHome[p];
+    const label = b.big ? p : (f ? `${f.surname}` : p);
+    out += `<g class="place${S.place === p ? " sel" : ""}" data-place="${esc(p)}"><rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6"/>` +
+      `<text class="${b.big ? "big" : ""}" x="${b.x + 6}" y="${b.y + (b.big ? 17 : 13)}">${esc(label)} · ${here.length}</text>`;
+    const top = b.y + (b.big ? 26 : 19), inner = b.w - 12, avail = b.h - (top - b.y) - 4;
+    let step = b.big ? 13 : 11; let per = Math.max(1, Math.floor(inner / step));
+    while (Math.ceil(here.length / per) * step > avail && step > 4) { step -= 1; per = Math.max(1, Math.floor(inner / step)); }
+    const r = Math.max(1.6, step / 2 - 1.2);
+    here.forEach(([id, act], i) => {
+      const cx = b.x + 6 + step / 2 + (i % per) * step, cy = top + step / 2 + Math.floor(i / per) * step, c = roleColor(A[id].role);
+      const asleep = act === "sleep";
+      out += `<circle class="dot${S.agent === id ? " sel" : ""}" data-agent="${id}" cx="${cx}" cy="${cy}" r="${r}" fill="${asleep ? "none" : c}" stroke="${c}" stroke-width="${asleep ? 1.2 : 0}">` +
+        `<title>${esc(A[id].name)} #${id} (${esc(A[id].role)}): ${esc(act)}</title></circle>`;
+    });
+    out += "</g>";
+  }
+  svg.innerHTML = out;
+}
+document.getElementById("legend").innerHTML = ROLES.map(r => `<span><i style="background:${roleColor(r)}"></i>${esc(r)}</span>`).join("");
+
+// ---------------------------------------------------------------- panes
+const pane = document.getElementById("pane");
+function paneAgent() {
+  if (S.agent === null) return `<p class="empty">Click a villager on the map, or a name anywhere.</p>`;
+  const a = A[S.agent], f = famOf(S.agent), [, p, act] = posAt(a.id, S.t);
+  const tr = Object.entries(a.traits).map(([k, v]) => `<span>${esc(k)}</span><span class="bar"><b style="width:${v / 10}%"></b></span><span class="sub">${v}</span>`).join("");
+  const vals = a.values ? `values: ${(a.values.top || []).map(esc).join(", ")}; least: ${(a.values.bottom || []).map(esc).join(", ")}` : "";
+  const evs = byAgent[a.id].filter(e => S.showRoutine || catOf(e[2]) !== "routine");
+  let nearest = 0; evs.forEach((e, i) => { if (e[1] <= S.t) nearest = i; });
+  let rows = "", day = -1;
+  evs.forEach((e, i) => {
+    const d = Math.floor(e[1] / TPD);
+    if (d !== day) { rows += `<div class="day">day ${d}</div>`; day = d; }
+    rows += evRow(e, i === nearest && e[1] <= S.t);
+  });
+  return `<h2>${esc(a.name)} #${a.id}</h2>
+    <div class="sub">${esc(a.role)}, age ${a.age}, ${esc(f.surname)} family (${f.members.filter(m => m !== a.id).map(who).join(", ") || "alone"}), home ${esc(f.home)}</div>
+    <div class="sub">now (${clock(S.t)}): <b>${esc(act)}</b> at ${esc(p)}</div>
+    <div class="traits">${tr}</div><div class="sub">${vals}</div>
+    <div class="filters"><label><input type="checkbox" id="routine" ${S.showRoutine ? "checked" : ""}> show routine (moves, meals, work output)</label>
+    <span class="sub">${evs.length} events; highlighted = latest at or before now</span></div>
+    <div class="list" id="tl">${rows || '<p class="empty">No events.</p>'}</div>`;
+}
+function paneFeed() {
+  const F = S.feed, lo = Math.max(0, S.t - F.win + 1);
+  const i0 = firstAt(lo), i1 = firstAt(S.t + 1), q = F.q.toLowerCase();
+  const rows = [];
+  for (let i = i1 - 1; i >= i0 && rows.length < 400; i--) {
+    const e = E[i];
+    if (!F[catOf(e[2])]) continue;
+    if (S.feedPlace && !(e[5] && e[5].place === S.feedPlace)) continue;
+    const html = evRow(e, e[1] === S.t);
+    if (q && !html.replace(/<[^>]+>/g, "").toLowerCase().includes(q)) continue;
+    rows.push(html);
+  }
+  const box = c => `<label><input type="checkbox" data-cat="${c}" ${F[c] ? "checked" : ""}> ${c}</label>`;
+  return `<div class="filters">${["mind", "social", "acts", "world", "routine"].map(box).join("")}
+    <select id="win"><option value="6">last hour</option><option value="36">last 6 h</option><option value="144">last day</option><option value="${END}">whole run</option></select>
+    <input type="search" id="q" placeholder="filter text" value="${esc(F.q)}"></div>
+    <div class="sub">${clock(lo)} to ${clock(S.t)}, newest first${S.feedPlace ? `, only events at ${esc(S.feedPlace)} (<a class="p" id="clrplace">clear</a>)` : ""}${rows.length >= 400 ? ", first 400" : ""}</div>
+    <div class="list">${rows.join("") || '<p class="empty">Nothing in this window.</p>'}</div>`;
+}
+function panePlace() {
+  if (!S.place) return `<p class="empty">Click a place on the map.</p>`;
+  const here = A.filter(a => posAt(a.id, S.t)[1] === S.place).map(a => [a, posAt(a.id, S.t)[2]]);
+  const f = famByHome[S.place];
+  return `<h2>${esc(S.place)}${f ? ` (${esc(f.surname)} family)` : ""}</h2><div class="sub">${clock(S.t)}: ${here.length} here.
+    <a class="p" id="placefeed">Village feed at this place</a></div>
+    <div class="list">${here.map(([a, act]) => `<div class="ev" data-agent="${a.id}">${who(a.id)} <span class="sub">${esc(a.role)}, ${esc(act)}</span></div>`).join("") || '<p class="empty">Nobody.</p>'}</div>`;
+}
+function paneEvent() {
+  const e = byId.get(S.ev);
+  if (!e) return `<p class="empty">Click any event to see its causes and effects.</p>`;
+  const [id, tick, k, origin, actor, d, parents, m] = e;
+  const line = x => { const p = byId.get(x); return p ? evRow(p, false) : `<div class="ev">#${x} (not in log)</div>`; };
+  const ks = kids(id);
+  return `<h2>Event #${id}: ${esc(k)}</h2>
+    <div class="sub">${clock(tick)} (tick ${tick}), origin <b>${esc(origin)}</b>${m ? `, model ${esc(m.model)}, ${m.in} prompt / ${m.out} output tokens` : ""}</div>
+    <p>${describe(e)}</p>
+    <div class="sub">Caused by (parents)</div><div class="list" style="max-height:24vh">${parents.map(line).join("") || '<p class="empty">No parents.</p>'}</div>
+    <div class="sub">Led to (${ks.length})</div><div class="list" style="max-height:24vh">${ks.slice(0, 200).map(line).join("") || '<p class="empty">Nothing names this event as a parent.</p>'}</div>
+    <div class="sub">Recorded data</div><pre>${esc(JSON.stringify({data: d, mind_output: m ? m.raw : undefined}, null, 2))}</pre>`;
+}
+const PANES = { agent: paneAgent, feed: paneFeed, place: panePlace, event: paneEvent };
+function drawPane() {
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.tab));
+  pane.innerHTML = PANES[S.tab]();
+  if (S.tab === "feed") document.getElementById("win").value = String(S.feed.win);
+  if (S.tab === "agent") { const n = pane.querySelector(".ev.now"); if (n) n.scrollIntoView({ block: "center" }); }
+}
+
+// ---------------------------------------------------------------- time
+const scrub = document.getElementById("scrub");
+scrub.max = END - 1;
+function setT(t, redrawPane = true) {
+  S.t = Math.max(0, Math.min(END - 1, t)); scrub.value = S.t;
+  document.getElementById("clock").textContent = clock(S.t);
+  drawMap(); if (redrawPane && S.tab !== "event") drawPane();
+}
+let timer = null, lastPane = 0;
+function play(on) {
+  S.playing = on; document.getElementById("play").textContent = on ? "❚❚" : "▶";
+  clearInterval(timer);
+  if (on) timer = setInterval(() => {
+    if (S.t >= END - 1) return play(false);
+    const now = performance.now(), slow = now - lastPane > 400;  // the pane is the slow part; redraw it less often
+    setT(S.t + Math.max(1, Math.round(+document.getElementById("speed").value / 10)), slow);
+    if (slow) lastPane = now;
+  }, 100);
+}
+
+// ---------------------------------------------------------------- events
+document.getElementById("play").onclick = () => play(!S.playing);
+document.getElementById("prev").onclick = () => setT(S.t - 1);
+document.getElementById("next").onclick = () => setT(S.t + 1);
+document.getElementById("prevday").onclick = () => setT(S.t - TPD);
+document.getElementById("nextday").onclick = () => setT(S.t + TPD);
+scrub.oninput = () => setT(+scrub.value);
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; drawPane(); });
+document.addEventListener("keydown", ev => {
+  if (ev.target.matches("input[type=search], select")) return;
+  if (ev.key === "ArrowLeft") setT(S.t - (ev.shiftKey ? 6 : 1));
+  else if (ev.key === "ArrowRight") setT(S.t + (ev.shiftKey ? 6 : 1));
+  else if (ev.key === " ") { ev.preventDefault(); play(!S.playing); }
+  else return;
+});
+document.body.addEventListener("click", ev => {
+  const el = ev.target.closest("[data-agent],[data-ev],[data-open],[data-place],#clrplace,#placefeed");
+  if (!el) return;
+  if (el.id === "clrplace") { S.feedPlace = null; return drawPane(); }
+  if (el.id === "placefeed") { S.feedPlace = S.place; S.tab = "feed"; return drawPane(); }
+  if (el.dataset.agent !== undefined) { S.agent = +el.dataset.agent; S.tab = "agent"; drawMap(); return drawPane(); }
+  if (el.dataset.ev !== undefined) { S.ev = +el.dataset.ev; S.tab = "event"; return drawPane(); }
+  if (el.dataset.open !== undefined) { S.ev = +el.dataset.open; const e = byId.get(S.ev); S.tab = "event"; setT(e[1], false); return drawPane(); }
+  if (el.dataset.place !== undefined) { S.place = el.dataset.place; S.tab = "place"; drawMap(); return drawPane(); }
+});
+pane.addEventListener("change", ev => {
+  const el = ev.target;
+  if (el.id === "routine") S.showRoutine = el.checked;
+  else if (el.dataset.cat) S.feed[el.dataset.cat] = el.checked;
+  else if (el.id === "win") S.feed.win = +el.value;
+  drawPane();
+});
+pane.addEventListener("input", ev => {
+  if (ev.target.id !== "q") return;
+  S.feed.q = ev.target.value; const pos = ev.target.selectionStart;
+  drawPane(); const q = document.getElementById("q"); q.focus(); q.setSelectionRange(pos, pos);
+});
+
+// ---------------------------------------------------------------- start
+document.getElementById("meta").innerHTML = [
+  esc(V.source), `engine ${esc(V.engine)}`, `seed ${esc(V.seed)}`, `${A.length} villagers`,
+  `${(END / TPD).toFixed(1)} days`, `${E.length} events`, V.models.length ? `minds: ${V.models.map(esc).join(", ")}` : "",
+  V.complete ? esc(V.ending) : `<span class="warnbadge">${esc(V.ending)}</span>`,
+  V.skipped_lines ? `<span class="warnbadge">${V.skipped_lines} unreadable line(s) skipped</span>` : "",
+].filter(Boolean).join(" · ");
+document.title = `Replay: ${V.source || "world"}`;
+setT(Math.min(END - 1, Math.floor(TPD / 2) + 30));
+</script>
+</body>
+</html>
