@@ -34,9 +34,9 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .events import Event
-from .memory import assemble_prompt, prompt_hash, render_soul
+from .memory import assemble_prompt, prompt_hash, render_soul, unanchored
 from .minds import MindRequest, ReplayDivergence, ReplayMind
-from .scorecard import FICTION_HEADER, SCHEMA_HEAD, ArmSim, anchors, check_famine_version
+from .scorecard import FICTION_HEADER, SCHEMA_HEAD, ArmSim, check_famine_version, parse_arm
 from .sim import ACTIVITIES, ENGINE_VERSION, Sim
 
 VARIANTS = ("full", "no_soul", "swapped_soul", "no_memory", "situation_only")
@@ -102,8 +102,9 @@ def donor_for(agent: dict, agents: list[dict]) -> dict:
 
 
 def _soul_text(person: dict, arm: str) -> str:
+    """The soul as `arm` shows it. Since T25 the anchors are part of every soul (T25)."""
     soul = render_soul(person)
-    return soul + "\n\n" + anchors(person) if arm == "fiction" else soul
+    return unanchored(soul) if "unanchored" in parse_arm(arm)[1] else soul
 
 
 def edit_for(variant: str, agent: dict, arm: str = "full", donor: dict | None = None):

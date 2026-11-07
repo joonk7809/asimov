@@ -194,14 +194,13 @@ def build_sim(base, mind, arm: str | None = None, genesis: dict | None = None, w
     n = len(pop["agents"])
     if arm is None:
         return Sim(g.data["seed"], n, mind, genesis=pop, order=g.data["order"], workers=workers)
-    from .scorecard import ArmSim, anchors, check_famine_version, labeled_population, parse_arm
+    from .scorecard import ArmSim, check_famine_version, labeled_population, parse_arm
     check_famine_version(g.data, arm)
     if g.data["order"] != "id":
         raise ValueError("scorecard arms run in id order")
     flat = parse_arm(arm)[0] == "flat_params"
     real = labeled_population(g.data["seed"], n) if flat else pop  # flat_params prompts keep the real souls
-    return ArmSim(g.data["seed"], n, mind, pop, arm, {a["id"]: render_soul(a) for a in real["agents"]}, workers,
-                  anchor_texts={a["id"]: anchors(a) for a in real["agents"]} if flat else None)
+    return ArmSim(g.data["seed"], n, mind, pop, arm, {a["id"]: render_soul(a) for a in real["agents"]}, workers)
 
 
 def run_twin(base, live, out: str | None = None, player: dict | None = None, live_agents=(), live_from: int = 0,
