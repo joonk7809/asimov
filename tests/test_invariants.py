@@ -20,11 +20,12 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from asiimov.events import ORIGINS, Event
+from asiimov.events import Event
+from asiimov.invariants import Checker
 from asiimov.minds import MindReply, NoisyMind, ReplayDivergence, StubMind
 from asiimov.replay import replay
 from asiimov.rng import Rng
-from asiimov.sim import FARMER_SELL_PRICE, FOOD_PRICE, PERSON_STEPS, STEP_DOS, TICKS_PER_DAY, Sim
+from asiimov.sim import FARMER_SELL_PRICE, FOOD_PRICE, TICKS_PER_DAY, Sim
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE = ["rng.py", "params.py", "sim.py", "memory.py", "events.py", "replay.py"]
@@ -99,84 +100,12 @@ class HostileMind:
 
 
 # ------------------------------------------------------------------ invariant checks
-def walk_types(x, path="state"):
-    if isinstance(x, bool) and not path.endswith(("asleep", "has_food", "kin")):
-        raise AssertionError(f"bool at {path}")
-    if isinstance(x, float):
-        raise AssertionError(f"float at {path}")
-    if isinstance(x, dict):
-        for k, v in x.items():
-            walk_types(v, f"{path}.{k}")
-    elif isinstance(x, list):
-        for i, v in enumerate(x):
-            walk_types(v, f"{path}[{i}]")
-
-
-def check_state(sim: Sim):
-    st_ = sim.state
-    assert st_["market_food"] >= 0
-    walk_types(st_)
-    for a in st_["agents"]:
-        assert a["inv"]["food"] >= 0 and a["inv"]["coin"] >= 0, a["id"]
-        assert all(0 <= v <= 1000 for v in a["needs"].values()), a["needs"]
-        for o, r in a["relationships"].items():
-            assert int(o) != a["id"]
-            assert -1000 <= r["affinity"] <= 1000, (a["id"], o, r)
-        for b in a["plan"]:
-            assert type(b["start_h"]) is int and type(b["end_h"]) is int and 0 <= b["start_h"] < b["end_h"] <= 24
-        assert len(a["core"]) <= 6 and all(isinstance(c, str) and len(c) <= 200 for c in a["core"])
-        steps = (a["intent"]["steps"] if a["intent"] else []) + ([a["override"]] if a["override"] else [])
-        if a["intent"]:
-            assert 1 <= len(a["intent"]["steps"]) <= 4 and 0 <= a["intent"]["i"] < len(a["intent"]["steps"])
-            assert isinstance(a["intent"]["goal"], str) and 0 < len(a["intent"]["goal"]) <= 120
-        for s in steps:
-            assert s["do"] in STEP_DOS
-            if s["do"] in PERSON_STEPS:
-                assert type(s["target"]) is int and 0 <= s["target"] < len(st_["agents"]) and s["target"] != a["id"]
-            else:
-                assert s["target"] is None
-        assert a["asleep"] or not a["override"] or a["override"]["left"] > 0
-        assert a["traits"] == st_["agents"][a["id"]]["traits"]
-
-
-def check_log(events: list[Event]):
-    for i, e in enumerate(events):
-        assert e.id == i
-        assert e.origin in ORIGINS
-        assert all(isinstance(p, int) and 0 <= p < e.id for p in e.parents), e
-        if i:
-            assert events[i - 1].tick <= e.tick
-
-
-def totals(sim):
-    ag = sim.state["agents"]
-    return sum(a["inv"]["food"] for a in ag) + sim.state["market_food"], sum(a["inv"]["coin"] for a in ag)
-
-
 def stepped_run(sim: Sim, days: int, player: dict):
     """Step tick by tick, checking state invariants and the food/coin ledger after every tick."""
-    genesis_traits = [dict(a["traits"]) for a in sim.state["agents"]]
+    checker = Checker(sim)
     for _ in range(days * TICKS_PER_DAY):
-        tick = sim.state["tick"]
-        acts = player.get(tick, [])
-        food0, coin0 = totals(sim)
-        burned = sum(sim.state["agents"][m]["inv"]["food"] for act in acts
-                     for m in sim.state["families"][act["family"]]["members"])
-        n0 = len(sim.events)
-        sim.step(acts)
-        new = sim.events[n0:]
-        produced = sum(e.data.get("food", 0) for e in new if e.kind == "produce")
-        eaten = sum(1 for e in new if e.kind == "eat")
-        spoiled = sum(e.data["market_food_lost"] for e in new if e.kind in ("spoil", "blight"))
-        coin_made = sum(e.data.get("coin", 0) for e in new if e.kind == "produce")
-        sold = sum(e.data["food"] for e in new if e.kind == "sell")
-        bought = sum(e.data["food"] for e in new if e.kind == "receipt" and e.data["action"] == "buy_food" and e.data["ok"])
-        food1, coin1 = totals(sim)
-        assert food1 - food0 == produced - eaten - burned - spoiled, f"food ledger broken at tick {tick}"
-        assert coin1 - coin0 == coin_made + FARMER_SELL_PRICE * sold - FOOD_PRICE * bought, f"coin ledger at {tick}"
-        check_state(sim)
-    assert [a["traits"] for a in sim.state["agents"]] == genesis_traits, "a mind changed someone's traits"
-    check_log(sim.events)
+        bad = checker.step(player.get(sim.state["tick"], []))
+        assert not bad, bad[:5]
 
 
 # ------------------------------------------------------------------ properties
