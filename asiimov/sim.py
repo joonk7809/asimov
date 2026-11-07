@@ -303,7 +303,7 @@ class Sim:
             req = self.pending[aid][0]
             if req.kind == "reflect" and (replies[aid].finish_reason == "length" or _parse(replies[aid]) is None):
                 day = self.state["tick"] // TICKS_PER_DAY
-                retry[aid] = replace(req, attempt=1, seed=self.rng.raw(f"reflect-retry:{aid}", day) % 2 ** 32)
+                retry[aid] = replace(req, attempt=1, seed=self.rng.raw(f"reflect-retry:{aid}:{day}", 0) % 2 ** 32)
         r_ids = sorted(retry)
         retried = dict(zip(r_ids, dispatch(self.mind, [retry[i] for i in r_ids], self.workers)))
         pending, self.pending = self.pending, {}

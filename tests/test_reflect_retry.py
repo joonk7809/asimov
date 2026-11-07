@@ -38,7 +38,7 @@ def test_a_cut_off_reflection_is_retried_once_recorded_and_replayed():
     retries = [a for a in mind.asked if a[2] == 1]
     assert first and len(retries) == len(first)  # once per cut-off, never twice
     for (aid, tick, _, seed), _ in zip(retries, first):
-        assert seed == Rng(3).raw(f"reflect-retry:{aid}", tick // TICKS_PER_DAY) % 2 ** 32
+        assert seed == Rng(3).raw(f"reflect-retry:{aid}:{tick // TICKS_PER_DAY}", 0) % 2 ** 32
     ev = [e for e in sim.events if e.kind == "mind_reflect" and e.actor == 4]
     cut = [e for e in ev if e.data.get("retried")]
     again = [e for e in ev if e.data.get("attempt") == 1]
