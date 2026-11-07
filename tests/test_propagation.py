@@ -69,7 +69,7 @@ def test_one_changed_act_counts_one_agent_from_its_tick(world):
 def test_rng_bookkeeping_is_not_behavior(world):
     base, _ = world
     e = first_after(base, TICKS_PER_DAY, "talk")
-    r = planted(base, lambda tw: tw[e.id].data.update(index=[i + 7 for i in e.data["index"]]))
+    r = planted(base, lambda tw: tw[e.id].data.update(index=e.data["index"] + 7, pick_stream="pair:x"))
     assert r["first_act_difference"] == {}
 
 

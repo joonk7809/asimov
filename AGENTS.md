@@ -12,7 +12,10 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
 - Every state change happens inside an emitted event with an `origin` (rule, chance, mind, player)
   and its causal `parents`. No silent state edits.
 - Simulation arithmetic is integer-only; randomness goes through `Rng.draw(stream, ...)` so it is
-  recomputable from the log.
+  recomputable from the log. A draw whose counter could move because of who else is around (a chat,
+  an ask, a pick among those present) uses the keyed `Rng.at(stream, tick, ...)` instead, and a pick
+  among candidates takes the lowest keyed score per candidate, never an index into the list (T22), so
+  a twin with one more person somewhere doesn't re-roll everyone else.
 - A tick collects mind requests, then commits replies in `Sim._order` (the one place that decides who
   acts first; `--order id|shuffle`). Never apply a reply where it is requested: concurrency must not
   change the log.

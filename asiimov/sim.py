@@ -120,8 +120,8 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "10"
-ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: seeded, per tick
+ENGINE_VERSION = "11"
+ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
 
@@ -276,10 +276,9 @@ class Sim:
     def _order(self, ids) -> list[int]:
         """Who goes first when agents contest the same food, target or listener. Decided only here."""
         ids = sorted(ids)
-        if self.order == "shuffle":
-            for i in range(len(ids) - 1, 0, -1):  # Fisher-Yates on the seeded "order" stream
-                _, j = self.rng.draw("order", 0, i)
-                ids[i], ids[j] = ids[j], ids[i]
+        if self.order == "shuffle":  # keyed per (tick, id): one more agent doesn't reorder the rest (T22)
+            tick = self.state["tick"]
+            ids.sort(key=lambda i: (self.rng.raw(f"order:{tick}", i), i))
         return ids
 
     def _commit(self):
@@ -939,8 +938,9 @@ class Sim:
             return self._receipt(a, eid, action, False, "not kin")
         if t["inv"]["food"] <= 1:
             return self._receipt(a, eid, action, False, "kin has nothing to spare")
-        stream = f"kin:{t['id']}"
-        idx, roll = self.rng.draw(stream, 0, 999)
+        stream = f"kin:{t['id']}:{a['id']}"  # keyed: other askers of t don't shift this roll (T22)
+        idx = self.state["tick"]
+        roll = self.rng.at(stream, idx, 0, 999)
         limit = self._kin_limit(t, a)
         if roll < limit:
             t["inv"]["food"] -= 1
@@ -976,8 +976,9 @@ class Sim:
         if t["inv"]["food"] <= 1:  # they keep one for themselves
             return self._receipt(a, eid, action, False, "nothing to spare", extra=to)
         kin = t["id"] in self.state["families"][a["family"]]["members"]
-        stream = f"share:{t['id']}"
-        idx, roll = self.rng.draw(stream, 0, 999)
+        stream = f"share:{t['id']}:{a['id']}"  # keyed: other askers of t don't shift this roll (T22)
+        idx = self.state["tick"]
+        roll = self.rng.at(stream, idx, 0, 999)
         if action == "ask_food" and kin:  # the same odds as ask_kin for the same ask (steering, T19)
             limit = self._kin_limit(t, a)
         else:
@@ -1073,19 +1074,23 @@ class Sim:
             ids = by_place[place]
             if len(ids) < 2:
                 continue
+            tick = self.state["tick"]
             for aid in self._order(ids):
                 a = agents[aid]
+                # Keyed draws (T22): whether a speaker talks depends on (speaker, tick) alone, and the
+                # partner is whoever present scores lowest on a (speaker, tick, candidate) draw. Someone
+                # joining or leaving the place changes a speaker's partner only if they are, or were, it.
                 stream = f"talk:{aid}"
-                idx, roll = self.rng.draw(stream, 0, 999)
+                roll = self.rng.at(stream, tick, 0, 999)
                 if roll >= a["traits"]["extraversion"] // 4:
                     continue
-                others = [o for o in ids if o != aid]
-                idx2, pick = self.rng.draw(stream, 0, len(others) - 1)
-                b = agents[others[pick]]
+                pick_stream = f"pair:{aid}:{tick}"
+                b = agents[min((o for o in ids if o != aid), key=lambda o: (self.rng.raw(pick_stream, o), o))]
+                draws = {"stream": stream, "index": tick, "pick_stream": pick_stream}
                 grudge = self._rel(b, aid)
                 if grudge["affinity"] <= -300:
                     self._note(b["id"], f"turned away from {a['name']}")
-                    self._emit("snub", "chance", b["id"], {"stream": stream, "index": [idx, idx2], "with": aid},
+                    self._emit("snub", "chance", b["id"], {**draws, "with": aid},
                                [grudge["cause"]] if grudge.get("cause") is not None else [])
                     continue
                 # gossip: each may pass on what they believe about thieves (credulity decides uptake)
@@ -1093,12 +1098,12 @@ class Sim:
                 for x, y in ((a, b), (b, a)):
                     for k in sorted(y["beliefs"]):
                         if k.startswith("thief:") and k not in x["beliefs"] and int(k.split(":")[1]) != x["id"]:
-                            c_idx, c_roll = self.rng.draw(f"cred:{x['id']}", 0, 999)
+                            c_roll = self.rng.at(f"cred:{x['id']}:{y['id']}:{k}", tick, 0, 999)
                             if c_roll < x["cognition"]["credulity"]:
                                 transfers.append((x, y, k))
                                 if y["belief_causes"].get(k) is not None:
                                     sources.append(y["belief_causes"][k])
-                tid = self._emit("talk", "chance", aid, {"stream": stream, "index": [idx, idx2], "with": b["id"],
+                tid = self._emit("talk", "chance", aid, {**draws, "with": b["id"],
                                                          "place": place, "gossip": [[x["id"], k] for x, _, k in transfers]},
                                  sorted(set(sources)))
                 for x, y in ((a, b), (b, a)):

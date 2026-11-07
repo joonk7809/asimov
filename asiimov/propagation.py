@@ -19,10 +19,12 @@ Left out on purpose:
 An agent counts "by day d" when its first difference falls before intervention_tick + d days.
 
 Every count is also given "besides chats", with talk and snub left out of the acts. Those are chance
-encounters, and at engine 10 the partner is an index into the list of who is present at the place,
-so one extra person at the plaza re-pairs every conversation there with the same draws. In stub fire
-twins (seed 1, 100 agents) that re-pairing is the first difference of almost every agent reached
-beyond the burned family; read the two numbers together.
+encounters. Up to engine 10 the partner was an index into the list of who is present at the place, so
+one extra person at the plaza re-paired every conversation there with the same draws, and that was the
+first difference of almost every agent reached beyond a burned family. From engine 11 (T22) the talk
+draws are keyed: a speaker's partner changes only when the old partner left or the new one arrived,
+so a chat difference descends from someone else's earlier difference. Read logs from engine 10 or
+older with "besides chats".
 
 Each diverged agent is also labelled traced or untraced: traced when its first differing act in the
 twin descends, through the log's parents, from an intervention event. Untraced divergence came
