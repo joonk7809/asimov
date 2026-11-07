@@ -86,7 +86,7 @@ def _name_matcher(name: str) -> tuple[str | None, frozenset, re.Pattern]:
 def known_people(agent: dict, state: dict) -> set[int]:
     """Everyone the agent's own record mentions: kin, relationships, today's notes and episodes.
 
-    A name matches a text where `\bname\b` does. Every word of the name is then a whole word of the
+    A name matches a text where it occurs as a whole word (the pattern below). Every word of the name is then a whole word of the
     text, so only names whose words all occur are tested, and the test is that same pattern: linear in
     the number of names, where a pattern per name per text was 96% of a 1,000-agent stub day."""
     known = set(state["families"][agent["family"]]["members"]) | {int(k) for k in agent["relationships"]}
