@@ -104,3 +104,25 @@ def test_shuffle_order_is_stable_to_one_more_agent():
     assert [i for i in more if i != 15] == base
     sim.state["tick"] = 78
     assert sim._order(range(10)) != base  # still reshuffled every tick
+
+
+def test_a_second_ask_of_the_same_person_in_one_tick_gets_a_fresh_roll():
+    """Review of PR #27: a refused ask can wake the mind, which may ask again in the same tick. At
+    engine 11 that repeat copied the first roll, so a refused repeat was certain. Engine 12 counts the
+    asker's own asks of that target within the tick."""
+    from test_intents import awake, deliberate_now
+    sim = Sim(1, 12, StubMind())
+    fam = sim.state["families"][sim.state["agents"][0]["family"]]["members"]
+    other = next(i for i in range(12) if i not in fam)
+    a, b = awake(sim, [0, other], place="plaza")
+    a["inv"].update(food=0, coin=10)
+    b["inv"].update(food=9, coin=0)
+    sim.state["tick"] = 287
+    for _ in range(3):
+        deliberate_now(sim, a, {"action": "ask_food", "target": b["id"]})
+    r = [e.data for e in sim.events if e.kind == "receipt" and "roll" in e.data]
+    assert [x["stream"] for x in r] == [f"share:{other}:0", f"share:{other}:0:1", f"share:{other}:0:2"]
+    assert all(x["index"] == 287 and x["roll"] == Rng(1).at(x["stream"], 287, 0, 999) for x in r)
+    sim.state["tick"] = 288  # a new tick starts the count again
+    deliberate_now(sim, a, {"action": "ask_food", "target": b["id"]})
+    assert [e.data for e in sim.events if e.kind == "receipt"][-1]["stream"] == f"share:{other}:0"
