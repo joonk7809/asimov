@@ -4,6 +4,7 @@ Planted differences (test the test, S6): edit one record of a known log and chec
 exactly that agent, at that tick, in the right category. Then one real stub twin end to end.
 """
 import copy
+import json
 
 import pytest
 
@@ -115,3 +116,27 @@ def test_a_noise_twin_is_read_over_its_intervention_twins_days(world):
     assert r["intervention_tick"] == FIRE_TICK
     in_day_1 = e.tick < FIRE_TICK + TICKS_PER_DAY
     assert r["by_day"]["1"]["acted_differently"] == int(in_day_1) and r["by_day"]["3"]["acted_differently"] == 1
+
+
+def test_whom_an_act_was_aimed_at_is_part_of_the_act(world):
+    base, _ = world
+    e = first_after(base, TICKS_PER_DAY, "receipt")
+    r = planted(base, lambda tw: tw[e.id].data.update(victim=e.actor + 1))  # a steal receipt names its victim
+    assert r["first_act_difference"] == {str(e.actor): e.tick}
+    by_id = {x.id: x for x in base}
+    rec = next(x for x in base if x.kind == "receipt" and x.tick >= TICKS_PER_DAY and any(
+        by_id[p].origin == "mind" and by_id[p].data["kind"] == "deliberate" for p in x.parents))
+    mind = next(by_id[p] for p in rec.parents if by_id[p].origin == "mind")
+    out = json.loads(mind.mind["raw_output"])
+    out["target"] = 999  # the receipt doesn't record it; the reply it answers does
+    r = planted(base, lambda tw: tw[mind.id].mind.update(raw_output=json.dumps(out)))
+    assert r["first_act_difference"].get(str(rec.actor)) == rec.tick
+
+
+def test_a_missing_act_is_not_blamed_on_the_twins_next_one(world):
+    base, _ = world
+    e = first_after(base, 2 * TICKS_PER_DAY, "activity")
+    twin = [x for x in clone(base) if x.id != e.id]
+    from asiimov.propagation import first_differences
+    tick, ev = first_differences(base, twin)["act"][e.actor]
+    assert tick == e.tick and ev is None

@@ -51,7 +51,7 @@ from .sim import TICKS_PER_DAY, Sim
 WINDOWS = (1, 3, 7)
 ACT_FIELDS = {
     "activity": ("activity", "place"),
-    "receipt": ("action", "ok", "why", "to", "food"),
+    "receipt": ("action", "ok", "why", "to", "victim", "food"),
     "intent_set": ("steps", "dropped"),
     "intent_step": ("do", "i"),
     "intent_done": ("steps",),
@@ -71,8 +71,18 @@ CHATS = ("talk", "snub")  # chance encounters: whom an agent happens to talk to 
 CATEGORIES = ("act", "act_besides_chats", "thought")
 
 
-def _project(e: Event):
-    """(category, record) for an agent's own event, or None when it is neither an act nor a thought."""
+def _reply_target(e: Event):
+    """The target a mind reply named, so a receipt that doesn't record it still says whom the act was at."""
+    try:
+        out = json.loads(e.mind["raw_output"])
+    except ValueError:
+        return None
+    return out.get("target") if isinstance(out, dict) else None
+
+
+def _project(e: Event, aimed=None):
+    """(category, record) for an agent's own event, or None when it is neither an act nor a thought.
+    `aimed` maps a mind event's id to the target its reply named; a receipt citing one carries it."""
     if e.actor is None or e.kind in NOT_ACTS:
         return None
     if e.origin == "mind":
@@ -80,14 +90,21 @@ def _project(e: Event):
     if e.kind not in ACT_FIELDS:
         # A new kind of act must be classified here before it is measured, or it would silently not count.
         raise KeyError(f"unclassified agent event kind {e.kind!r}: add it to ACT_FIELDS or NOT_ACTS")
-    return "act", (e.tick, e.kind) + tuple(json.dumps(e.data.get(k), sort_keys=True) for k in ACT_FIELDS[e.kind])
+    rec = (e.tick, e.kind) + tuple(json.dumps(e.data.get(k), sort_keys=True) for k in ACT_FIELDS[e.kind])
+    if e.kind == "receipt" and aimed:
+        # Pre-check failures and goal-less "started" receipts don't record the target (review of PR #23).
+        rec += tuple(json.dumps(aimed[p], sort_keys=True) for p in e.parents if p in aimed)
+    return "act", rec
 
 
 def streams(events) -> dict[str, dict[int, list]]:
     """{category: {agent: [(record, event)]}} for each of CATEGORIES."""
     out = {c: defaultdict(list) for c in CATEGORIES}
+    aimed = {}
     for e in events:
-        p = _project(e)
+        if e.origin == "mind" and e.data.get("kind") == "deliberate":
+            aimed[e.id] = _reply_target(e)
+        p = _project(e, aimed)
         if p:
             out[p[0]][e.actor].append((p[1], e))
             if p[0] == "act" and e.kind not in CHATS:
@@ -107,7 +124,10 @@ def first_differences(base, twin) -> dict[str, dict[int, tuple[int, Event | None
                 x = xs[i][0] if i < len(xs) else None
                 y = ys[i][0] if i < len(ys) else None
                 if x != y:
-                    res[aid] = (min(r[0] for r in (x, y) if r is not None), ys[i][1] if i < len(ys) else None)
+                    # The twin's event here is its first differing act only if it is not later than the
+                    # base's: when the twin simply lacks the base's act, it is a later, unrelated one.
+                    twin_ev = ys[i][1] if y is not None and (x is None or y[0] <= x[0]) else None
+                    res[aid] = (min(r[0] for r in (x, y) if r is not None), twin_ev)
                     break
         out[cat] = res
     return out

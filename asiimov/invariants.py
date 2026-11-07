@@ -95,8 +95,9 @@ class Checker:
         """Call right before sim.step(acts)."""
         sim = self.sim
         self._tick, self._n0, self._totals = sim.state["tick"], len(sim.events), totals(sim)
-        self._burned = sum(sim.state["agents"][m]["inv"]["food"] for act in acts if act["kind"] == "fire"
-                           for m in sim.state["families"][act["family"]]["members"])
+        burned = {act["family"] for act in acts if act["kind"] == "fire"}  # two fires on one family burn once
+        self._burned = sum(sim.state["agents"][m]["inv"]["food"] for f in sorted(burned)
+                           for m in sim.state["families"][f]["members"])
 
     def after(self) -> list[str]:
         """Call right after the step; returns its violations, each prefixed with the tick."""
