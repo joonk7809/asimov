@@ -282,13 +282,19 @@ def test_two_walkers_on_one_route_stay_apart_through_step():
     for x in (a, b):
         x["traits"]["extraversion"] = 1000
         x["plan"] = [{"activity": "socialize", "start_h": 0, "end_h": 24}]  # the plaza, 2+ ticks away
+    seen = []  # the occupancy the step hands to every rule (views, notice, loneliness)
+    body = sim._body
+    sim._body = lambda x, occupancy: (seen.append((x["id"], occupancy)), body(x, occupancy))
     sim.step()
     arrive = a["route"]["arrive"]
     assert b["route"]["arrive"] == arrive > sim.state["tick"]
     while sim.state["tick"] < arrive:
-        n0 = len(sim.events)
+        n0, seen[:] = len(sim.events), []
         sim.step()
         assert not any(e.kind in ("talk", "meet", "snub") for e in sim.events[n0:])
+        for aid, occupancy in seen:
+            if aid in (0, 1):
+                assert None not in occupancy and sim._view(sim.state["agents"][aid], occupancy)["present"] == []
     sim.step()
     assert a["place"] == b["place"] == "plaza"
 
