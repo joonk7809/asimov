@@ -166,7 +166,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "11": "25de1d51e9406c0aeb94bdae72a9c31a000fd4bca37d133846943404207e8ef5",  # T22 keyed draws
           "12": "a3e7b1d70f26733666ce084896eafa6adfc259a54bf33597b12bda520622ae53",  # a repeat ask in a tick rolls fresh
           "map-1": "7bd6f6567899e387e957f998fdcc095304e135f7545c5c42d6ccc9e4dc595ebe",  # the map branch on engine 11
-          "map-2": "7d1afa044e8172f2d4224a322fe9e4c15e3da7f6520729997c402279bcabd0cb"}  # the map branch on engine 12 (plan/t6-map-spec.md); renumbered when it merges
+          "map-2": "7d1afa044e8172f2d4224a322fe9e4c15e3da7f6520729997c402279bcabd0cb",  # the map branch on engine 12; merged as 13
+          "13": "de008003083ce28a9e12477fa7ac4ccd1d80499d53b647d4369b900f5242a6a0"}  # the village map (T6, PR #30)
 
 
 def test_log_changes_bump_the_engine_version():
