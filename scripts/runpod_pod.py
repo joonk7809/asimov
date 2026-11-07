@@ -73,9 +73,10 @@ def agent_cmd(key: str, model: str) -> str:
 def up(args):
     key = secrets.token_urlsafe(24)
     expires = int(time.time() + args.ttl_hours * 3600)
-    cmd = ttl_cmd(expires) + agent_cmd(key, args.model) + (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
-           f"--max-model-len {args.max_len} --gpu-memory-utilization 0.92 --enable-prefix-caching "
-           f"--served-model-name {args.model}")
+    serve = (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
+             f"--max-model-len {args.max_len} --gpu-memory-utilization 0.92 --enable-prefix-caching "
+             f"--served-model-name {args.model} {args.vllm_args}").rstrip()
+    cmd = ttl_cmd(expires) + agent_cmd(key, args.model) + serve
     body = {
         "name": f"{NAME_PREFIX}{args.name or args.model.split('/')[-1].lower()}"[:60],
         "imageName": IMAGE,
@@ -92,7 +93,7 @@ def up(args):
     }
     pod = call("POST", "/pods", body)
     os.makedirs(POD_DIR, exist_ok=True)
-    rec = {"id": pod["id"], "model": args.model, "api_key": key, "created": time.time(),
+    rec = {"id": pod["id"], "model": args.model, "vllm_args": args.vllm_args, "api_key": key, "created": time.time(),
            "url": f"https://{pod['id']}-8000.proxy.runpod.net",
            "jobs_url": f"https://{pod['id']}-{AGENT_PORT}.proxy.runpod.net", "cost_per_hr": pod.get("costPerHr"),
            "gpu": (pod.get("machine") or {}).get("gpuTypeId") or pod.get("gpu"),
@@ -155,6 +156,7 @@ def main():
     p.add_argument("--gpu", nargs="*")
     p.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])
     p.add_argument("--max-len", type=int, default=8192)
+    p.add_argument("--vllm-args", default="", help="extra vllm serve flags, e.g. '--async-scheduling'")
     p.add_argument("--name", default=None, help="pod name after the asiimov- prefix (default: the model)")
     p.add_argument("--ttl-hours", type=float, default=6.0, help="pod terminates itself this long after launch; size it to the planned run")
     p.set_defaults(fn=up)

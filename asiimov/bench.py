@@ -96,6 +96,8 @@ def main():
     ap.add_argument("--n", type=int, default=256)
     ap.add_argument("--agents", type=int, default=100, help="village size the prompts come from")
     ap.add_argument("--days", type=int, default=2)
+    ap.add_argument("--world-seed", type=int, default=1,
+                    help="another seed gives prompts this server hasn't cached from an earlier bench")
     ap.add_argument("--cache-bust", action="store_true", help="unique first line per prompt: no shared prefixes")
     ap.add_argument("--no-structured", action="store_true",
                     help="no JSON schema per request (diagnostic: grammar compilation is per request on the server)")
@@ -105,7 +107,7 @@ def main():
     mind, rec = llm_from_args(args)
     mind.structured = not args.no_structured
     cost = args.cost_per_hr or (rec or {}).get("cost_per_hr")
-    reqs = collect_prompts(args.agents, args.days)
+    reqs = collect_prompts(args.agents, args.days, args.world_seed)
     if args.cache_bust:
         reqs = [replace(r, prompt=f"[request {i}]\n" + r.prompt) for i, r in enumerate(reqs)]
     kinds = {}
@@ -128,7 +130,7 @@ def main():
         results.append(r)
         print(json.dumps(r), flush=True)
     out = {"model": mind.model, "cost_per_hr": cost, "gpu": (rec or {}).get("gpu"), "label": args.label,
-           "agents": args.agents, "cache_bust": args.cache_bust, "structured": mind.structured, "prompt_mix": kinds, "results": results}
+           "agents": args.agents, "world_seed": args.world_seed, "cache_bust": args.cache_bust, "structured": mind.structured, "prompt_mix": kinds, "results": results}
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)
 
