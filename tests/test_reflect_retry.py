@@ -1,4 +1,4 @@
-"""T21 (engine 13): a reflection cut off at max_tokens is asked once more with a keyed seed and frequency
+"""T21 (engine 14): a reflection cut off at max_tokens is asked once more with a keyed seed and frequency
 penalty 1.0, recorded like any mind call, and replayed exactly (plan/t21-reflect-fix-spec.md)."""
 import json
 

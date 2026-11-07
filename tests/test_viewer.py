@@ -31,7 +31,7 @@ def world():
 
 
 def at(m, tick):
-    return next(x for x in reversed(m) if x[0] <= tick)[1:]
+    return next(x for x in reversed(m) if x[0] <= tick)[1:3]
 
 
 def test_places_and_activities_from_the_log_match_the_world_every_tick(world):
@@ -43,7 +43,7 @@ def test_places_and_activities_from_the_log_match_the_world_every_tick(world):
     # the check covered the cases that matter: visits to a person, the public places, and sleep at home
     seen = {(p, a) for row in truth for p, a in row}
     assert "visit" in {a for _, a in seen} and "sleep" in {a for _, a in seen}
-    assert {"market", "field", "plaza"} <= {p for p, _ in seen}
+    assert {"market", "field", "plaza", None} <= {p for p, _ in seen}  # None: walking
 
 
 def test_page_embeds_the_log_and_cant_be_broken_by_text_in_it(world):
