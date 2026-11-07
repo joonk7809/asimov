@@ -75,7 +75,7 @@ def _reply_target(e: Event):
     """The target a mind reply named, so a receipt that doesn't record it still says whom the act was at."""
     try:
         out = json.loads(e.mind["raw_output"])
-    except ValueError:
+    except (ValueError, RecursionError):  # as the engine's own parse: a hostile reply can nest deep
         return None
     return out.get("target") if isinstance(out, dict) else None
 

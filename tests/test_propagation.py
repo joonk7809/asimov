@@ -140,3 +140,10 @@ def test_a_missing_act_is_not_blamed_on_the_twins_next_one(world):
     from asiimov.propagation import first_differences
     tick, ev = first_differences(base, twin)["act"][e.actor]
     assert tick == e.tick and ev is None
+
+
+def test_a_hostile_deeply_nested_reply_does_not_crash_the_metric(world):
+    base, _ = world
+    e = first_after(base, TICKS_PER_DAY, "mind_deliberate", "mind")
+    r = planted(base, lambda tw: tw[e.id].mind.update(raw_output="[" * 20000))
+    assert r["by_day"]["1"]["thought_differently"] == 1
