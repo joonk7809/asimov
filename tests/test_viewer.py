@@ -5,6 +5,9 @@ every place change is emitted (AGENTS.md: no silent state edits), so this checks
 """
 import gzip
 import json
+import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -68,3 +71,49 @@ def test_a_cut_off_gzipped_log_still_opens(world, tmp_path):
     assert "application/json" in (tmp_path / "v.html").read_text()
     view = build(got, "x", bad)
     assert not view["complete"] and view["end_tick"] == got[-1]["tick"] + 1
+
+
+# Mind outputs the engine would reject are still recorded verbatim, and the page reads raw_output, so it must
+# survive any shape (PR #24 review: an <img onerror> in a plan's start_h ran script; a string "then" or "core"
+# threw and blanked every pane listing it).
+HOSTILE = {
+    "mind_plan": '{"plan":[{"activity":"work","start_h":"<img src=x onerror=window.pwned=1>","end_h":9},"x",null]}',
+    "mind_deliberate": '{"action":"<img src=x onerror=window.pwned=2>","target":"0","then":"shop","goal":{"a":1},"reason":7}',
+    "mind_reflect": '{"core":"<img src=x onerror=window.pwned=3>","summary":["<b>x</b>"]}',
+}
+BROWSER = """
+const { chromium } = require('playwright');
+(async () => {
+  const b = await chromium.launch(); const p = await b.newPage(); const errs = [];
+  p.on('pageerror', e => errs.push(String(e)));
+  await p.goto('file://' + process.argv[2]);
+  await p.click('.tabs button[data-tab="feed"]'); await p.selectOption('#win', {index: 3});
+  const rows = await p.locator('#pane .ev').count();
+  await p.locator('#pane .ev').first().click();
+  await p.evaluate(a => { S.agent = a; S.tab = "agent"; drawPane(); }, +process.argv[3]);
+  await p.waitForTimeout(200);
+  console.log(JSON.stringify({rows, errs, pwned: await p.evaluate(() => window.pwned || null),
+    imgs: await p.locator('#pane img').count(), timeline: await p.locator('#tl .ev').count()}));
+  await b.close();
+})();
+"""
+
+
+def test_hostile_mind_output_is_shown_as_text_and_breaks_no_pane(world, tmp_path):
+    node = shutil.which("node")
+    root = subprocess.run(["npm", "root", "-g"], capture_output=True, text=True).stdout.strip() if node else ""
+    if not node or not os.path.isdir(f"{root}/playwright"):
+        pytest.skip("needs node and a global playwright (not installed in CI)")
+    events = json.loads(json.dumps(world[0]))
+    for kind, raw in HOSTILE.items():  # the first output of each kind
+        hit = next(e for e in events if e["kind"] == kind)
+        hit["mind"]["raw_output"] = raw
+    page, script = tmp_path / "v.html", tmp_path / "check.js"
+    page.write_text(render(build(events, "hostile")))
+    script.write_text(BROWSER)
+    out = subprocess.run([node, str(script), str(page), str(hit["actor"])], capture_output=True, text=True, timeout=120,
+                         env={**os.environ, "NODE_PATH": root})
+    assert out.stdout.strip(), out.stderr[-2000:]  # the page broke before the checks could run
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["errs"] == [] and got["pwned"] is None and got["imgs"] == 0, got
+    assert got["rows"] > 100 and got["timeline"] > 0, got

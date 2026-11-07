@@ -133,8 +133,8 @@ function involved(e) {
   const d = e[5] || {}, out = new Set();
   if (e[4] !== null) out.add(e[4]);
   for (const k of ["with", "to", "from", "target"]) if (Number.isInteger(d[k])) out.add(d[k]);
-  if (e[2] === "fire") for (const m of V.families[d.family].members) out.add(m);
-  if (e[2] === "talk") for (const [x] of d.gossip || []) out.add(x);
+  if (e[2] === "fire" && V.families[d.family]) for (const m of V.families[d.family].members) out.add(m);
+  if (e[2] === "talk" && Array.isArray(d.gossip)) for (const g of d.gossip) if (Array.isArray(g)) out.add(g[0]);
   const o = parseRaw(e[7]); if (o && Number.isInteger(o.target)) out.add(o.target);
   return out;
 }
@@ -147,6 +147,9 @@ const CAT = {
 };
 const catOf = k => Object.keys(CAT).find(c => CAT[c](k)) || "acts";
 
+// Steps from a mind's then or an intent: "do target" in order. Anything else is shown as escaped JSON.
+const steps = (xs, sep) => Array.isArray(xs) ? xs.map(s => s && typeof s === "object"
+  ? esc(s.do) + (Number.isInteger(s.target) ? " " + who(s.target) : "") : esc(JSON.stringify(s))).join(sep) : (xs == null ? "" : esc(JSON.stringify(xs)));
 function describe(e) {
   const [id, tick, k, origin, actor, d, parents, m] = e, a = who(actor);
   const o = parseRaw(m);
@@ -154,48 +157,52 @@ function describe(e) {
   switch (k) {
     case "genesis": return `world begins: engine ${esc(d.engine)}, seed ${esc(d.seed)}, order ${esc(d.order)}`;
     case "end": return `recording ends (final hash ${esc(String(d.hash).slice(0, 12))}…)`;
-    case "checkpoint": return `end of day ${d.day} (hash ${esc(String(d.hash).slice(0, 12))}…)`;
+    case "checkpoint": return `end of day ${esc(d.day)} (hash ${esc(String(d.hash).slice(0, 12))}…)`;
     case "day_rhythm": return `${a}'s next wake set for ${clock(d.wake_tick)}`;
     case "wake": return `${a} woke at ${esc(d.place)}`;
-    case "sleep": return `${a} went to sleep (${d.promoted} memory kept${d.rejected ? `, ${d.rejected} rejected` : ""}${d.unknown_person ? `, ${d.unknown_person} named a stranger` : ""})`;
+    case "sleep": return `${a} went to sleep (${esc(d.promoted)} memory kept${d.rejected ? `, ${esc(d.rejected)} rejected` : ""}${d.unknown_person ? `, ${esc(d.unknown_person)} named a stranger` : ""})`;
     case "activity": return `${a}: ${esc(d.activity)} at ${esc(d.place)}`;
     case "eat": return `${a} ate${Number.isInteger(d.household) ? ` from ${who(d.household)}'s household food` : ""}`;
-    case "produce": return `${a} made ${d.food ? d.food + " food" : d.coin + " coin"}`;
-    case "sell": return `${a} sold ${d.food} food to the market`;
-    case "spoil": return `market spoilage: ${d.market_food_lost} food lost (cap ${d.cap})`;
+    case "produce": return `${a} made ${d.food ? esc(d.food) + " food" : esc(d.coin) + " coin"}`;
+    case "sell": return `${a} sold ${esc(d.food)} food to the market`;
+    case "spoil": return `market spoilage: ${esc(d.market_food_lost)} food lost (cap ${esc(d.cap)})`;
     case "fire": return `fire burns the food of the ${esc(V.families[d.family].surname)} family (${V.families[d.family].members.map(who).join(", ")})`;
     case "talk": return `${a} talked with ${who(d.with)} at ${esc(d.place)}` + ((d.gossip || []).length ? `; gossip: ${d.gossip.map(([x, b]) => `${who(x)} now believes ${esc(b)}`).join("; ")}` : "");
     case "meet": return `${a} met ${who(d.with)} at ${esc(d.place)}`;
     case "snub": return `${a} turned away from ${who(d.with)}`;
-    case "plan_receipt": return `${a}'s plan: ${d.ok ? `${d.blocks} block(s) accepted` : "unusable"}${d.dropped ? `, ${d.dropped} dropped` : ""}`;
+    case "plan_receipt": return `${a}'s plan: ${d.ok ? `${esc(d.blocks)} block(s) accepted` : "unusable"}${d.dropped ? `, ${esc(d.dropped)} dropped` : ""}`;
     case "receipt": return `${a} ${esc(d.action)}${Number.isInteger(d.to) ? " → " + who(d.to) : ""}: <b>${d.ok ? "ok" : "failed"}</b> (${esc(d.why)})`;
-    case "intent_set": return `${a} set a goal: “${esc(d.goal || "(none)")}” — ${(d.steps || []).map(s => esc(s.do) + (Number.isInteger(s.target) ? " " + who(s.target) : "")).join(", then ")}${d.dropped ? ` (${d.dropped} step(s) dropped)` : ""}`;
-    case "intent_step": return `${a} step ${d.i + 1}: ${esc(d.do)}${d.why ? ` (${esc(d.why)})` : ""}`;
-    case "intent_done": return `${a} finished their intention (${d.steps} step(s))`;
+    case "intent_set": return `${a} set a goal: “${esc(d.goal || "(none)")}” — ${steps(d.steps, ", then ")}${d.dropped ? ` (${esc(d.dropped)} step(s) dropped)` : ""}`;
+    case "intent_step": return `${a} step ${esc(d.i + 1)}: ${esc(d.do)}${d.why ? ` (${esc(d.why)})` : ""}`;
+    case "intent_done": return `${a} finished their intention (${esc(d.steps)} step(s))`;
     case "intent_failed": return `${a}'s intention failed at ${esc(d.do)}: ${esc(d.why)}`;
     case "intent_dropped": return `${a} dropped their intention (${esc(d.why)})`;
     case "mind_plan":
       if (!o || !Array.isArray(o.plan)) return `${a} planned the day` + rawFallback();
-      return `${a} planned: ` + (o.plan.map(b => `${esc(b.activity)} ${b.start_h}–${b.end_h}h`).join(", ") || "nothing");
+      return `${a} planned: ` + (o.plan.map(b => b && typeof b === "object" ? `${esc(b.activity)} ${esc(b.start_h)}–${esc(b.end_h)}h` : esc(JSON.stringify(b))).join(", ") || "nothing");
     case "mind_deliberate": {
-      if (!o) return `${a} deliberated` + rawFallback();
+      if (!o || typeof o !== "object") return `${a} deliberated` + rawFallback();
       const tgt = Number.isInteger(o.target) ? " " + who(o.target) : "";
-      const then = (o.then || []).map(s => esc(s.do || s) + (Number.isInteger(s.target) ? " " + who(s.target) : "")).join(", ");
-      const held = (d.withheld || []).length ? `<span class="sub"> (not offered: ${d.withheld.map(esc).join(", ")})</span>` : "";
+      const then = steps(o.then, ", ");
+      const held = Array.isArray(d.withheld) && d.withheld.length ? `<span class="sub"> (not offered: ${d.withheld.map(esc).join(", ")})</span>` : "";
       return `${a} decided: <b>${esc(o.action)}</b>${tgt}${o.goal ? `; goal “${esc(o.goal)}”` : ""}${then ? `; then ${then}` : ""}${held}` +
         (o.reason ? `<span class="reason">“${esc(o.reason)}”</span>` : "");
     }
     case "mind_reflect":
-      if (!o) return `${a} reflected` + rawFallback();
+      if (!o || typeof o !== "object") return `${a} reflected` + rawFallback();
       return `${a} reflected` + (o.summary ? `<span class="reason">“${esc(o.summary)}”</span>` : "") +
-        ((o.core || []).length ? `<span class="reason">core: ${o.core.map(c => "“" + esc(c) + "”").join(" ")}</span>` : "");
+        (Array.isArray(o.core) && o.core.length ? `<span class="reason">core: ${o.core.map(c => "“" + esc(typeof c === "string" ? c : JSON.stringify(c)) + "”").join(" ")}</span>` : "");
     default: return `${a ? a + " " : ""}${esc(k)} ${esc(JSON.stringify(d))}`;
   }
+}
+// A log is data from minds and other engines: an output of an unexpected shape shows as JSON, never breaks a pane.
+function safeDescribe(e) {
+  try { return describe(e); } catch (_) { return `${esc(e[2])} <span class="sub">(unexpected shape)</span> ${esc(JSON.stringify([e[5], e[7] && e[7].raw]))}`; }
 }
 function evRow(e, hl) {
   const fail = (e[2] === "receipt" && e[5].ok === false) || e[2] === "intent_failed";
   return `<div class="ev${e[2].startsWith("mind_") ? " mind" : ""}${fail ? " fail" : ""}${hl ? " now" : ""}" data-open="${e[0]}">` +
-    `<span class="t">${clock(e[1])}</span><span class="k">${esc(e[2])}</span>${describe(e)}</div>`;
+    `<span class="t">${clock(e[1])}</span><span class="k">${esc(e[2])}</span>${safeDescribe(e)}</div>`;
 }
 
 // ---------------------------------------------------------------- indexes built once
@@ -236,7 +243,7 @@ function drawMap() {
   let out = "";
   for (const p of Object.keys(BOX)) {
     const b = BOX[p], here = occ[p] || [], f = famByHome[p];
-    const label = b.big ? p : (f ? `${f.surname}` : p);
+    const label = b.big ? p : (f ? f.surname : p);
     out += `<g class="place${S.place === p ? " sel" : ""}" data-place="${esc(p)}"><rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6"/>` +
       `<text class="${b.big ? "big" : ""}" x="${b.x + 6}" y="${b.y + (b.big ? 17 : 13)}">${esc(label)} · ${here.length}</text>`;
     const top = b.y + (b.big ? 26 : 19), inner = b.w - 12, avail = b.h - (top - b.y) - 4;
@@ -312,8 +319,8 @@ function paneEvent() {
   const line = x => { const p = byId.get(x); return p ? evRow(p, false) : `<div class="ev">#${x} (not in log)</div>`; };
   const ks = kids(id);
   return `<h2>Event #${id}: ${esc(k)}</h2>
-    <div class="sub">${clock(tick)} (tick ${tick}), origin <b>${esc(origin)}</b>${m ? `, model ${esc(m.model)}, ${m.in} prompt / ${m.out} output tokens` : ""}</div>
-    <p>${describe(e)}</p>
+    <div class="sub">${clock(tick)} (tick ${tick}), origin <b>${esc(origin)}</b>${m ? `, model ${esc(m.model)}, ${esc(m.in)} prompt / ${esc(m.out)} output tokens` : ""}</div>
+    <p>${safeDescribe(e)}</p>
     <div class="sub">Caused by (parents)</div><div class="list" style="max-height:24vh">${parents.map(line).join("") || '<p class="empty">No parents.</p>'}</div>
     <div class="sub">Led to (${ks.length})</div><div class="list" style="max-height:24vh">${ks.slice(0, 200).map(line).join("") || '<p class="empty">Nothing names this event as a parent.</p>'}</div>
     <div class="sub">Recorded data</div><pre>${esc(JSON.stringify({data: d, mind_output: m ? m.raw : undefined}, null, 2))}</pre>`;
