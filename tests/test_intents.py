@@ -83,6 +83,8 @@ def test_an_intent_outlives_the_night_and_the_next_prompts_show_it():
     assert a["intent"]["goal"] == "save for a plough"
     mind.answer = lambda req: {"action": "wait", "target": None}
     sim.run_until(a["sleep_tick"] + 1)
+    while not a["asleep"]:  # an agent away from home at bedtime walks home first (the map)
+        sim.step()
     left = a["intent"]["left"]
     assert a["asleep"] and a["intent"]["goal"] == "save for a plough"
     sim.run_until(a["wake_tick"])  # the step clock stops while asleep
@@ -123,8 +125,13 @@ def test_go_market_buys_on_arrival_so_one_deliberation_feeds_the_day():
     sim.state["market_food"] = 50
     deliberate_now(sim, a, {"action": "go_market", "target": None})
     sim.step()
+    walk = next(e for e in sim.events if e.kind == "activity" and e.actor == 0)
+    assert walk.data["place"] == "market" and walk.data["arrive"] > walk.tick and a["place"] is None
+    while a["override"] and sim.state["tick"] < walk.data["arrive"] + 1:
+        sim.step()
     bought = [e for e in sim.events if e.kind == "receipt" and e.data["action"] == "buy_food"]
     assert len(bought) == 1 and bought[0].data["ok"] and a["inv"]["food"] >= 1 and a["override"] is None
+    assert bought[0].tick == walk.data["arrive"]  # it buys on the tick it gets there
 
 
 def test_a_planned_shop_block_buys_without_any_deliberation():
@@ -291,7 +298,7 @@ def test_a_failed_buy_says_whether_stock_or_coin_was_missing():
 
 def test_a_shop_step_that_finds_no_food_says_so_on_the_blocked_line():
     sim = Sim(1, 12, StubMind())
-    (a,) = awake(sim, [0])
+    (a,) = awake(sim, [0], place="market")
     a["cognition"]["deliberation_threshold"] = 0
     a["inv"].update(food=0, coin=30)
     sim.state["market_food"] = 0

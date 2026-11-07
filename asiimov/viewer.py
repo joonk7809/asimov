@@ -3,16 +3,17 @@
     python -m asiimov.viewer runs/demo/events.jsonl --out runs/demo/view.html
     python -m asiimov.viewer results/raw/t1m-4b/full/events.jsonl.gz --out view.html
 
-The page shows a schematic map of places with who is where at any tick, a scrubber over the
+The page shows a map of places with who is where at any tick, a scrubber over the
 whole run, each villager's timeline (their own events and the ones aimed at them), mind outputs
 with their reasons, and every event's causal parents. It needs no server, no network and no
 model, and works on logs from any engine, complete or cut off by a crash.
 
 Internal tooling only: it is not the game client and decides nothing about its form (T6b).
-The engine has no coordinates yet, so the map is a schematic of named places, not geography.
+A log whose genesis carries a map (asiimov/worldmap.py) is drawn as geography, with walkers between
+places; an older log is drawn as a schematic of named places.
 
 Where each villager is comes from the log alone: every place change is an emitted event (wake,
-activity, sleep), so `moves()` is exact for a complete log and needs no replay. Inventory and
+activity, arrive, sleep), so `moves()` is exact for a complete log and needs no replay. Inventory and
 needs are not shown, because the log doesn't carry them; that would need a same-engine replay.
 """
 import argparse
@@ -54,25 +55,32 @@ def read_log(path: str) -> tuple[list[dict], int]:
 
 def moves(events: list[dict]) -> dict[int, list[list]]:
     """Each villager's [tick, place, activity] changes. At tick t a villager is at the last entry with
-    tick <= t, which is their state after tick t ran. tests/test_viewer.py checks this against the sim."""
+    tick <= t, which is their state after tick t ran. tests/test_viewer.py checks this against the sim.
+    On a map log a walker's place is None and its entry carries [from, to, depart]: it left `from` at
+    tick `depart` for place `to`, at the map's walking speed."""
     pop = events[0]["data"]["population"]
     home = {a["id"]: pop["families"][a["family"]]["home"] for a in pop["agents"]}
     out = {aid: [[0, h, "sleep"]] for aid, h in home.items()}  # genesis: everyone asleep at home
 
-    def put(aid, tick, place, activity):
+    def put(aid, tick, place, activity, walk=()):
         m = out[aid]
         if m[-1][0] == tick:
             m.pop()  # several changes in one tick: only the last is visible between ticks
-        if m and m[-1][1:] == [place, activity]:
+        if m and m[-1][1:] == [place, activity, *walk]:
             return
-        m.append([tick, place, activity])
+        m.append([tick, place, activity, *walk])
 
     for e in events:
-        aid, kind = e["actor"], e["kind"]
+        aid, kind, d = e["actor"], e["kind"], e["data"]
         if kind == "wake":
-            put(aid, e["tick"], e["data"].get("place", out[aid][-1][1]), "home")
+            put(aid, e["tick"], d.get("place", out[aid][-1][1]), "home")
+        elif kind == "activity" and d.get("arrive", e["tick"]) > e["tick"]:  # walking (map logs)
+            walk = [d["from"], d["place"], e["tick"]] if "from" in d else out[aid][-1][3:]
+            put(aid, e["tick"], None, d["activity"], walk)
         elif kind == "activity":
-            put(aid, e["tick"], e["data"]["place"], e["data"]["activity"])
+            put(aid, e["tick"], d["place"], d["activity"])
+        elif kind == "arrive":
+            put(aid, e["tick"], d["place"], out[aid][-1][2])
         elif kind == "sleep":
             put(aid, e["tick"], home[aid], "sleep")
     return out
@@ -104,7 +112,7 @@ def build(events: list[dict], source: str = "", skipped: int = 0) -> dict:
             models.add(m.get("model"))
             m = {"model": m.get("model"), "raw": m.get("raw_output"),
                  "in": m.get("prompt_tokens"), "out": m.get("output_tokens")}
-        data = e["data"] if e["kind"] != "genesis" else {k: v for k, v in e["data"].items() if k != "population"}
+        data = e["data"] if e["kind"] != "genesis" else {k: v for k, v in e["data"].items() if k not in ("population", "map")}
         compact.append([e["id"], e["tick"], e["kind"], e["origin"], e["actor"], data, e["parents"], m])
     places.discard(None)
     mv = moves(events)
@@ -113,7 +121,7 @@ def build(events: list[dict], source: str = "", skipped: int = 0) -> dict:
         "ticks_per_day": TICKS_PER_DAY, "end_tick": end_tick, "complete": complete, "skipped_lines": skipped,
         "ending": ending(last),
         "models": sorted(x for x in models if x),
-        "agents": pop["agents"], "families": pop["families"], "places": sorted(places),
+        "agents": pop["agents"], "families": pop["families"], "places": sorted(places), "map": g.get("map"),
         "moves": [mv[a["id"]] for a in pop["agents"]], "events": compact,
     }
 

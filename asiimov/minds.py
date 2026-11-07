@@ -94,8 +94,12 @@ class StubMind:
         if t["honesty"] < 350 and holders:
             return {"action": "steal", "target": holders[0]["id"], "reason": "hungry and nobody is watching"}
         kin = [p for p in v["kin"] if p["has_food"]]
-        if kin:
-            return {"action": "ask_kin", "target": kin[0]["id"], "reason": "family helps"}
+        near = [p for p in kin if p["id"] in {q["id"] for q in v["present"]}]
+        if near and "ask_kin" in offer:
+            return {"action": "ask_kin", "target": near[0]["id"], "reason": "family helps"}
+        if kin and "seek" in offer:  # family elsewhere: go to them, then ask (ask_kin needs them here)
+            return {"action": "seek", "target": kin[0]["id"], "reason": "family helps", "goal": "get food from family",
+                    "then": [{"do": "ask_kin", "target": kin[0]["id"]}]}
         if holders:  # a stranger here with food: offer coin if there is some, else ask
             action = "buy_from" if "buy_from" in offer else "ask_food"
             return {"action": action, "target": holders[0]["id"], "reason": "they have food"}

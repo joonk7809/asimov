@@ -93,7 +93,7 @@ h2 { font-size: 15px; margin: 0 0 4px; }
     </div>
     <svg id="map" role="img" aria-label="Schematic map of places with villagers"></svg>
     <div class="legend" id="legend"></div>
-    <p class="note">Schematic: the engine has no coordinates yet, so places are named boxes, not geography. A hollow dot is asleep. Click a villager or a place.</p>
+    <p class="note" id="mapnote"></p>
   </section>
   <section class="card">
     <div class="tabs">
@@ -227,7 +227,22 @@ const ORDER = ["field", "workshop", "market", "plaza", "woods"];
 PUBLIC.sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
 const HOMES = V.places.filter(p => p.startsWith("home_")).sort((a, b) => +a.slice(5) - +b.slice(5));
 const W = 1000, PAD = 8, BOX = {};
+const MAP = V.map && V.map.places;
+let TILE = 1, OX = 0, OY = 0;  // map logs: tile -> px scale and offset
 (function layout() {
+  document.getElementById("mapnote").textContent = (MAP
+    ? "Map: places at their coordinates; a dot between places is walking."
+    : "Schematic: this log has no map, so places are named boxes, not geography.") + " A hollow dot is asleep. Click a villager or a place.";
+  if (MAP) {
+    const rs = Object.values(MAP).map(p => p.rect);
+    const x0 = Math.min(...rs.map(r => r[0])), y0 = Math.min(...rs.map(r => r[1]));
+    const x1 = Math.max(...rs.map(r => r[0] + r[2])), y1 = Math.max(...rs.map(r => r[1] + r[3]));
+    TILE = (W - 2 * PAD) / (x1 - x0); OX = PAD - x0 * TILE; OY = PAD - y0 * TILE;
+    for (const [p, {rect: [x, y, w, h]}] of Object.entries(MAP))
+      BOX[p] = { x: OX + x * TILE, y: OY + y * TILE, w: w * TILE, h: h * TILE, big: !p.startsWith("home_") };
+    svg.setAttribute("viewBox", `0 0 ${W} ${2 * PAD + (y1 - y0) * TILE}`);
+    return;
+  }
   const pw = (W - PAD * (PUBLIC.length + 1)) / Math.max(PUBLIC.length, 1);
   PUBLIC.forEach((p, i) => BOX[p] = { x: PAD + i * (pw + PAD), y: PAD, w: pw, h: 170, big: true });
   const cols = Math.min(10, Math.max(HOMES.length, 1)), hw = (W - PAD * (cols + 1)) / cols, hh = 64;
@@ -239,7 +254,11 @@ const famByHome = Object.fromEntries(V.families.map(f => [f.home, f]));
 function drawMap() {
   const occ = {};
   for (const p of V.places) occ[p] = [];
-  for (const a of A) { const [, p, act] = posAt(a.id, S.t); (occ[p] = occ[p] || []).push([a.id, act]); }
+  const walking = [];
+  for (const a of A) {
+    const m = posAt(a.id, S.t);
+    if (m[1] === null) walking.push([a.id, m]); else (occ[m[1]] = occ[m[1]] || []).push([a.id, m[2]]);
+  }
   let out = "";
   for (const p of Object.keys(BOX)) {
     const b = BOX[p], here = occ[p] || [], f = famByHome[p];
@@ -258,6 +277,15 @@ function drawMap() {
     });
     out += "</g>";
   }
+  for (const [id, [, , act, from, to, depart]] of walking) {  // along the L path, x first, as the engine walks
+    if (!MAP || !from || !MAP[to]) continue;
+    const [tx, ty] = MAP[to].anchor; let [x, y] = from, left = V.map.walk * (S.t - depart);
+    const dx = Math.min(left, Math.abs(tx - x)); x += tx >= x ? dx : -dx;
+    const dy = Math.min(left - dx, Math.abs(ty - y)); y += ty >= y ? dy : -dy;
+    const c = roleColor(A[id].role);
+    out += `<circle class="dot${S.agent === id ? " sel" : ""}" data-agent="${id}" cx="${OX + (x + 0.5) * TILE}" cy="${OY + (y + 0.5) * TILE}" r="3" fill="${c}">` +
+      `<title>${esc(A[id].name)} #${id} (${esc(A[id].role)}): ${esc(act)}, walking to ${esc(to)}</title></circle>`;
+  }
   svg.innerHTML = out;
 }
 document.getElementById("legend").innerHTML = ROLES.map(r => `<span><i style="background:${roleColor(r)}"></i>${esc(r)}</span>`).join("");
@@ -266,7 +294,7 @@ document.getElementById("legend").innerHTML = ROLES.map(r => `<span><i style="ba
 const pane = document.getElementById("pane");
 function paneAgent() {
   if (S.agent === null) return `<p class="empty">Click a villager on the map, or a name anywhere.</p>`;
-  const a = A[S.agent], f = famOf(S.agent), [, p, act] = posAt(a.id, S.t);
+  const a = A[S.agent], f = famOf(S.agent), [, p, act, , to] = posAt(a.id, S.t);
   const tr = Object.entries(a.traits).map(([k, v]) => `<span>${esc(k)}</span><span class="bar"><b style="width:${v / 10}%"></b></span><span class="sub">${v}</span>`).join("");
   const vals = a.values ? `values: ${(a.values.top || []).map(esc).join(", ")}; least: ${(a.values.bottom || []).map(esc).join(", ")}` : "";
   const evs = byAgent[a.id].filter(e => S.showRoutine || catOf(e[2]) !== "routine");
@@ -279,7 +307,7 @@ function paneAgent() {
   });
   return `<h2>${esc(a.name)} #${a.id}</h2>
     <div class="sub">${esc(a.role)}, age ${a.age}, ${esc(f.surname)} family (${f.members.filter(m => m !== a.id).map(who).join(", ") || "alone"}), home ${esc(f.home)}</div>
-    <div class="sub">now (${clock(S.t)}): <b>${esc(act)}</b> at ${esc(p)}</div>
+    <div class="sub">now (${clock(S.t)}): <b>${esc(act)}</b> ${p === null ? `walking to ${esc(to)}` : `at ${esc(p)}`}</div>
     <div class="traits">${tr}</div><div class="sub">${vals}</div>
     <div class="filters"><label><input type="checkbox" id="routine" ${S.showRoutine ? "checked" : ""}> show routine (moves, meals, work output)</label>
     <span class="sub">${evs.length} events; highlighted = latest at or before now</span></div>

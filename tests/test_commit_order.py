@@ -102,7 +102,7 @@ def _two_hungry_at_market(order, seed=1):
     sim = Sim(seed, 6, Greedy(), order=order)
     sim.state["market_food"] = 1
     for a in sim.state["agents"]:
-        a.update(asleep=False, wake_tick=0, sleep_tick=10**6, place="home", activity="home", plan=[], habit="home")
+        a.update(asleep=False, wake_tick=0, sleep_tick=10**6, place=a["home"], activity="home", plan=[], habit="home")
         a["inv"]["food"] = 0
     for aid in (2, 4):
         a = sim.state["agents"][aid]
