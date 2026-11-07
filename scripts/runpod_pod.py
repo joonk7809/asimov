@@ -25,6 +25,7 @@ NAME_PREFIX = "asiimov-"  # every pod this script starts; `down --all` touches o
 GPU_TYPES = ["NVIDIA H100 80GB HBM3", "NVIDIA H100 PCIe", "NVIDIA H100 NVL", "NVIDIA A100 80GB PCIe",
              "NVIDIA A100-SXM4-80GB"]
 POD_DIR = os.path.join(os.path.dirname(__file__), "..", "runs", "pods")
+AGENT_PORT = 8001  # scripts/pod_agent.py: runs jobs on the pod itself (scripts/podjob.py)
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict | list | None:
@@ -60,14 +61,23 @@ def ttl_cmd(expires: int) -> str:
     return f"(sleep $(({expires} - $(date +%s))); while true; do echo {b64} | base64 -d | python3; sleep 300; done) & "
 
 
+def agent_cmd(key: str, model: str) -> str:
+    """Shell prefix for dockerStartCmd: the job runner on AGENT_PORT, restarted if it ever exits.
+    Jobs live on the container disk under /jobs and outlive the runner itself."""
+    with open(os.path.join(os.path.dirname(__file__), "pod_agent.py"), "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    return (f"echo {b64} | base64 -d > /pod_agent.py; (while true; do ASIIMOV_JOBS=/jobs python3 /pod_agent.py "
+            f"{AGENT_PORT} {key} {model}; sleep 5; done) & ")
+
+
 def up(args):
     key = secrets.token_urlsafe(24)
     expires = int(time.time() + args.ttl_hours * 3600)
-    cmd = ttl_cmd(expires) + (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
+    cmd = ttl_cmd(expires) + agent_cmd(key, args.model) + (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
            f"--max-model-len {args.max_len} --gpu-memory-utilization 0.92 --enable-prefix-caching "
            f"--served-model-name {args.model}")
     body = {
-        "name": f"{NAME_PREFIX}{args.model.split('/')[-1].lower()}"[:60],
+        "name": f"{NAME_PREFIX}{args.name or args.model.split('/')[-1].lower()}"[:60],
         "imageName": IMAGE,
         "gpuTypeIds": args.gpu or GPU_TYPES,
         "gpuTypePriority": "custom",
@@ -75,7 +85,7 @@ def up(args):
         "cloudType": args.cloud,
         "containerDiskInGb": 80,
         "volumeInGb": 0,
-        "ports": ["8000/http"],
+        "ports": ["8000/http", f"{AGENT_PORT}/http"],
         "dockerEntrypoint": ["bash", "-c"],
         "dockerStartCmd": [cmd],
         "env": {"HF_HUB_ENABLE_HF_TRANSFER": "1"},
@@ -83,7 +93,8 @@ def up(args):
     pod = call("POST", "/pods", body)
     os.makedirs(POD_DIR, exist_ok=True)
     rec = {"id": pod["id"], "model": args.model, "api_key": key, "created": time.time(),
-           "url": f"https://{pod['id']}-8000.proxy.runpod.net", "cost_per_hr": pod.get("costPerHr"),
+           "url": f"https://{pod['id']}-8000.proxy.runpod.net",
+           "jobs_url": f"https://{pod['id']}-{AGENT_PORT}.proxy.runpod.net", "cost_per_hr": pod.get("costPerHr"),
            "gpu": (pod.get("machine") or {}).get("gpuTypeId") or pod.get("gpu"),
            "expires": expires}
     with open(os.path.join(POD_DIR, f"{pod['id']}.json"), "w") as f:
@@ -144,6 +155,7 @@ def main():
     p.add_argument("--gpu", nargs="*")
     p.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])
     p.add_argument("--max-len", type=int, default=8192)
+    p.add_argument("--name", default=None, help="pod name after the asiimov- prefix (default: the model)")
     p.add_argument("--ttl-hours", type=float, default=6.0, help="pod terminates itself this long after launch; size it to the planned run")
     p.set_defaults(fn=up)
     p = sub.add_parser("wait")
