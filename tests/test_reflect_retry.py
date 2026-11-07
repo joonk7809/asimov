@@ -1,5 +1,5 @@
-"""T21 (engine 13): a reflection cut off at max_tokens, or that doesn't parse, is asked once more with a
-keyed seed, recorded like any mind call, and replayed exactly (plan/t21-reflect-fix-spec.md)."""
+"""T21 (engine 13): a reflection cut off at max_tokens is asked once more with a keyed seed and frequency
+penalty 1.0, recorded like any mind call, and replayed exactly (plan/t21-reflect-fix-spec.md)."""
 import json
 
 from asiimov.minds import MindReply, StubMind
@@ -19,6 +19,7 @@ class CutOnce(StubMind):
     def decide(self, req):
         if req.kind == "reflect" and req.agent_id in self.who:
             self.asked.append((req.agent_id, req.tick, req.attempt, req.seed))
+            assert req.frequency_penalty_milli == (1000 if req.attempt else 0)
             if req.attempt == 0 or self.fail_retry:
                 return MindReply(LOOP, self.model, {"seed": req.seed}, "length")
         return super().decide(req)
@@ -75,3 +76,21 @@ def test_plans_and_deliberations_are_never_retried():
             return MindReply(r.raw_output, r.model, r.sampling, "length") if req.kind != "reflect" else r
     sim = world(CutAll())
     assert not any(e.data.get("attempt") or e.data.get("retried") for e in sim.events if e.origin == "mind")
+
+
+def test_an_unparsed_reflection_that_was_not_cut_off_is_not_retried():
+    class Garbage(StubMind):
+        def decide(self, req):
+            return MindReply("not json", self.model, {}, "stop") if req.kind == "reflect" else super().decide(req)
+    sim = world(Garbage())
+    assert not any(e.data.get("attempt") or e.data.get("retried") for e in sim.events if e.origin == "mind")
+
+
+def test_the_llm_body_carries_the_penalty_only_on_the_retry():
+    from asiimov.llm import LLMMind
+    from asiimov.minds import MindRequest
+    m = LLMMind("http://x", "m")
+    req = MindRequest("reflect", 1, 5, "p", "ab12cd34", {})
+    assert "frequency_penalty" not in m.body(req)
+    assert m.body(MindRequest("reflect", 1, 5, "p", "ab12cd34", {}, seed=7, attempt=1,
+                              frequency_penalty_milli=1000))["frequency_penalty"] == 1.0

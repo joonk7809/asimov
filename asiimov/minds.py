@@ -20,6 +20,7 @@ class MindRequest:
     view: dict         # perceived facts only (own state, people present, kin)
     seed: int | None = None  # sampling seed; None lets the mind derive one from the prompt
     attempt: int = 0   # 1 for the engine's one retry of a cut-off reflection (T21)
+    frequency_penalty_milli: int = 0  # thousandths; the T21 retry asks at 1000 (integers in the core)
 
 
 @dataclass

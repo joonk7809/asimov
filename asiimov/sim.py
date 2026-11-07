@@ -126,6 +126,9 @@ ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuf
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
 
+RETRY_PENALTY_MILLI = 1000  # frequency_penalty 1.0 on the T21 reflect retry (plan/t21-reflect-fix-spec.md)
+
+
 def _parse(reply) -> dict | None:
     """A mind reply as the engine reads it: a JSON object, or None."""
     try:
@@ -296,14 +299,16 @@ class Sim:
         """Ask every pending request at once, then validate and apply replies in `_order`."""
         aids = sorted(self.pending)
         replies = dict(zip(aids, dispatch(self.mind, [self.pending[i][0] for i in aids], self.workers)))
-        # A reflection cut off at max_tokens, or that doesn't parse, is asked once more with a keyed seed
-        # (T21): the prompt-hash seed would repeat the same loop. Asked together, applied in _order below.
+        # A reflection cut off at max_tokens is asked once more, with a keyed seed (the prompt-hash seed
+        # repeats the same loop) and frequency penalty 1.0 (T21: 4B fiction loss 22.7% -> 7.8% in the
+        # same-requests check). First asks are unchanged. Asked together, applied in _order below.
         retry = {}
         for aid in aids:
             req = self.pending[aid][0]
-            if req.kind == "reflect" and (replies[aid].finish_reason == "length" or _parse(replies[aid]) is None):
+            if req.kind == "reflect" and replies[aid].finish_reason == "length":
                 day = self.state["tick"] // TICKS_PER_DAY
-                retry[aid] = replace(req, attempt=1, seed=self.rng.raw(f"reflect-retry:{aid}:{day}", 0) % 2 ** 32)
+                retry[aid] = replace(req, attempt=1, seed=self.rng.raw(f"reflect-retry:{aid}:{day}", 0) % 2 ** 32,
+                                     frequency_penalty_milli=RETRY_PENALTY_MILLI)
         r_ids = sorted(retry)
         retried = dict(zip(r_ids, dispatch(self.mind, [retry[i] for i in r_ids], self.workers)))
         pending, self.pending = self.pending, {}

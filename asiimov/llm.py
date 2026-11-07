@@ -107,6 +107,8 @@ class LLMMind:
             # Qwen3 hybrid models: no <think> block; deliberation is the answer itself.
             "chat_template_kwargs": {"enable_thinking": False},
         }
+        if req.frequency_penalty_milli:  # only the T21 reflect retry; every first ask is unchanged
+            b["frequency_penalty"] = req.frequency_penalty_milli / 1000
         if self.structured:
             b["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": req.kind, "schema": schema_for(req), "strict": True}}
@@ -148,6 +150,8 @@ class LLMMind:
                            "finish_reason": choice.get("finish_reason")})
         sampling = {"temperature": self.temperature, "top_p": self.top_p, "max_tokens": self.max_tokens,
                     "seed": body["seed"], "structured": self.structured}
+        if "frequency_penalty" in body:
+            sampling["frequency_penalty"] = body["frequency_penalty"]
         return MindReply(text.strip(), resp.get("model", self.model), sampling, choice.get("finish_reason"))
 
     def stats(self) -> dict:
