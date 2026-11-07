@@ -94,3 +94,21 @@ def test_the_llm_body_carries_the_penalty_only_on_the_retry():
     assert "frequency_penalty" not in m.body(req)
     assert m.body(MindRequest("reflect", 1, 5, "p", "ab12cd34", {}, seed=7, attempt=1,
                               frequency_penalty_milli=1000))["frequency_penalty"] == 1.0
+
+
+def test_readers_take_the_final_attempt_and_skip_the_superseded_one():
+    """Review of PR #31: test 5's bag and the probe kept the cut-off reply of a retried reflection."""
+    from asiimov import diagnostics, probe, scorecard as sc
+    sim = world(CutOnce(range(12)))
+    retried = [e for e in sim.events if e.data.get("retried")]
+    assert retried
+    # test 5's documents: no period text carries the loop
+    texts = [p["text"] for ps in sc.extract(sim.events)["periods"].values() for p in ps]
+    assert texts and not any("ngày" in t for t in texts), "a superseded reply reached test 5's documents"
+    diagnostics.diagnose(sim.events)  # reads reflections; must not trip on the pair
+    # the probe: one point per decision, and its recorded output is the final attempt
+    pts = probe.sample_points(sim.events, 500, seed=0)
+    assert len(pts) == len(set(pts))
+    pack = probe.build_pack(sim.events, "full", 500, seed=0)
+    reflect = [p for p in pack if p["kind"] == "reflect"]
+    assert reflect and not any("ngày" in p["recorded_output"] for p in reflect)

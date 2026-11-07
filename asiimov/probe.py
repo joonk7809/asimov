@@ -64,7 +64,7 @@ def sample_points(events: list[Event], n: int, seed: int) -> list[tuple[int, int
     others), and within a kind spread across agents round-robin so no one agent dominates."""
     by_kind = defaultdict(lambda: defaultdict(list))
     for e in events:
-        if e.origin == "mind":
+        if e.origin == "mind" and not e.data.get("retried"):  # one point per decision: the final attempt
             by_kind[e.data["kind"]][e.actor].append(e.tick)
     rng = random.Random(seed)
     queues = {}
@@ -189,7 +189,7 @@ def build_pack(events: list[Event], arm: str, n: int, seed: int, prompt_token_of
     if arm not in ARMS:
         raise ValueError(f"arm must be one of {ARMS}: other arms' prompts aren't a function of the log")
     points = sample_points(events, n, seed)
-    recorded = {(e.tick, e.actor): e for e in events if e.origin == "mind" and not e.data.get("attempt")}
+    recorded = {(e.tick, e.actor): e for e in events if e.origin == "mind" and not e.data.get("retried")}
     sim = ProbeSim(events, arm, {(t, a) for t, a, _ in points}, prompt_token_offset)
     sim.run_until(max(t for t, _, _ in points) + 1, sim.player)
     pack = []

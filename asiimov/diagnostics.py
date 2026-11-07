@@ -139,7 +139,7 @@ def diagnose(events: list) -> dict:
     last: dict[int, list] = {}
     plans = copies = entries = bare = person = place = 0
     for e in events:
-        if e.origin != "mind":
+        if e.origin != "mind" or e.data.get("retried"):  # the retry (T21) supersedes it
             continue
         out = _reply(e)
         if e.data["kind"] == "plan":
