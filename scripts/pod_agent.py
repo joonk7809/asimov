@@ -38,22 +38,49 @@ def status(job: str) -> dict:
         return out
     except (FileNotFoundError, ValueError):
         pass  # no exit code yet, or a torn write: decide by the process
-    # Alive means the same process: after a container restart the pid can belong to someone else.
-    out["status"] = "running" if _started(out["pid"]) == out.get("pid_start") else "lost"
+    # Running means some process of the job's group is alive. The group is the job's session (pgid = the
+    # wrapper's pid); after a container restart that pid can be reused, so members must be on the same
+    # boot and no older than the wrapper.
+    out["status"] = "running" if _members(out["pid"], out.get("pid_start")) else "lost"
     return out
+
+
+def _stat(pid: str) -> list[str] | None:
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()  # the name in parentheses may hold spaces
+    except (OSError, IndexError):
+        return None
+
+
+def _boot_id() -> str:
+    with open("/proc/sys/kernel/random/boot_id") as f:
+        return f.read().strip()
 
 
 def _started(pid: int) -> str | None:
     """The process's start time in clock ticks since boot, plus the boot id; None if it isn't running."""
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            fields = f.read().rsplit(")", 1)[1].split()  # the name in parentheses may hold spaces
-        if fields[0] == "Z":  # exited; after a runner restart nobody may reap it (pid 1 is vLLM)
-            return None
-        with open("/proc/sys/kernel/random/boot_id") as f:
-            return f.read().strip() + ":" + fields[19]
-    except (OSError, IndexError):
+    fields = _stat(str(pid))
+    if not fields or fields[0] == "Z":  # exited; after a runner restart nobody may reap it (pid 1 is vLLM)
         return None
+    return _boot_id() + ":" + fields[19]
+
+
+def _members(pgid: int, leader_start: str | None) -> list[int]:
+    """Live (non-zombie) processes in the job's process group. The wrapper may be gone while its children
+    run on (it died first, or a TERM handler is still cleaning up)."""
+    if not leader_start:
+        return []
+    boot, start = leader_start.rsplit(":", 1)
+    if boot != _boot_id():
+        return []
+    out = []
+    for pid in os.listdir("/proc"):
+        if pid.isdigit():
+            f = _stat(pid)
+            if f and f[0] != "Z" and int(f[2]) == pgid and int(f[19]) >= int(start):
+                out.append(int(pid))
+    return out
 
 
 def start(name: str, cmd: str, code: bytes, env: dict) -> dict:
@@ -75,26 +102,29 @@ def start(name: str, cmd: str, code: bytes, env: dict) -> dict:
 
 
 def kill(job: str) -> dict:
-    """TERM the job's whole process group, KILL it after 10 s, and record the exit code the shell couldn't."""
+    """TERM the job's whole process group, KILL what is left after 10 s, and record the exit code the
+    wrapper couldn't write. Returns only once no process of the job is alive."""
     s = status(job)
     if s["status"] != "running":
         return s
+    code = "143"  # 128 + SIGTERM, as a shell would report it
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(s["pid"], sig)
         except ProcessLookupError:
             break
         for _ in range(100):
-            if _started(s["pid"]) != s["pid_start"]:
+            if not _members(s["pid"], s["pid_start"]):
                 break
             time.sleep(0.1)
         else:
+            code = "137"  # something ignored TERM for 10 s
             continue
         break
     path = os.path.join(ROOT, job, "exit")
     if not os.path.exists(path):
         with open(path + ".tmp", "w") as f:
-            f.write("143\n")  # 128 + SIGTERM, as a shell would report it
+            f.write(code + "\n")
         os.replace(path + ".tmp", path)
     return status(job)
 

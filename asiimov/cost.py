@@ -72,7 +72,7 @@ def load(path: str) -> dict:
 
 
 def price(loads: list[dict], benches: list[dict], world_minutes_per_hour: list[float],
-          agents_per_player: list[int]) -> dict:
+          agents_per_player: list[int], min_valid: float = 0.95) -> dict:
     """$ per agent-hour of world time from each bench's saturated throughput, and what that makes a
     player-hour. Capacity assumes calls can be spread over time (a pipelined engine); the tick-synchronous
     engine today needs headroom for its peak tick, reported as peak_to_mean."""
@@ -82,11 +82,14 @@ def price(loads: list[dict], benches: list[dict], world_minutes_per_hour: list[f
     peak = max(l["calls_per_tick_per_100_agents"]["p99"] / l["calls_per_tick_per_100_agents"]["mean"] for l in loads)
     out = {"calls_per_agent_day": round(cpad, 3), "peak_to_mean_p99": round(peak, 2), "servers": []}
     for b in benches:
-        best = max(b["results"], key=lambda r: r["req_per_s"])
+        # The fastest level whose replies are still usable: overload can show up as truncated or invalid JSON.
+        ok = [r for r in b["results"] if r.get("valid_json_share", 1) >= min_valid] or b["results"]
+        best = max(ok, key=lambda r: r["req_per_s"])
         usd_call = b["cost_per_hr"] / (best["req_per_s"] * 3600)
         usd_agent_world_hour = usd_call * cpad / 24
         row = {"model": b["model"], "gpu": b.get("gpu"), "cost_per_hr": b["cost_per_hr"],
                "label": b.get("label"), "req_per_s": best["req_per_s"], "concurrency": best["concurrency"],
+               "valid_json_share": best.get("valid_json_share"), "truncated": best.get("truncated"),
                "usd_per_1k_calls": round(usd_call * 1000, 5),
                "usd_per_agent_world_hour": round(usd_agent_world_hour, 8), "grid": []}
         for wmph in world_minutes_per_hour:

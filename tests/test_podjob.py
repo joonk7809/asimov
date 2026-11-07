@@ -121,12 +121,39 @@ def test_a_job_killed_without_an_exit_code_is_lost_not_done(pod):
     _until(rec, "j4", "lost")
 
 
-def test_kill_stops_the_whole_job(pod):
+def _alive_in_group(pgid):
+    return [p for p in os.listdir("/proc") if p.isdigit() and _pgrp(p) == pgid]
+
+
+def _pgrp(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return int(fields[2]) if fields[0] != "Z" else None
+    except OSError:
+        return None
+
+
+@pytest.mark.parametrize("cmd", ["sleep 30 & sleep 30; wait",
+                                 "trap '' TERM; sleep 300",  # ignores TERM: needs the KILL
+                                 "python3 -c 'import signal,time; signal.signal(signal.SIGTERM, lambda *a: time.sleep(1.5)); time.sleep(60)'"])
+def test_kill_returns_only_once_no_process_of_the_job_is_left(pod, cmd):
     rec, _, _ = pod
-    podjob.request(rec, "POST", "/jobs", {"name": "j5", "cmd": "sleep 30 & sleep 30; wait", "code": _code({})})
-    podjob.request(rec, "POST", "/jobs/j5/kill", {})
-    s = _until(rec, "j5", "done")
-    assert s["rc"] != 0
+    s = podjob.request(rec, "POST", "/jobs", {"name": "j5", "cmd": cmd, "code": _code({})})
+    time.sleep(0.3)
+    t = podjob.request(rec, "POST", "/jobs/j5/kill", {}, timeout=60)
+    assert t["status"] == "done" and t["rc"] != 0
+    assert _alive_in_group(s["pid"]) == []
+
+
+def test_a_job_whose_wrapper_died_but_whose_children_run_on_is_running_not_lost(pod):
+    rec, _, _ = pod
+    s = podjob.request(rec, "POST", "/jobs", {"name": "j9", "cmd": "sleep 30", "code": _code({})})
+    os.kill(s["pid"], 9)  # only the wrapper; its sleep child keeps the group alive
+    time.sleep(0.2)
+    assert podjob.request(rec, "GET", "/jobs/j9")["status"] == "running"
+    podjob.request(rec, "POST", "/jobs/j9/kill", {}, timeout=60)
+    assert _alive_in_group(s["pid"]) == []
 
 
 def test_refuses_bad_keys_reused_names_and_paths_out_of_the_job(pod):

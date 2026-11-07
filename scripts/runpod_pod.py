@@ -63,7 +63,8 @@ def ttl_cmd(expires: int) -> str:
 
 def agent_cmd(key: str, model: str) -> str:
     """Shell prefix for dockerStartCmd: the job runner on AGENT_PORT, restarted if it ever exits.
-    Jobs live on the container disk under /jobs and outlive the runner itself."""
+    Jobs live on the container disk under /jobs and outlive the runner itself. It shares vLLM's key, so that
+    key now means a shell on the pod, not only model calls: keep runs/pods/ private."""
     with open(os.path.join(os.path.dirname(__file__), "pod_agent.py"), "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
     return (f"echo {b64} | base64 -d > /pod_agent.py; (while true; do ASIIMOV_JOBS=/jobs python3 /pod_agent.py "
