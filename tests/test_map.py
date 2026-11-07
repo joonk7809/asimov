@@ -272,3 +272,39 @@ def test_a_map_world_is_the_same_under_every_hash_seed():
         out.add(subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True,
                                text=True, check=True).stdout.strip())
     assert len(out) == 1, out
+
+
+def test_two_walkers_on_one_route_stay_apart_through_step():
+    """The step loop's occupancy holds arrivals only (review nit on PR #30): two villagers walking the same
+    way are listed nowhere and don't talk until they arrive."""
+    sim = Sim(1, 100, StubMind())
+    a, b = awake(sim, {0: "woods", 1: "woods"})
+    for x in (a, b):
+        x["traits"]["extraversion"] = 1000
+        x["plan"] = [{"activity": "socialize", "start_h": 0, "end_h": 24}]  # the plaza, 2+ ticks away
+    sim.step()
+    arrive = a["route"]["arrive"]
+    assert b["route"]["arrive"] == arrive > sim.state["tick"]
+    while sim.state["tick"] < arrive:
+        n0 = len(sim.events)
+        sim.step()
+        assert not any(e.kind in ("talk", "meet", "snub") for e in sim.events[n0:])
+    sim.step()
+    assert a["place"] == b["place"] == "plaza"
+
+
+def test_a_shop_step_waits_until_it_reaches_the_market():
+    sim = Sim(1, 100, StubMind())
+    (a,) = awake(sim, {0: "woods"})
+    a["inv"].update(food=0, coin=30)
+    sim.state["market_food"] = 50
+    eid = sim._emit("mind_deliberate", "mind", 0, {"kind": "deliberate"}, [], mind={})
+    sim._resolve(a, {"action": "go_market", "target": None, "goal": "eat", "then": [{"do": "rest", "target": None}]}, eid)
+    sim.step()
+    arrive = a["route"]["arrive"]
+    while sim.state["tick"] < arrive:
+        sim.step()
+        assert a["intent"]["i"] == 0 and not any(e.kind == "receipt" and e.data["action"] == "buy_food" for e in sim.events)
+    sim.step()
+    buy = next(e for e in sim.events if e.kind == "receipt" and e.data["action"] == "buy_food")
+    assert buy.data["ok"] and buy.tick == arrive and a["intent"]["i"] == 1
