@@ -97,10 +97,13 @@ def main():
     ap.add_argument("--agents", type=int, default=100, help="village size the prompts come from")
     ap.add_argument("--days", type=int, default=2)
     ap.add_argument("--cache-bust", action="store_true", help="unique first line per prompt: no shared prefixes")
+    ap.add_argument("--no-structured", action="store_true",
+                    help="no JSON schema per request (diagnostic: grammar compilation is per request on the server)")
     ap.add_argument("--label")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     mind, rec = llm_from_args(args)
+    mind.structured = not args.no_structured
     cost = args.cost_per_hr or (rec or {}).get("cost_per_hr")
     reqs = collect_prompts(args.agents, args.days)
     if args.cache_bust:
@@ -125,7 +128,7 @@ def main():
         results.append(r)
         print(json.dumps(r), flush=True)
     out = {"model": mind.model, "cost_per_hr": cost, "gpu": (rec or {}).get("gpu"), "label": args.label,
-           "agents": args.agents, "cache_bust": args.cache_bust, "prompt_mix": kinds, "results": results}
+           "agents": args.agents, "cache_bust": args.cache_bust, "structured": mind.structured, "prompt_mix": kinds, "results": results}
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)
 
