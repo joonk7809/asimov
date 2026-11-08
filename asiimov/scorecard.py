@@ -314,7 +314,7 @@ def extract(events: list) -> dict:
                         open_p[x]["partners"].add(y)
                 if a in open_p:
                     open_p[a]["talks_started"] += 1
-            elif e.origin == "mind" and a in open_p:
+            elif e.origin == "mind" and a in open_p and not e.data.get("retried"):  # a retried reply is superseded
                 p = open_p[a]
                 p["text"] += _texts(e.mind["raw_output"])
                 if e.data["kind"] == "deliberate":

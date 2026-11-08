@@ -35,7 +35,7 @@ from dataclasses import replace
 
 from .events import Event, write_jsonl
 from .memory import render_soul
-from .minds import MindReply, MindRequest, ReplayDivergence
+from .minds import MindReply, MindRequest, ReplayDivergence, mind_key, recorded_reply  # noqa: F401
 from .sim import ENGINE_VERSION, TICKS_PER_DAY, Sim
 
 
@@ -46,7 +46,7 @@ class ForkLeak(RuntimeError):
 def _index(mind_events) -> dict:
     record = {}
     for ev in mind_events:
-        key = (ev.tick, ev.actor)
+        key = mind_key(ev.tick, ev.actor, ev.data.get("attempt", 0))
         if key in record:
             raise ReplayDivergence(f"two mind events for agent {ev.actor} at tick {ev.tick}")
         record[key] = ev
@@ -54,13 +54,14 @@ def _index(mind_events) -> dict:
 
 
 def _serve(ev: Event) -> MindReply:
-    return MindReply(ev.mind["raw_output"], ev.mind["model"], ev.mind["sampling"])
+    return recorded_reply(ev)
 
 
 def live_seed(salt: int, req: MindRequest) -> int:
     """The sampling seed of a forced-live call. LLMMind otherwise derives it from the prompt hash,
     which would give a forced agent the base run's own seed for an unchanged prompt."""
-    blob = f"fork:{salt}:{req.tick}:{req.agent_id}:{req.prompt_hash}".encode()
+    blob = f"fork:{salt}:{req.tick}:{req.agent_id}:{req.prompt_hash}" + (f":{req.attempt}" if req.attempt else "")
+    blob = blob.encode()
     return int(hashlib.sha256(blob).hexdigest()[:8], 16)
 
 
@@ -93,7 +94,7 @@ class ForkMind:
         return req.agent_id in self.live_agents and req.tick >= self.live_from
 
     def decide(self, req: MindRequest) -> MindReply:
-        key, want = (req.tick, req.agent_id), (req.kind, req.prompt_hash)
+        key, want = mind_key(req.tick, req.agent_id, req.attempt), (req.kind, req.prompt_hash)
         for source, record in (("prior", self.prior), ("base", self.base)):
             ev = record.get(key)
             if source == "base" and self.forced(req):
@@ -153,7 +154,7 @@ def live_calls(base, twin, live_agents=(), live_from: int = 0) -> list[tuple[int
         if e.actor in live_agents and e.tick >= live_from:
             out.append((e.tick, e.actor, "forced"))
             continue
-        b = record.get((e.tick, e.actor))
+        b = record.get(mind_key(e.tick, e.actor, e.data.get("attempt", 0)))
         if b is None or (b.data["kind"], b.mind["prompt_hash"]) != (e.data["kind"], e.mind["prompt_hash"]):
             out.append((e.tick, e.actor, "miss"))
     return out
