@@ -89,6 +89,12 @@ def test_deliberate_schema_only_takes_targets_the_prompt_lists():
         kin, kin_here = [k["id"] for k in req.view["kin"]], [p["id"] for p in req.view["present"] if p["kin"]]
         ok = lambda out, then=(): jsonschema.Draft202012Validator(schema).is_valid(  # noqa: E731
             {"reason": "x", "goal": "", "then": list(then), **out})
+        if req.view["occasion"]["why"] == "work_end":  # D2: the offer is work or wait, and the schema follows it
+            assert req.view["offer"] == ["work", "wait"]
+            assert ok({"action": "work", "target": None}) and ok({"action": "wait", "target": None})
+            assert not any(ok({"action": x, "target": None}) for x in ("rest", "socialize", "buy_food", "go_market"))
+            assert not any(ok({"action": "steal", "target": p["id"]}) for p in req.view["present"])
+            continue
         for action in ("ask_kin", "steal", "seek", "give_food", "give_coin", "avoid"):
             assert not ok({"action": action, "target": None})
         for action in ("work", "rest", "wait"):
@@ -117,6 +123,7 @@ def test_deliberate_schema_only_takes_targets_the_prompt_lists():
         assert not ok({"action": "wait", "target": None}, [{"do": "rest", "target": None}] * 4)  # at most 3 more
         assert not ok({"action": "wait", "target": None}, [{"do": "fly", "target": None}])
     assert any(req.view["kin"] for req in reqs) and any(req.view["present"] for req in reqs)
+    assert any(req.view["occasion"]["why"] == "work_end" for req in reqs)
 
 
 def test_plan_schema_and_prompt_ask_for_the_whole_waking_day():

@@ -46,6 +46,10 @@ RESPONSE_ARMS = ("famine", "fiction")
 # "fiction" alone is "full+fiction". Under no_text the anchors are left out with the rest of the soul.
 BASE_ARMS = ARMS + ("famine",)
 FICTION_PARTS = ("framing", "anchors", "permission")
+# Trailing switches turn something off: "<arm>-anchors" runs the pre-T25 soul (part "unanchored");
+# "<arm>-work_end" runs with D2's end-of-work occasion off (part "no_work_end"), the same-seed control
+# arm of plan/d2-work-end-spec.md. A switch changes the world, not only the prompt, like famine.
+OFF_SWITCHES = {"anchors": "unanchored", "work_end": "no_work_end"}
 SCHEMA_HEAD = "\n".join(SCHEMA.splitlines()[:2])  # the framing lines the fiction arm replaces
 FAMINE_FROM_DAY = 2
 FAMINE_YIELD = 1  # against FARM_YIELD 3: about 100 food a day for about 267 meals of need (t1h-4b work)
@@ -73,19 +77,19 @@ FICTION_HEADER = fiction_header(True, True)
 
 def parse_arm(arm: str) -> tuple[str, frozenset]:
     """'no_text+framing+anchors' -> ('no_text', {'framing', 'anchors'}); 'fiction' -> ('full', all parts);
-    'full-anchors' -> ('full', {'unanchored'})."""
-    spec, minus, tail = arm.partition("-anchors")
-    if minus and tail:
-        raise ValueError(f"unknown arm {arm!r}: '-anchors' goes last")
+    'full-anchors' -> ('full', {'unanchored'}); 'full-work_end' -> ('full', {'no_work_end'})."""
+    spec, *offs = arm.split("-")
     head, *rest = spec.split("+")
     base, parts = ("full", set(FICTION_PARTS)) if head == "fiction" else (head, set())
     for p in rest:
         parts |= set(FICTION_PARTS) if p == "fiction" else {p}
-    if base not in BASE_ARMS or not parts <= set(FICTION_PARTS):
+    if (base not in BASE_ARMS or not parts <= set(FICTION_PARTS) or not set(offs) <= set(OFF_SWITCHES)
+            or len(set(offs)) != len(offs)):
         raise ValueError(f"unknown arm {arm!r}: <{'|'.join(BASE_ARMS)}|fiction>[+{'|'.join(FICTION_PARTS)}|+fiction]"
-                         "[-anchors]")
-    if minus:
-        parts = (parts - {"anchors"}) | {"unanchored"}
+                         + "".join(f"[-{o}]" for o in OFF_SWITCHES))
+    if "anchors" in offs:
+        parts -= {"anchors"}
+    parts |= {OFF_SWITCHES[o] for o in offs}
     return base, frozenset(parts)
 
 
@@ -186,7 +190,13 @@ class ArmSim(Sim):
     def _emit(self, kind, origin, actor, data, parents=(), mind=None):
         if kind == "genesis" and self.base == "famine":
             data = {**data, "famine": FAMINE_VERSION}
+        if kind == "genesis" and "no_work_end" in self.parts:  # so a reader knows the control arm by its log
+            data = {**data, "work_end": False}
         return super()._emit(kind, origin, actor, data, parents, mind)
+
+    def _work_end(self, a, block):
+        if "no_work_end" not in self.parts:  # D2's same-seed control: the block ends as planned, unasked
+            super()._work_end(a, block)
 
     def step(self, player_actions=()):
         # The famine also spoils the market's stock: in the fed engine-5 world days 0-1 bank enough
@@ -223,7 +233,8 @@ def configuration(arm: str) -> tuple[str, str]:
     """Which graded configuration an arm belongs to and its role in it. 'no_text+fiction' ->
     ('fiction', 'no_text'); 'famine' -> ('famine', 'full'); 'full+framing' -> ('framing', 'full')."""
     base, parts = parse_arm(arm)
-    label = "fiction" if parts == set(FICTION_PARTS) else "+".join(p for p in FICTION_PARTS + ("unanchored",) if p in parts)
+    label = "fiction" if parts == set(FICTION_PARTS) else "+".join(
+        p for p in FICTION_PARTS + tuple(OFF_SWITCHES.values()) if p in parts)
     if base == "famine":
         return "+".join(x for x in ("famine", label) if x), "full"
     return label, base
@@ -608,8 +619,8 @@ def main():
     ap.add_argument("--mind", choices=["stub", "llm"], default="stub")
     ap.add_argument("--out", required=True)
     ap.add_argument("--arms", help="comma-separated; each is <full|no_text|flat_params|famine|fiction>"
-                    "[+framing|+anchors|+permission|+fiction][-anchors]. Default: the three canonical arms, or with "
-                    "--grade-only every arm log in --out")
+                    "[+framing|+anchors|+permission|+fiction][-anchors][-work_end]. Default: the three canonical "
+                    "arms, or with --grade-only every arm log in --out")
     ap.add_argument("--grade-only", action="store_true", help="grade arm logs already in --out")
     ap.add_argument("--pod")
     ap.add_argument("--llm-url")

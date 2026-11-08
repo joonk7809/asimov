@@ -39,8 +39,12 @@ def test_every_waking_tick_gets_one_author_and_the_log_replays_exactly():
     assert len(au_sim.records) == awake
     assert len({(t, a) for t, a, *_ in au_sim.records}) == awake
     assert all(r[2] in au.AUTHORS for r in au_sim.records)
-    # A deliberated override is go_market, which the habit layer never picks.
-    assert all(act == "shop" for _, _, author, act, _ in au_sim.records if author == "deliberate")
+    # A deliberated override is go_market, which the habit layer never picks, or D2's going on at a work
+    # block's end, which only an agent that answered "work" there carries.
+    overrides = [(a, act) for _, a, author, act, _ in au_sim.records if author == "deliberate"]
+    assert overrides and {act for _, act in overrides} <= {"shop", "work"}
+    went_on = {e.actor for e in sim.events if e.kind == "receipt" and e.data["why"] == "went on working"}
+    assert {a for a, act in overrides if act == "work"} <= went_on
 
 
 @pytest.mark.parametrize("arm", sc.ARMS + sc.RESPONSE_ARMS)

@@ -78,6 +78,7 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "failed": "you could not {detail}", "person": "{who}, whom you {detail}, is here",
     "intent_done": "you did what you set out to do: {detail}",
     "blocked": "you had to give up on what you set out to do: {detail}",
+    "work_end": "{detail}",  # D2: the facts of the block's end, composed in _work_end
 }
 # What a deliberation may answer, in the order its prompt lists them (engine 10). Only the ones that can
 # work now are offered (_offer): with impossible ones listed, 63% of 4B famine answers chose buy_food away
@@ -126,7 +127,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "15"  # T25 anchored souls, on engine 14 ("t25-1" until merge)
+ENGINE_VERSION = "d2-1"  # D2, stop or go on at a work block's end (T26), on engine 15; its label until merge
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -325,6 +326,7 @@ class Sim:
             data = {"kind": req.kind}
             if req.kind == "deliberate":  # what the prompt didn't offer, so infeasible choices are countable
                 data["withheld"] = [x for x in DELIBERATE_ACTIONS if x not in req.view["offer"]]
+                data["occasion"] = (req.view.get("occasion") or {"why": "hungry"})["why"]  # why it was asked (D2)
             if aid in retried:
                 data["retried"] = True  # superseded by the next event; readers of reflections skip it
             eid = self._emit_mind(req, reply, data, parents, prompt_tokens)
@@ -430,6 +432,8 @@ class Sim:
         nor when today's belief or the stall in front of you says it is empty; buy_from only with the coin.
         The situation says why each is withheld: NO_COIN_LINE, the belief line, the market's shown stock,
         or "sold only at the market"."""
+        if (view.get("occasion") or {}).get("why") == "work_end":  # D2: go on or stop, nothing else, so no
+            return ["work", "wait"]                                   # 3-hour one-off displaces the next block
         coin_ok = a["inv"]["coin"] >= FOOD_PRICE
         shown = view.get("market_food")
         drop = set()
@@ -458,12 +462,16 @@ class Sim:
         m = (seen["tick"] % TICKS_PER_DAY) * 10
         return f" When you were at the market at {m // 60:02d}:{m % 60:02d}, it had no food."
 
+    def _work_hours(self, a: dict) -> int:
+        """Ticks per unit of this body's work, in whole hours, as the economy line states it."""
+        rate = max(1, a["body"]["strength"] * a["body"]["stamina"] // 1000)
+        return max(1, (-(-3000 // rate) * 10 + 30) // 60)
+
     def _economy(self, a: dict) -> str:
         """What any villager knows about making a living: what this role's work pays, and where food is
         sold. Not in SCHEMA (L11). At engine 5, 4B planned no work on 39% of non-farm plan-days, hungry
         and broke, because nothing in the prompt said work earns coin."""
-        rate = max(1, a["body"]["strength"] * a["body"]["stamina"] // 1000)
-        hours = max(1, (-(-3000 // rate) * 10 + 30) // 60)  # ticks per unit of work, in whole hours
+        hours = self._work_hours(a)
         where = WORKPLACE.get(a["role"])
         if a["role"] == "farmer" and self._food_yield(a) == 0:  # only a capped famine arm gets here
             s = f"The {where} will give no more food today."
@@ -683,13 +691,13 @@ class Sim:
         if step is None:
             if self.state["tick"] % 6 == 0 or a["habit"] is None:
                 a["habit"] = self._habit(a)
-            activity, parent = a["habit"], a["plan_event"]
+            activity, parent, block = a["habit"], a["plan_event"], None
             for b in a["plan"]:
                 if b["start_h"] <= hour < b["end_h"]:
-                    activity = b["activity"]
+                    activity, block = b["activity"], b
             place = self._place(a, activity)
         else:
-            (activity, place), parent = self._step_activity(a, step), holder["event"]
+            (activity, place), parent, block = self._step_activity(a, step), holder["event"], None
         if activity != a["activity"] or place != self._dest(a):
             self._set_activity(a, activity, place, [parent] if parent is not None else [])
             if activity == "shop" and step is None and a["place"] == "market":  # a planned shop block buys
@@ -709,8 +717,34 @@ class Sim:
                 else:
                     a["inv"]["coin"] += WORK_WAGE
                     self._emit("produce", "rule", a["id"], {"coin": WORK_WAGE}, [a["plan_event"]])
+        if block is not None and block["activity"] == "work" and block["end_h"] == hour + 1 and self.state["tick"] % 6 == 5:
+            self._work_end(a, block)  # the block's last tick: a reply takes effect before the next block
         if step is not None:
             self._progress(a, author, step, holder)
+
+    def _work_end(self, a: dict, block: dict):
+        """D2 (plan/d2-work-end-spec.md, T26): at the last tick of a planned work block, a working adult at
+        work with pay on the table and at least an hour before bed is asked once: go on, or stop as planned.
+        The text is facts only (L11): nothing from the sheet, so the no_text and flat_params arms show it
+        unchanged. Asked at this tick or not at all: a mind in its cooldown, near the day's cap, or asked
+        about hunger at this tick lets the block end as planned (_maybe_deliberate), and that counts as
+        not asked. A pending occasion of higher salience keeps its place, as always (_occasion)."""
+        tick = self.state["tick"]
+        if a["role"] in ("child", "elder") or a["place"] != WORKPLACE[a["role"]] or a["sleep_tick"] - tick < 6:
+            return
+        if a["role"] == "farmer" and self._food_yield(a) == 0:  # a spent famine cap: nothing on the table
+            return
+        if not self._mind_free(a):
+            return
+        where = a["place"]
+        pay = f"yields {self._food_yield(a)} food" if a["role"] == "farmer" else f"pays {WORK_WAGE} coin"
+        nxt = next((b["activity"] for b in a["plan"] if b["start_h"] <= block["end_h"] < b["end_h"]), None)
+        plan = f"your plan says {nxt} next" if nxt else "your plan has nothing more today"
+        detail = (f"you have done the hours you planned at the {where}; another unit of work there takes about"
+                  f" {self._work_hours(a)} hours and {pay}; {plan}. Answering work keeps you at the {where} for"
+                  f" about {DEFAULT_STEP_TICKS // 6} more hours and moves the rest of your plan later; answering"
+                  f" wait ends your work for today and your plan goes on")
+        self._occasion(a, "work_end", a["cognition"]["deliberation_threshold"], event=a["plan_event"], detail=detail)
 
     def _progress(self, a: dict, author: str, step: dict, holder: dict):
         """Advance the running step after the agent has acted this tick."""
@@ -886,12 +920,17 @@ class Sim:
         return {"why": "person", "salience": s, "who": o, "event": a["relationships"].get(str(o), {}).get("cause"),
                 "detail": feel, "tick": self.state["tick"]}
 
+    def _mind_free(self, a: dict) -> bool:
+        """Whether the mind may be asked this tick: no deliberation cooldown is running, and the day's cap
+        keeps room for this day's reflection and, after a late bedtime, a plan the same calendar day."""
+        tick = self.state["tick"]
+        calls = a["calls"]["n"] if a["calls"]["day"] == tick // TICKS_PER_DAY else 0
+        return tick >= a["cooldown_until"] and calls < DAILY_MIND_CALLS - 2
+
     def _maybe_deliberate(self, a: dict, occupancy: dict):
         """Ask the mind when there is an occasion: hunger with no food (always), or an appraised one."""
         tick = self.state["tick"]
-        calls = a["calls"]["n"] if a["calls"]["day"] == tick // TICKS_PER_DAY else 0
-        # Room is kept for this day's reflection and, after a late bedtime, a plan the same calendar day.
-        if tick < a["cooldown_until"] or calls >= DAILY_MIND_CALLS - 2:
+        if not self._mind_free(a):
             return
         trigger = 550 + a["cognition"]["deliberation_threshold"] // 3
         pending = a["occasion"] if a["occasion"] and tick - a["occasion"]["tick"] < OCCASION_TICKS else None
@@ -899,6 +938,8 @@ class Sim:
         if a["inv"]["food"] == 0 and a["needs"]["hunger"] >= trigger and not refused:
             occ = {"why": "hungry_coin" if a["inv"]["coin"] >= FOOD_PRICE else "hungry", "who": None,
                    "event": a["last_food_loss_event"]}
+            if pending is not None and pending["why"] == "work_end":  # asked at the block's last tick or never
+                a["occasion"] = None
         else:
             occ = pending or self._notice(a, occupancy)
             if occ is None:
@@ -912,11 +953,11 @@ class Sim:
                       lambda eid, out: self._resolve(a, out, eid))
 
     # ------------------------------------------------------------------ actions -> receipts
-    def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None):
+    def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None, appraise=True):
         data = {"action": action, "ok": ok, "why": why}
         data.update(extra or {})
         rid = self._emit("receipt", origin, a["id"], data, [eid])
-        if not ok and why not in ("kin refused", "refused", "caught"):  # those have occasions of their own
+        if appraise and not ok and why not in ("kin refused", "refused", "caught"):  # those have occasions of their own
             self._occasion(a, "failed", 300 + a["traits"]["conscientiousness"] // 3, event=rid,
                            detail=f"{action.replace('_', ' ')} ({BUY_FAIL_TEXT.get(why, why)})")
         return rid
@@ -976,7 +1017,18 @@ class Sim:
         out = out or {}
         action, target = out.get("action"), out.get("target")
         first = None
-        if action == "buy_food":
+        if self.events[eid].data.get("occasion") == "work_end":  # D2: work goes on as the usual one-off, and
+            if action == "work":                                   # the plan's later blocks move after it;
+                first = {"do": "work", "target": None}             # anything else ends the block as planned
+                shift = self._shift_plan(a, DEFAULT_STEP_TICKS // 6)
+                self._receipt(a, eid, action, True, "went on working", extra={"plan_shift_h": shift})
+                self._note(a["id"], "worked on past the end of the planned block")
+            else:
+                ok = action == "wait"
+                self._receipt(a, eid, "wait" if ok else str(action), ok,
+                              "stopped as planned" if ok else "unparseable or unknown action", appraise=False)
+                self._note(a["id"], "stopped work when the planned block ended")
+        elif action == "buy_food":
             self._buy(a, eid)
         elif action in INSTANT_STEPS:
             err = self._target_error(a, target)
@@ -1010,6 +1062,20 @@ class Sim:
                            "left": STEP_TICKS.get(steps[0]["do"], DEFAULT_STEP_TICKS)}
         elif first:
             a["override"] = {**first, "event": eid, "left": STEP_TICKS.get(first["do"], DEFAULT_STEP_TICKS)}
+
+    def _shift_plan(self, a: dict, hours: int) -> int:
+        """Move the plan's blocks after this hour later by `hours`, clipped at 24:00 (a block clipped to
+        nothing is dropped). Bedtime is unchanged, so what falls past it is cut from the evening's end,
+        not the block planned right after work: at 8B, 0.95 of planned shop blocks sit in the 3 hours
+        after a work block (results/predictions-d2.md). Returns the shift."""
+        hour, plan = self._hour(), []
+        for b in a["plan"]:
+            if b["start_h"] > hour:
+                b = {**b, "start_h": min(24, b["start_h"] + hours), "end_h": min(24, b["end_h"] + hours)}
+            if b["start_h"] < b["end_h"]:
+                plan.append(b)
+        a["plan"] = plan
+        return hours
 
     def _person_act(self, a: dict, action: str, target: int, eid: int) -> int:
         """ask_kin, ask_food, buy_from or steal, with a valid target id. Returns the receipt's event id."""

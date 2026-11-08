@@ -185,7 +185,8 @@ function describe(e) {
       const tgt = Number.isInteger(o.target) ? " " + who(o.target) : "";
       const then = steps(o.then, ", ");
       const held = Array.isArray(d.withheld) && d.withheld.length ? `<span class="sub"> (not offered: ${d.withheld.map(esc).join(", ")})</span>` : "";
-      return `${a} decided: <b>${esc(o.action)}</b>${tgt}${o.goal ? `; goal “${esc(o.goal)}”` : ""}${then ? `; then ${then}` : ""}${held}` +
+      const asked = typeof d.occasion === "string" ? `<span class="sub"> (asked about: ${esc(d.occasion)})</span>` : "";
+      return `${a} decided: <b>${esc(o.action)}</b>${tgt}${o.goal ? `; goal “${esc(o.goal)}”` : ""}${then ? `; then ${then}` : ""}${asked}${held}` +
         (o.reason ? `<span class="reason">“${esc(o.reason)}”</span>` : "");
     }
     case "mind_reflect":

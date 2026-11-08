@@ -72,10 +72,20 @@ class StubMind:
         return {"plan": blocks}
 
     def _deliberate(self, v: dict) -> dict:
+        if (v.get("occasion") or {}).get("why") == "work_end":
+            return {"goal": "", "then": [], **self._work_end(v)}
         out = self._intent(v)
         if out is None and (v.get("occasion") or {}).get("why", "hungry") not in ("hungry", "hungry_coin"):
             out = {"action": "wait", "target": None, "reason": "nothing to do about it"}
         return {"goal": "", "then": [], **(out or self._food(v))}
+
+    def _work_end(self, v: dict) -> dict:
+        """D2 (T26) by one rule on the agent's own params, so the stub stays the format's reference under
+        test 11 v3: high conscientiousness goes on, mid goes on when it carries under 10 coin, low stops."""
+        c = v["traits"]["conscientiousness"]
+        if c > 650 or (c >= 350 and v["coin"] < 10):
+            return {"action": "work", "target": None, "reason": "the work is not done"}
+        return {"action": "wait", "target": None, "reason": "the planned hours are done"}
 
     def _intent(self, v: dict) -> dict | None:
         """Occasions other than hunger: a liked person is sought out, a disliked one or a thief avoided,
