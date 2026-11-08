@@ -161,7 +161,50 @@ def render_soul(agent: dict) -> str:
         f"What matters most to you: {', '.join(v.replace('_', ' ') for v in agent['values']['top'])}.",
         f"What you care little for: {', '.join(v.replace('_', ' ') for v in agent['values']['bottom'])}.",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n\n" + anchors(agent)
+
+
+# One behavioral anchor per trait and band (low, mid, high), on the same cut-offs as the sheet line.
+# Canonical since T25 (plan/t25-anchored-souls-spec.md): the soul ends with this block.
+# Openness is T24b's wording, which names a behavior a plan can leave out; the rest are T24's.
+ANCHORS = {
+    "honesty": ("If a lie or taking something gets you what you need, you do it without much guilt.",
+                "You keep your word most of the time, but hunger or fear can bend you.",
+                "You would rather go without than lie or take what isn't yours."),
+    "agreeableness": ("You hold grudges and make people pay for slights.",
+                      "You treat people as they treat you.", "You let things go and help even those who wronged you."),
+    "extraversion": ("You avoid company unless you need something.",
+                     "You enjoy a little company, then want quiet.", "You seek people out whenever you can."),
+    "conscientiousness": ("You drop plans when something better comes up.",
+                          "You mostly do what you planned.", "You stick to your plan and your work."),
+    "openness": ("You keep to familiar places and routines, and you don't go wandering off to explore.",
+                 "You try something new now and then.",
+                 "You go looking for new places and people, and you like to explore."),
+    "emotionality": ("Danger and scarcity barely worry you.",
+                     "Scarcity makes you careful.", "Scarcity frightens you and you act to protect yourself first."),
+}
+ANCHORS_HEADING = "# How you tend to act"
+
+
+def anchors(agent: dict) -> str:
+    """The soul's "# How you tend to act" block: one anchor per trait, from the sheet's own bands."""
+    t = agent["traits"]
+    band = lambda v: 0 if v < 350 else 2 if v > 650 else 1  # noqa: E731 - the bands of _level
+    return "\n".join([ANCHORS_HEADING] + ["- " + ANCHORS[k][band(t[k])] for k in ANCHORS])
+
+
+def unanchored(soul: str) -> str:
+    """The soul as rendered before T25, without its anchors block (the "-anchors" arm)."""
+    head, sep, _ = soul.partition("\n\n" + ANCHORS_HEADING + "\n")
+    if not sep:
+        raise ValueError("soul has no anchors block")
+    return head
+
+
+def sheet_lines(agent: dict) -> str:
+    """The judge's view of a soul (T23, test 11): the "You are ..." line and the two value lines.
+    Never the anchors block, which would hand the judge the behaviors it is asked to infer."""
+    return "\n".join(unanchored(render_soul(agent)).split("\n")[3:])
 
 
 def _relationship_lines(agent: dict, state: dict) -> list[tuple[int, str]]:

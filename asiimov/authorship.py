@@ -8,7 +8,8 @@ log of this engine. Authors (test 7, plan/variety-scorecard-v2.md):
   intent      the current step of an intent the mind set (engine 7)                       mind
   plan        a block of the agent's morning plan covers the hour             mind
   habit       neither: `Sim._habit`, the no-LLM needs-and-traits layer        code
-  forced      the wake tick, which the world sets to "home" before any choice  world
+  forced      the wake tick, which the world sets to "home" before any choice, and  world
+              a bedtime walk home (the map: an agent away from home at bedtime)
 
 Raw mind share counts every mind-authored tick. Whole-day plans (PR #8) push it to about 1 even when a
 plan only restates the habits, so the instrument also records, on every tick, the activity the habit
@@ -78,8 +79,12 @@ class AuthorshipSim(ProbeSim):
         super()._act(a)
         if a["activity"] != expected or (not step and a["habit"] != habit):
             raise AssertionError(f"authorship disagrees with _act at tick {tick}, agent {a['id']}")
-        self.effect[(tick, a["id"])] = ((a["place"], a["activity"] == "work"), (self._place(a, habit), habit == "work"))
+        self.effect[(tick, a["id"])] = ((self._dest(a), a["activity"] == "work"), (self._place(a, habit), habit == "work"))
         self.records.append((tick, a["id"], author, a["activity"], habit))
+
+    def _bedtime_walk(self, a):
+        super()._bedtime_walk(a)
+        self.records.append((self.state["tick"], a["id"], "forced", a["activity"], None))
 
 
 def replay_authorship(events, arm: str = "full", prompt_token_offset: int = 0) -> AuthorshipSim:

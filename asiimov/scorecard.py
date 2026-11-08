@@ -26,7 +26,7 @@ from .diagnostics import diagnose
 from .events import read_jsonl, write_jsonl
 from .metrics import icc1
 from .minds import ReplayDivergence
-from .memory import SCHEMA, prompt_hash, render_soul, tokens
+from .memory import SCHEMA, anchors, prompt_hash, render_soul, tokens, unanchored  # noqa: F401 - anchors re-exported
 from .params import TRAITS, generate_population
 from .rng import Rng
 from .sim import TICKS_PER_DAY, Sim
@@ -37,6 +37,9 @@ ARMS = ("full", "no_text", "flat_params")
 # famine = a third of the farm food from day 2, the engine-1..4 yield that starved the plain world
 # (does need produce transgression?);
 # fiction = a story framing, trait anchors in the soul, and explicit leave to lie, hoard or steal.
+# Since T25 every soul ends with the anchors block, so "+anchors" adds nothing (the block is
+# never there twice), and a trailing "-anchors" runs the old, unanchored soul for attribution:
+# "full-anchors" is the rendering before T25, "fiction-anchors" is framing and permission without them.
 RESPONSE_ARMS = ("famine", "fiction")
 # Fiction's three parts are switches that compose with a base arm: "<base>[+part...]", e.g.
 # "no_text+fiction" (all three parts), "full+framing", "flat_params+anchors+permission".
@@ -69,36 +72,23 @@ FICTION_HEADER = fiction_header(True, True)
 
 
 def parse_arm(arm: str) -> tuple[str, frozenset]:
-    """'no_text+framing+anchors' -> ('no_text', {'framing', 'anchors'}); 'fiction' -> ('full', all parts)."""
-    head, *rest = arm.split("+")
+    """'no_text+framing+anchors' -> ('no_text', {'framing', 'anchors'}); 'fiction' -> ('full', all parts);
+    'full-anchors' -> ('full', {'unanchored'})."""
+    spec, minus, tail = arm.partition("-anchors")
+    if minus and tail:
+        raise ValueError(f"unknown arm {arm!r}: '-anchors' goes last")
+    head, *rest = spec.split("+")
     base, parts = ("full", set(FICTION_PARTS)) if head == "fiction" else (head, set())
     for p in rest:
         parts |= set(FICTION_PARTS) if p == "fiction" else {p}
     if base not in BASE_ARMS or not parts <= set(FICTION_PARTS):
-        raise ValueError(f"unknown arm {arm!r}: <{'|'.join(BASE_ARMS)}|fiction>[+{'|'.join(FICTION_PARTS)}|+fiction]")
+        raise ValueError(f"unknown arm {arm!r}: <{'|'.join(BASE_ARMS)}|fiction>[+{'|'.join(FICTION_PARTS)}|+fiction]"
+                         "[-anchors]")
+    if minus:
+        parts = (parts - {"anchors"}) | {"unanchored"}
     return base, frozenset(parts)
 
 
-def anchors(agent: dict) -> str:
-    """One behavioral anchor per trait, from the same params and cut-offs as the soul."""
-    t = agent["traits"]
-    lvl = lambda v, lo, mid, hi: lo if v < 350 else hi if v > 650 else mid  # noqa: E731 - same bands as memory._level
-    return "\n".join([
-        "# How you tend to act",
-        "- " + lvl(t["honesty"], "If a lie or taking something gets you what you need, you do it without much guilt.",
-                   "You keep your word most of the time, but hunger or fear can bend you.",
-                   "You would rather go without than lie or take what isn't yours."),
-        "- " + lvl(t["agreeableness"], "You hold grudges and make people pay for slights.",
-                   "You treat people as they treat you.", "You let things go and help even those who wronged you."),
-        "- " + lvl(t["extraversion"], "You avoid company unless you need something.",
-                   "You enjoy a little company, then want quiet.", "You seek people out whenever you can."),
-        "- " + lvl(t["conscientiousness"], "You drop plans when something better comes up.",
-                   "You mostly do what you planned.", "You stick to your plan and your work."),
-        "- " + lvl(t["openness"], "You keep to familiar places and routines.",
-                   "You try something new now and then.", "You go looking for new places and people."),
-        "- " + lvl(t["emotionality"], "Danger and scarcity barely worry you.",
-                   "Scarcity makes you careful.", "Scarcity frightens you and you act to protect yourself first."),
-    ])
 # Test 6 label: a gender read off the first name only. Not in params, assigned independently of them.
 NAME_POOLS = {
     "F": ("Anna", "Maria", "Sofia", "Elena", "Laura", "Clara", "Nadia", "Irene", "Julia", "Rosa",
@@ -159,12 +149,10 @@ def check_famine_version(genesis: dict, arm: str):
 class ArmSim(Sim):
     """Sim whose prompts are ablated per arm. State is untouched: only the prompt text changes,
     so ablated arms are experiment runs, not replayable worlds."""
-    anchor_texts: dict = {}  # read-only default; run_arm passes real-param anchors for flat_params
 
-    def __init__(self, seed, n_agents, mind, genesis, arm, souls, workers=1, anchor_texts=None):
+    def __init__(self, seed, n_agents, mind, genesis, arm, souls, workers=1):
         parse_arm(arm)  # fail before paying for a run
         self.arm, self.souls = arm, souls
-        self.anchor_texts = anchor_texts or {}
         super().__init__(seed, n_agents, mind, genesis=genesis, workers=workers)
 
     @property
@@ -211,12 +199,12 @@ class ArmSim(Sim):
     def _request(self, a, *args, **kwargs):
         """Swap the prompt text around the call; `_request` builds the prompt before it returns."""
         saved = a["soul"], a["core"]
-        if self.base == "no_text":
+        if self.base == "no_text":  # the whole soul goes, anchors included
             a["soul"], a["core"] = "", []
-        elif self.base == "flat_params":  # code sees median params, the prompt keeps the agent's real soul
+        elif self.base == "flat_params":  # code sees median params; the prompt keeps the real soul, anchors too
             a["soul"] = self.souls[a["id"]]
-        if "anchors" in self.parts and self.base != "no_text":
-            a["soul"] += "\n\n" + self.anchor_texts.get(a["id"], anchors(a))
+        if "unanchored" in self.parts and self.base != "no_text":
+            a["soul"] = unanchored(a["soul"])
         try:
             super()._request(a, *args, **kwargs)
         finally:
@@ -235,7 +223,7 @@ def configuration(arm: str) -> tuple[str, str]:
     """Which graded configuration an arm belongs to and its role in it. 'no_text+fiction' ->
     ('fiction', 'no_text'); 'famine' -> ('famine', 'full'); 'full+framing' -> ('framing', 'full')."""
     base, parts = parse_arm(arm)
-    label = "fiction" if parts == set(FICTION_PARTS) else "+".join(p for p in FICTION_PARTS if p in parts)
+    label = "fiction" if parts == set(FICTION_PARTS) else "+".join(p for p in FICTION_PARTS + ("unanchored",) if p in parts)
     if base == "famine":
         return "+".join(x for x in ("famine", label) if x), "full"
     return label, base
@@ -248,8 +236,7 @@ def run_arm(arm: str, mind, proto: dict, out_dir: str | None = None, workers: in
     souls = {a["id"]: render_soul(a) for a in pop["agents"]}
     flat = parse_arm(arm)[0] == "flat_params"
     genesis = flatten_params(pop) if flat else pop
-    sim = ArmSim(proto["seed"], proto["agents"], mind, genesis, arm, souls, workers,
-                 anchor_texts={a["id"]: anchors(a) for a in pop["agents"]} if flat else None)
+    sim = ArmSim(proto["seed"], proto["agents"], mind, genesis, arm, souls, workers)
     player = {}
     if proto.get("fire"):
         fam, day = (int(x) for x in proto["fire"].split("@"))
@@ -314,7 +301,7 @@ def extract(events: list) -> dict:
                         open_p[x]["partners"].add(y)
                 if a in open_p:
                     open_p[a]["talks_started"] += 1
-            elif e.origin == "mind" and a in open_p:
+            elif e.origin == "mind" and a in open_p and not e.data.get("retried"):  # a retried reply is superseded
                 p = open_p[a]
                 p["text"] += _texts(e.mind["raw_output"])
                 if e.data["kind"] == "deliberate":
@@ -621,7 +608,7 @@ def main():
     ap.add_argument("--mind", choices=["stub", "llm"], default="stub")
     ap.add_argument("--out", required=True)
     ap.add_argument("--arms", help="comma-separated; each is <full|no_text|flat_params|famine|fiction>"
-                    "[+framing|+anchors|+permission|+fiction]. Default: the three canonical arms, or with "
+                    "[+framing|+anchors|+permission|+fiction][-anchors]. Default: the three canonical arms, or with "
                     "--grade-only every arm log in --out")
     ap.add_argument("--grade-only", action="store_true", help="grade arm logs already in --out")
     ap.add_argument("--pod")

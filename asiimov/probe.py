@@ -34,9 +34,9 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .events import Event
-from .memory import assemble_prompt, prompt_hash, render_soul
+from .memory import assemble_prompt, prompt_hash, render_soul, unanchored
 from .minds import MindRequest, ReplayDivergence, ReplayMind
-from .scorecard import FICTION_HEADER, SCHEMA_HEAD, ArmSim, anchors, check_famine_version
+from .scorecard import FICTION_HEADER, SCHEMA_HEAD, ArmSim, check_famine_version, parse_arm
 from .sim import ACTIVITIES, ENGINE_VERSION, Sim
 
 VARIANTS = ("full", "no_soul", "swapped_soul", "no_memory", "situation_only")
@@ -64,7 +64,7 @@ def sample_points(events: list[Event], n: int, seed: int) -> list[tuple[int, int
     others), and within a kind spread across agents round-robin so no one agent dominates."""
     by_kind = defaultdict(lambda: defaultdict(list))
     for e in events:
-        if e.origin == "mind":
+        if e.origin == "mind" and not e.data.get("retried"):  # one point per decision: the final attempt
             by_kind[e.data["kind"]][e.actor].append(e.tick)
     rng = random.Random(seed)
     queues = {}
@@ -102,8 +102,9 @@ def donor_for(agent: dict, agents: list[dict]) -> dict:
 
 
 def _soul_text(person: dict, arm: str) -> str:
+    """The soul as `arm` shows it. Since T25 the anchors are part of every soul (T25)."""
     soul = render_soul(person)
-    return soul + "\n\n" + anchors(person) if arm == "fiction" else soul
+    return unanchored(soul) if "unanchored" in parse_arm(arm)[1] else soul
 
 
 def edit_for(variant: str, agent: dict, arm: str = "full", donor: dict | None = None):
@@ -189,7 +190,7 @@ def build_pack(events: list[Event], arm: str, n: int, seed: int, prompt_token_of
     if arm not in ARMS:
         raise ValueError(f"arm must be one of {ARMS}: other arms' prompts aren't a function of the log")
     points = sample_points(events, n, seed)
-    recorded = {(e.tick, e.actor): e for e in events if e.origin == "mind"}
+    recorded = {(e.tick, e.actor): e for e in events if e.origin == "mind" and not e.data.get("retried")}
     sim = ProbeSim(events, arm, {(t, a) for t, a, _ in points}, prompt_token_offset)
     sim.run_until(max(t for t, _, _ in points) + 1, sim.player)
     pack = []

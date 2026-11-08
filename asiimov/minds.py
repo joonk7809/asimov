@@ -19,6 +19,8 @@ class MindRequest:
     prompt_hash: str
     view: dict         # perceived facts only (own state, people present, kin)
     seed: int | None = None  # sampling seed; None lets the mind derive one from the prompt
+    attempt: int = 0   # 1 for the engine's one retry of a cut-off reflection (T21)
+    frequency_penalty_milli: int = 0  # thousandths; the T21 retry asks at 1000 (integers in the core)
 
 
 @dataclass
@@ -26,6 +28,16 @@ class MindReply:
     raw_output: str
     model: str
     sampling: dict
+    finish_reason: str | None = None  # the server's ("stop", "length"); "stop" for rule minds
+
+
+def mind_key(tick: int, actor: int, attempt: int = 0) -> tuple[int, int, int]:
+    """How a recorded mind event is found: an agent asks at most once per tick, plus one retry (T21)."""
+    return tick, actor, attempt
+
+
+def recorded_reply(ev) -> MindReply:
+    return MindReply(ev.mind["raw_output"], ev.mind["model"], ev.mind["sampling"], ev.mind.get("finish_reason"))
 
 
 class StubMind:
@@ -39,7 +51,7 @@ class StubMind:
             out = self._deliberate(v)
         else:
             out = self._reflect(v)
-        return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0})
+        return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0}, "stop")
 
     def _plan(self, v: dict) -> dict:
         t = v["traits"]
@@ -94,8 +106,12 @@ class StubMind:
         if t["honesty"] < 350 and holders:
             return {"action": "steal", "target": holders[0]["id"], "reason": "hungry and nobody is watching"}
         kin = [p for p in v["kin"] if p["has_food"]]
-        if kin:
-            return {"action": "ask_kin", "target": kin[0]["id"], "reason": "family helps"}
+        near = [p for p in kin if p["id"] in {q["id"] for q in v["present"]}]
+        if near and "ask_kin" in offer:
+            return {"action": "ask_kin", "target": near[0]["id"], "reason": "family helps"}
+        if kin and "seek" in offer:  # family elsewhere: go to them, then ask (ask_kin needs them here)
+            return {"action": "seek", "target": kin[0]["id"], "reason": "family helps", "goal": "get food from family",
+                    "then": [{"do": "ask_kin", "target": kin[0]["id"]}]}
         if holders:  # a stranger here with food: offer coin if there is some, else ask
             action = "buy_from" if "buy_from" in offer else "ask_food"
             return {"action": action, "target": holders[0]["id"], "reason": "they have food"}
@@ -118,7 +134,7 @@ class NoisyMind(StubMind):
             out["plan"][0]["end_h"] = max(out["plan"][0]["start_h"] + 1, out["plan"][0]["end_h"] - 1)
         elif out.get("action") == "steal" and roll < 128:
             out = {"action": "wait", "target": None, "reason": "lost nerve"}
-        return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0.7})
+        return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0.7}, "stop")
 
 
 class ReplayMind:
@@ -131,12 +147,13 @@ class ReplayMind:
     def __init__(self, mind_events: list):
         self.record = {}
         for ev in mind_events:
-            if (ev.tick, ev.actor) in self.record:
+            key = mind_key(ev.tick, ev.actor, ev.data.get("attempt", 0))
+            if key in self.record:
                 raise ReplayDivergence(f"two mind events for agent {ev.actor} at tick {ev.tick}")
-            self.record[(ev.tick, ev.actor)] = ev
+            self.record[key] = ev
 
     def decide(self, req: MindRequest) -> MindReply:
-        ev = self.record.pop((req.tick, req.agent_id), None)
+        ev = self.record.pop(mind_key(req.tick, req.agent_id, req.attempt), None)
         if ev is None:
             raise ReplayDivergence(f"unrecorded mind request at tick {req.tick} for agent {req.agent_id}")
         expected = (ev.data["kind"], ev.mind["prompt_hash"])
@@ -144,7 +161,7 @@ class ReplayMind:
         if expected != got:
             raise ReplayDivergence(f"mind request mismatch at tick {req.tick} for agent {req.agent_id}: "
                                    f"expected {expected}, got {got}")
-        return MindReply(ev.mind["raw_output"], ev.mind["model"], ev.mind["sampling"])
+        return recorded_reply(ev)
 
 
 def dispatch(mind, reqs: list[MindRequest], workers: int = 1) -> list[MindReply]:

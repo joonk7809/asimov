@@ -6,6 +6,7 @@ violation strings instead of raising, so a long run can report every one it hits
 """
 from .events import ORIGINS, Event
 from .sim import FARMER_SELL_PRICE, FOOD_PRICE, PERSON_STEPS, STEP_DOS, Sim
+from .worldmap import travel_ticks
 
 BOOL_FIELDS = ("asleep", "has_food", "kin")
 
@@ -26,13 +27,60 @@ def type_violations(x, path="state") -> list[str]:
     return out
 
 
+def longest_trip(m: dict) -> int:
+    """No walk on map `m` takes longer than this many ticks: the anchors' bounding box, corner to corner."""
+    xs, ys = zip(*(p["anchor"] for p in m["places"].values()))
+    return travel_ticks((min(xs), min(ys)), (max(xs), max(ys)))
+
+
+def map_violations(sim: Sim, a: dict, longest: int) -> list[str]:
+    """An agent is at a place on the map or walking, never both; a walk's arrival is in the future and
+    exactly its travel time after it set out; sleepers are at home. Checked between ticks."""
+    places, aid, r = sim.map["places"], a["id"], a["route"]
+    if r is None:
+        ok = a["place"] in places and (not a["asleep"] or a["place"] == a["home"])
+        return [] if ok else [f"agent {aid} at {a['place']!r} (asleep {a['asleep']})"]
+    ok = (a["place"] is None and not a["asleep"] and r["to"] in places
+          and sim.state["tick"] <= r["arrive"] <= r["depart"] + longest
+          and r["arrive"] == r["depart"] + travel_ticks(r["from"], places[r["to"]]["anchor"]))
+    return [] if ok else [f"agent {aid} place {a['place']!r} route {r}"]
+
+
+# Events that need two agents together, and the field naming the other one. A receipt counts when it
+# succeeded, or for a steal that was caught (it was attempted face to face).
+TOGETHER = {"talk": "with", "meet": "with", "snub": "with"}
+
+
+def presence_violations(events: list[Event], start: int, where: dict) -> list[str]:
+    """From the log alone, in event order: every talk, meet, snub, gift, ask, steal and buy happens
+    between agents at the same place (never two walkers), and every buy at the market. `where` maps
+    agent id to place (None while walking) as of events[start]; it is updated in place."""
+    out = []
+    for e in events[start:]:
+        d, a = e.data, e.actor
+        if e.kind == "activity":
+            where[a] = d["place"] if d.get("arrive", e.tick) == e.tick else None
+        elif e.kind in ("arrive", "wake"):
+            where[a] = d["place"]
+        other = d.get(TOGETHER.get(e.kind, ""))
+        if e.kind == "receipt" and (d["ok"] or d["why"] == "caught"):
+            other = d.get("to", d.get("victim"))
+            if d["action"] == "buy_food" and where.get(a) != "market":
+                out.append(f"event {e.id}: bought away from the market")
+        if other is not None and (where.get(a) is None or where.get(a) != where.get(other)):
+            out.append(f"event {e.id}: {e.kind} between {a} at {where.get(a)!r} and {other} at {where.get(other)!r}")
+    return out
+
+
 def state_violations(sim: Sim) -> list[str]:
     st = sim.state
     n = len(st["agents"])
     out = [] if st["market_food"] >= 0 else [f"market_food {st['market_food']}"]
     out += type_violations(st)
+    longest = longest_trip(sim.map)
     for a in st["agents"]:
         aid = a["id"]
+        out += map_violations(sim, a, longest)
         if a["inv"]["food"] < 0 or a["inv"]["coin"] < 0:
             out.append(f"agent {aid} inventory {a['inv']}")
         if not all(0 <= v <= 1000 for v in a["needs"].values()):
@@ -90,6 +138,7 @@ class Checker:
     def __init__(self, sim: Sim):
         self.sim = sim
         self.traits = [dict(a["traits"]) for a in sim.state["agents"]]
+        self.where = {a["id"]: a["place"] for a in sim.state["agents"]}
 
     def before(self, acts=()):
         """Call right before sim.step(acts)."""
@@ -120,6 +169,7 @@ class Checker:
             out.append(f"coin ledger: {coin1 - coin0} vs {want_coin}")
         out += state_violations(sim)
         out += log_violations(sim.events, n0)
+        out += presence_violations(sim.events, n0, self.where)
         if [a["traits"] for a in sim.state["agents"]] != self.traits:
             out.append("a mind changed someone's traits")
         return [f"tick {self._tick}: {v}" for v in out]

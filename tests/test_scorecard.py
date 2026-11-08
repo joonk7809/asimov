@@ -168,7 +168,7 @@ def test_famine_cuts_farm_food_from_its_start_day_only():
         assert 0.2 < food["famine"][day] / food["full"][day] < 0.5
 
 
-def test_fiction_arm_changes_only_the_framing_and_adds_trait_anchors():
+def test_fiction_arm_changes_only_the_framing_and_the_soul_holds_its_anchors_once():
     seen = {}
 
     class Spy(StubMind):
@@ -184,8 +184,10 @@ def test_fiction_arm_changes_only_the_framing_and_adds_trait_anchors():
     key = next(iter(seen["full"]))
     full, fic = seen["full"][key].prompt, seen["fiction"][key].prompt
     assert full.startswith(sc.SCHEMA_HEAD) and fic.startswith(sc.FICTION_HEADER)
-    assert sc.anchors(pop["agents"][key[0]]) in fic and "# How you tend to act" not in full
-    assert fic.replace(sc.FICTION_HEADER, sc.SCHEMA_HEAD).replace("\n\n" + sc.anchors(pop["agents"][key[0]]), "") == full
+    block = sc.anchors(pop["agents"][key[0]])
+    assert fic.count("# How you tend to act") == full.count("# How you tend to act") == 1  # T25: in every soul
+    assert block in fic and block in full
+    assert fic.replace(sc.FICTION_HEADER, sc.SCHEMA_HEAD) == full
     assert seen["fiction"][key].prompt_hash != seen["full"][key].prompt_hash
 
 
@@ -229,8 +231,7 @@ def _first_prompts(arm, n=30):
     pop = sc.labeled_population(1, n)
     base = sc.parse_arm(arm)[0]
     genesis = sc.flatten_params(pop) if base == "flat_params" else pop
-    sim = sc.ArmSim(1, n, Spy(), genesis, arm, {a["id"]: sc.render_soul(a) for a in pop["agents"]},
-                    anchor_texts={a["id"]: sc.anchors(a) for a in pop["agents"]} if base == "flat_params" else None)
+    sim = sc.ArmSim(1, n, Spy(), genesis, arm, {a["id"]: sc.render_soul(a) for a in pop["agents"]})
     sim.run(1)
     return pop, seen
 
@@ -243,9 +244,30 @@ def test_each_fiction_part_adds_only_its_own_text():
             p, anchor = got[a["id"]], sc.anchors(a)
             assert (sc.FRAMING in p) == (part == "framing")
             assert (sc.PERMISSION in p) == (part == "permission")
-            assert (anchor in p) == (part == "anchors")
+            assert p.count(anchor) == 1  # "+anchors" adds nothing since T25: the soul has them
             back = p.replace(sc.fiction_header(part == "framing", part == "permission"), sc.SCHEMA_HEAD)
-            assert back.replace("\n\n" + anchor, "") == full[a["id"]]
+            assert back == full[a["id"]]
+
+
+def test_minus_anchors_runs_the_old_unanchored_soul():
+    """T25: 'full-anchors' is the soul as rendered before T25, for attribution in the same session."""
+    from asiimov.memory import unanchored
+    assert sc.parse_arm("full-anchors") == ("full", frozenset({"unanchored"}))
+    assert sc.parse_arm("fiction-anchors") == ("full", frozenset({"framing", "permission", "unanchored"}))
+    assert sc.configuration("full-anchors") == ("unanchored", "full")
+    assert sc.configuration("no_text-anchors") == ("unanchored", "no_text")
+    for bad in ("full-anchors+framing", "full-anchors-anchors", "bogus-anchors"):
+        with pytest.raises(ValueError):
+            sc.parse_arm(bad)
+    pop, full = _first_prompts("full")
+    _, old = _first_prompts("full-anchors")
+    _, flat_old = _first_prompts("flat_params-anchors")
+    for a in pop["agents"]:
+        soul = sc.render_soul(a)
+        assert unanchored(soul) + "\n\n" + sc.anchors(a) == soul
+        assert old[a["id"]] == full[a["id"]].replace("\n\n" + sc.anchors(a), "", 1)
+        assert "# How you tend to act" not in old[a["id"]] and "# How you tend to act" not in flat_old[a["id"]]
+        assert unanchored(soul) in flat_old[a["id"]]
 
 
 def test_fiction_composes_with_the_ablation_arms():
@@ -254,8 +276,8 @@ def test_fiction_composes_with_the_ablation_arms():
     for a in pop["agents"]:
         assert nt[a["id"]].startswith(sc.FICTION_HEADER) and flat[a["id"]].startswith(sc.FICTION_HEADER)
         assert sc.render_soul(a) not in nt[a["id"]] and "# How you tend to act" not in nt[a["id"]]
-        # flat_params: code runs on median params, but the prompt keeps the real soul and real-param anchors
-        assert sc.render_soul(a) in flat[a["id"]] and sc.anchors(a) in flat[a["id"]]
+        # flat_params: code runs on median params, but the prompt keeps the real soul, real-param anchors included
+        assert sc.render_soul(a) in flat[a["id"]] and flat[a["id"]].count(sc.anchors(a)) == 1
     assert len({sc.anchors(a) for a in pop["agents"]}) > 1
 
 

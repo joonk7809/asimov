@@ -78,14 +78,15 @@ def test_schemas_accept_stub_outputs():
 
 
 def test_deliberate_schema_only_takes_targets_the_prompt_lists():
-    """ask_kin names family, steal names someone here, the other person actions anyone the prompt lists,
+    """ask_kin names family here, steal names someone here, the other person actions anyone the prompt lists,
     and only the actions without a person take null (F4). Intent steps name a listed person or nobody."""
     jsonschema = pytest.importorskip("jsonschema")
     from asiimov.bench import collect_prompts
     reqs = [r for r in collect_prompts(agents=30, days=2, seed=3) if r.kind == "deliberate"]
     assert reqs
     for req in reqs:
-        schema, kin, people = schema_for(req), [k["id"] for k in req.view["kin"]], req.view["people"]
+        schema, people = schema_for(req), req.view["people"]
+        kin, kin_here = [k["id"] for k in req.view["kin"]], [p["id"] for p in req.view["present"] if p["kin"]]
         ok = lambda out, then=(): jsonschema.Draft202012Validator(schema).is_valid(  # noqa: E731
             {"reason": "x", "goal": "", "then": list(then), **out})
         for action in ("ask_kin", "steal", "seek", "give_food", "give_coin", "avoid"):
@@ -99,9 +100,10 @@ def test_deliberate_schema_only_takes_targets_the_prompt_lists():
             for p in req.view["present"]:
                 assert ok({"action": action, "target": p["id"]}) == (action in req.view["offer"])
             assert not ok({"action": action, "target": None})
-        unlisted = next(i for i in range(1000) if i not in kin)
+        unlisted = next(i for i in range(1000) if i not in kin_here)
         assert not ok({"action": "ask_kin", "target": unlisted})
-        assert all(ok({"action": "ask_kin", "target": k}) for k in kin)
+        assert all(ok({"action": "ask_kin", "target": k}) == ("ask_kin" in req.view["offer"]) for k in kin_here)
+        assert not any(ok({"action": "ask_kin", "target": k}) for k in kin if k not in kin_here)  # family elsewhere
         assert not ok({"action": "seek", "target": next(i for i in range(1000) if i not in people)})
         for k in kin:
             assert f"(#{k})" in req.prompt

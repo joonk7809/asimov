@@ -17,10 +17,10 @@ from .sim import ACTIVITIES as _ACTIVITIES, STEP_DOS
 ACTIVITIES = list(_ACTIVITIES)
 
 NO_TARGET = ["buy_food", "go_market", "work", "socialize", "home", "rest", "explore", "wait"]
-# Person actions and the ids each may name: family for ask_kin, people here for ask_food, buy_from and
-# steal, and anyone the prompt lists (family, here, People I know) for the rest. A deliberation's view
-# "offer" (engine 10) cuts both lists to what can work now.
-PERSON_ACTIONS = (("ask_kin", "kin"), ("ask_food", "present"), ("buy_from", "present"), ("steal", "present"),
+# Person actions and the ids each may name: family here for ask_kin (the map's place check), people here
+# for ask_food, buy_from and steal, and anyone the prompt lists (family, here, People I know) for the rest.
+# A deliberation's view "offer" (engine 10) cuts both lists to what can work now.
+PERSON_ACTIONS = (("ask_kin", "kin_here"), ("ask_food", "present"), ("buy_from", "present"), ("steal", "present"),
                   ("give_food", "people"), ("give_coin", "people"), ("seek", "people"), ("avoid", "people"))
 
 # No maxLength on strings: vLLM 0.11 structured outputs (xgrammar) decode ~15x slower with it
@@ -55,12 +55,14 @@ def _deliberate_branch(actions: list[str], target: dict, then: dict) -> dict:
 
 
 def _ids(view: dict, key: str) -> list[int]:
+    if key == "kin_here":
+        return sorted(x["id"] for x in view["present"] if x["kin"])
     return sorted(view.get(key, [])) if key == "people" else sorted(x["id"] for x in view[key])
 
 
 def schema_for(req: MindRequest) -> dict:
     """The reply schema for one request. A deliberation's target must be an id its prompt lists:
-    family for ask_kin, people here for steal, anyone listed for the other person actions. An action
+    family here for ask_kin, people here for steal, anyone listed for the other person actions. An action
     with nobody to aim at is left out. Intent steps may name anyone listed, or nobody; the world drops
     a person step without a target."""
     if req.kind != "deliberate":
@@ -107,6 +109,8 @@ class LLMMind:
             # Qwen3 hybrid models: no <think> block; deliberation is the answer itself.
             "chat_template_kwargs": {"enable_thinking": False},
         }
+        if req.frequency_penalty_milli:  # only the T21 reflect retry; every first ask is unchanged
+            b["frequency_penalty"] = req.frequency_penalty_milli / 1000
         if self.structured:
             b["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": req.kind, "schema": schema_for(req), "strict": True}}
@@ -148,7 +152,9 @@ class LLMMind:
                            "finish_reason": choice.get("finish_reason")})
         sampling = {"temperature": self.temperature, "top_p": self.top_p, "max_tokens": self.max_tokens,
                     "seed": body["seed"], "structured": self.structured}
-        return MindReply(text.strip(), resp.get("model", self.model), sampling)
+        if "frequency_penalty" in body:
+            sampling["frequency_penalty"] = body["frequency_penalty"]
+        return MindReply(text.strip(), resp.get("model", self.model), sampling, choice.get("finish_reason"))
 
     def stats(self) -> dict:
         if not self.calls:
