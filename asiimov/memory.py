@@ -201,6 +201,12 @@ def unanchored(soul: str) -> str:
     return head
 
 
+def sheet_lines(agent: dict) -> str:
+    """The judge's view of a soul (T23, test 11): the "You are ..." line and the two value lines.
+    Never the anchors block, which would hand the judge the behaviors it is asked to infer."""
+    return "\n".join(unanchored(render_soul(agent)).split("\n")[3:])
+
+
 def _relationship_lines(agent: dict, state: dict) -> list[tuple[int, str]]:
     names = {a["id"]: a["name"] for a in state["agents"]}
     return [(int(other), f"- {names[int(other)]} (#{other}): affinity {rel['affinity']}, {rel.get('note', '')}".rstrip(", "))

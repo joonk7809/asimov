@@ -74,3 +74,17 @@ def test_the_fiction_arm_soul_holds_the_block_once_and_ablations_keep_their_mean
         assert "# How you tend to act" not in seen["no_text"][a["id"]]
         assert anchors(a) in seen["flat_params"][a["id"]]  # the real params' anchors, not the median's
     assert any(anchors(a) != anchors(f) for a, f in zip(pop["agents"], flat))
+
+
+def test_the_judges_sheet_lines_hold_no_anchor():
+    """Review of PR #33: test 11's judge sees the three sheet lines only, never the anchors block."""
+    from asiimov.memory import ANCHORS, ANCHORS_HEADING, sheet_lines
+    from asiimov.sim import Sim
+    for seed in (1, 2, 3):
+        for a in Sim(seed, 100, StubMind()).state["agents"]:
+            s = sheet_lines(a)
+            lines = s.split("\n")
+            assert len(lines) == 3 and lines[0].startswith("You are ")
+            assert lines[1].startswith("What matters most") and lines[2].startswith("What you care little")
+            assert ANCHORS_HEADING not in s
+            assert not any(x in s for band in ANCHORS.values() for x in band)
