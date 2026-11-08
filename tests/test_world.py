@@ -168,7 +168,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "map-1": "7bd6f6567899e387e957f998fdcc095304e135f7545c5c42d6ccc9e4dc595ebe",  # the map branch on engine 11
           "map-2": "7d1afa044e8172f2d4224a322fe9e4c15e3da7f6520729997c402279bcabd0cb",  # the map branch on engine 12 (plan/t6-map-spec.md); on main from PR #30
           "14": "45e315cbf4c4ca75beee96fedf760ce4003e1b0c53763d7785dba2d31ae22cb7",  # T21 reflect retry, finish_reason, on the map
-          "t25-1": "664b54b907f9143d0d4ed7140194d1690b034c026fae9ed679d5c417fc96bcc7"}  # T25 anchored souls on engine 14; renamed to its integer at merge
+          "t25-1": "664b54b907f9143d0d4ed7140194d1690b034c026fae9ed679d5c417fc96bcc7",  # T25 on engine 14, before its number
+          "15": "1a1677ccd7eec0952ccfa9e52dca9ad9d8e1511391a8eddf7525a48158636f9a"}  # T25 anchored souls
 
 
 def test_log_changes_bump_the_engine_version():
