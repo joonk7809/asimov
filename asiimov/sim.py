@@ -109,11 +109,15 @@ assert set(ACTION_CLAUSES) == set(DELIBERATE_ACTIONS)
 NO_COIN_LINE = " You have too little coin to buy food."  # why buy_food, go_market and buy_from are withheld
 
 
-def deliberate_ask(offer) -> str:
-    """The deliberate ask for the offered actions. A shop step buys like go_market, so it goes with it."""
+def deliberate_ask(offer, one_off: bool = False) -> str:
+    """The deliberate ask for the offered actions. A shop step buys like go_market, so it goes with it.
+    A one-off ask (D2's work_end) takes no goal or steps: an intent set there would displace the plan's
+    next block, which the restricted offer exists to protect (PR #34 review)."""
+    clauses = ". ".join(ACTION_CLAUSES[x] for x in offer) + "."
+    if one_off:
+        return " Your action happens now; target is null. " + clauses + " Leave goal empty and then []."
     shop = ", or shop" if "go_market" in offer else ""
-    return (" Your action happens now; target is a person's #id or null. "
-            + ". ".join(ACTION_CLAUSES[x] for x in offer) + "."
+    return (" Your action happens now; target is a person's #id or null. " + clauses +
             f" To pursue something over hours or days, set goal and up to 3 more steps in then (these words{shop}),"
             " done in order; for a one-off, leave goal empty and then []."
             " A new goal replaces the intention you have now; to keep it, leave goal empty.")
@@ -375,7 +379,8 @@ class Sim:
         if kind == "deliberate":
             if a["inv"]["coin"] < FOOD_PRICE:
                 rest += NO_COIN_LINE
-            rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"])
+            one_off = (view.get("occasion") or {}).get("why") == "work_end"
+            rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"], one_off)
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
@@ -1017,18 +1022,22 @@ class Sim:
         out = out or {}
         action, target = out.get("action"), out.get("target")
         first = None
-        if self.events[eid].data.get("occasion") == "work_end":  # D2: work goes on as the usual one-off, and
-            if action == "work":                                   # the plan's later blocks move after it;
-                first = {"do": "work", "target": None}             # anything else ends the block as planned
+        if self.events[eid].data.get("occasion") == "work_end":
+            # D2: work goes on as the usual one-off and the plan's later blocks move after it; anything else
+            # ends the block as planned. Goal and then are ignored (the schema pins them empty): an intent set
+            # here would displace the next block, which the restricted offer exists to protect (PR #34 review).
+            if action == "work":
                 shift = self._shift_plan(a, DEFAULT_STEP_TICKS // 6)
                 self._receipt(a, eid, action, True, "went on working", extra={"plan_shift_h": shift})
                 self._note(a["id"], "worked on past the end of the planned block")
+                a["override"] = {"do": "work", "target": None, "event": eid, "left": DEFAULT_STEP_TICKS}
             else:
                 ok = action == "wait"
                 self._receipt(a, eid, "wait" if ok else str(action), ok,
                               "stopped as planned" if ok else "unparseable or unknown action", appraise=False)
                 self._note(a["id"], "stopped work when the planned block ended")
-        elif action == "buy_food":
+            return
+        if action == "buy_food":
             self._buy(a, eid)
         elif action in INSTANT_STEPS:
             err = self._target_error(a, target)

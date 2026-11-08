@@ -47,10 +47,10 @@ SCHEMAS = {
 }
 
 
-def _deliberate_branch(actions: list[str], target: dict, then: dict) -> dict:
+def _deliberate_branch(actions: list[str], target: dict, then: dict, goal: dict | None = None) -> dict:
     return {"type": "object",
             "properties": {"action": {"type": "string", "enum": actions}, "target": target,
-                           "reason": {"type": "string"}, "goal": {"type": "string"}, "then": then},
+                           "reason": {"type": "string"}, "goal": goal or {"type": "string"}, "then": then},
             "required": ["action", "target", "reason", "goal", "then"], "additionalProperties": False}
 
 
@@ -69,6 +69,9 @@ def schema_for(req: MindRequest) -> dict:
         return SCHEMAS[req.kind]
     people = _ids(req.view, "people")
     offer = req.view.get("offer", NO_TARGET + [x for x, _ in PERSON_ACTIONS])
+    if (req.view.get("occasion") or {}).get("why") == "work_end":  # D2: a one-off, so no goal and no steps
+        return {"anyOf": [_deliberate_branch([x for x in NO_TARGET if x in offer], {"type": "null"},
+                                             {"type": "array", "maxItems": 0}, {"type": "string", "enum": [""]})]}
     # Steps follow the offer too: a shop step buys like go_market, and buy_from needs the same coin.
     dos = [d for d in STEP_DOS if not (d == "shop" and "go_market" not in offer
                                        or d == "buy_from" and "buy_from" not in offer)]

@@ -75,7 +75,9 @@ def test_a_working_adult_is_asked_once_at_the_last_tick_of_a_planned_work_block(
             f" takes about {hours} hours and pays 6 coin; your plan says shop next. Answering work keeps you at the"
             f" workshop for about 3 more hours and moves the rest of your plan later; answering wait ends your work"
             f" for today and your plan goes on.") in req.prompt
-    assert "work goes to your work for a few hours. wait does nothing for now." in req.prompt
+    assert ("Your action happens now; target is null. work goes to your work for a few hours. wait does nothing for"
+            " now. Leave goal empty and then []." in req.prompt)
+    assert "To pursue something over hours or days" not in req.prompt.split("# Now")[-1]
     for word in ("conscientious", "diligent", "plan and your work", "hedon", "achievement"):
         assert word not in req.prompt.split("# Now")[-1]  # facts only in the situation (L11)
     r = receipt_of(sim, ask)
@@ -181,6 +183,28 @@ def test_anything_else_counts_as_stopping_and_wakes_no_failed_occasion(reply, ac
     r = receipt_of(sim, ask)
     assert (r.data["action"], r.data["ok"], r.data["why"]) == (action, False, "unparseable or unknown action")
     assert a["override"] is None and a["occasion"] is None and a["plan"] == WORK_THEN_SHOP
+
+
+@pytest.mark.parametrize("action", ["work", "wait"])
+def test_a_goal_and_steps_in_the_answer_are_ignored_so_nothing_displaces_the_plan(action):
+    """PR #34 review: the offer limited the action, but goal and then still built an intent that took over the
+    plan, shop block included. The schema pins them empty and the world ignores them here."""
+    reply = {"action": action, "target": None, "goal": "a long evening", "then": [{"do": "socialize", "target": None},
+                                                                                   {"do": "explore", "target": None}]}
+    sim = Sim(1, 30, Scripted(lambda req: reply))
+    a = alone_at_work(sim, by_role(sim, "crafter"), [dict(b) for b in WORK_THEN_SHOP])
+    run_ticks(sim, 6)
+    (ask,) = asks(sim)
+    assert a["intent"] is None and not any(e.kind == "intent_set" for e in sim.events)
+    r = receipt_of(sim, ask)
+    if action == "work":
+        assert r.data["why"] == "went on working" and a["override"]["do"] == "work" and a["plan"][1]["start_h"] == 4
+    else:
+        assert r.data["why"] == "stopped as planned" and a["override"] is None and a["plan"] == WORK_THEN_SHOP
+    run_ticks(sim, 30)
+    social = [e.tick for e in sim.events if e.kind == "activity" and e.data["activity"] == "socialize"]
+    assert social and social[0] == (30 if action == "work" else 12)  # the plan's own block, shifted or not
+    assert not any(e.kind == "activity" and e.data["activity"] == "explore" for e in sim.events)
 
 
 def test_the_stub_answers_by_one_rule_on_its_own_params():

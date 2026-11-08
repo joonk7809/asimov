@@ -94,6 +94,8 @@ def test_deliberate_schema_only_takes_targets_the_prompt_lists():
             assert ok({"action": "work", "target": None}) and ok({"action": "wait", "target": None})
             assert not any(ok({"action": x, "target": None}) for x in ("rest", "socialize", "buy_food", "go_market"))
             assert not any(ok({"action": "steal", "target": p["id"]}) for p in req.view["present"])
+            assert not ok({"action": "work", "target": None}, [{"do": "socialize", "target": None}])  # no steps
+            assert not ok({"action": "wait", "target": None, "goal": "later"})  # and no goal
             continue
         for action in ("ask_kin", "steal", "seek", "give_food", "give_coin", "avoid"):
             assert not ok({"action": action, "target": None})
