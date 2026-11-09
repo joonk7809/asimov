@@ -331,3 +331,20 @@ def test_an_idle_body_hands_back_to_its_own_mind_until_the_next_order():
     # the second fire's occasion waits again, the hour counted from the last order.
     assert delib[:2] == [start + IDLE_TICKS, start + 41 + IDLE_TICKS], delib
     assert replay(sim.events).state_hash() == sim.state_hash()
+
+
+def test_the_hand_back_never_asks_the_mind_about_the_players_own_act():
+    """Review of #42: a refused or failed player act files a "failed" occasion that outlives the idle hour,
+    so the first idle deliberation was about the player's act. Like release, the hand-back drops it."""
+    cases = 0
+    for aid in range(25):
+        sim = Sim(1, 25, StubMind())
+        sim.run_until(120, {65: [{"kind": "possess", "agent": aid}], 66: [{"kind": "act", "action": "buy_food"}],
+                            70: [{"kind": "act", "action": "buy_food"}, {"kind": "act", "action": "steal", "target": (aid + 1) % 25}]})
+        mine = {e.id for e in sim.events if e.kind == "act"}
+        mine |= {e.id for e in sim.events if e.kind == "receipt" and e.parents and e.parents[0] in mine}
+        for e in sim.events:
+            if e.kind == "mind_deliberate" and e.actor == aid and e.tick >= 70:
+                assert not set(e.parents) & mine, (aid, e)
+                cases += 1
+    assert cases >= 5  # idle deliberations that could have cited the acts

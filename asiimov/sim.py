@@ -209,6 +209,7 @@ class Sim:
         self.pending: dict[int, tuple] = {}  # agent id -> (request, parents, prompt tokens, apply)
         self.player_pending: dict[int, tuple] = {}  # agent id -> a player act to apply in _commit (no mind call)
         self._acts: dict[int, list] = {}  # agent id -> this tick's queued player acts: (event, action, target)
+        self._act_ids: set[int] = set()
         self.expected = expected
         self.events: list[Event] = []
         self.metrics = {"activity": defaultdict(lambda: defaultdict(int))}
@@ -501,6 +502,7 @@ class Sim:
         tick = st["tick"]
         agents = st["agents"]
         self._acts = {}
+        self._act_ids = set()  # this tick's player act events and their receipts: an occasion citing one is the player's
         for act in player_actions:
             self._player(act)
         for a in agents:
@@ -531,6 +533,8 @@ class Sim:
             if a["id"] in self._acts:
                 self._player_deliberate(a, occupancy)
             elif not self._possessed(a) or self._idle(a):
+                if self._possessed(a) and (a["occasion"] or {}).get("player"):
+                    a["occasion"] = None  # the hand-back never asks the mind about the player's own act
                 self._maybe_deliberate(a, occupancy)
 
         self._commit()
@@ -875,6 +879,8 @@ class Sim:
             return
         a["occasion"] = {"why": why, "salience": salience, "who": who, "event": event, "detail": detail,
                          "tick": tick}
+        if event in self._act_ids and self._possessed(a):  # about the player's own act (a refusal, a failure)
+            a["occasion"]["player"] = 1  # state holds no bools (invariants)
 
     def _notice(self, a: dict, occupancy: dict) -> dict | None:
         """Someone the agent feels strongly about is here and awake, noticed at most once per person per
@@ -932,6 +938,8 @@ class Sim:
         data = {"action": action, "ok": ok, "why": why}
         data.update(extra or {})
         rid = self._emit("receipt", origin, a["id"], data, [eid])
+        if eid in self._act_ids:
+            self._act_ids.add(rid)
         if not ok and why not in ("kin refused", "refused", "caught"):  # those have occasions of their own
             self._occasion(a, "failed", 300 + a["traits"]["conscientiousness"] // 3, event=rid,
                            detail=f"{action.replace('_', ' ')} ({BUY_FAIL_TEXT.get(why, why)})")
@@ -1303,6 +1311,7 @@ class Sim:
             aid = self.state["player"]["agent"]
             data = {"action": action} if target is None else {"action": action, "target": target}
             eid = self._emit("act", "player", aid, data, [self.state["player"]["event"]])
+            self._act_ids.add(eid)
             self.state["player"]["order"] = self.state["tick"]
             self._acts.setdefault(aid, []).append((eid, action, target))
             return eid
