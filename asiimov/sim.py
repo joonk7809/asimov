@@ -138,9 +138,9 @@ DEFAULT_STAKES = {
     # TITHE_FREE; at the day's end the chest spends what it holds above CHEST_RESERVE on the village, and that
     # coin leaves the economy. On the stub coin per villager stopped growing near 94 by day 24, against 341.
     "tithe": {"rate_pct": 15, "free": 10, "reserve": 400},
-    # pay-1: work speed (strength x stamina) is pulled PULL_PCT% of the way to the working adults' mean, which
-    # it keeps, so the village makes as much while the slowest body works about 2.6x slower than the fastest
-    # instead of 25x. Real 8B earnings ran p90/p10 21x (T1n), the bottom tenth at 1.7 coin a day.
+    # pay-1: a working adult's work speed (strength x stamina) is pulled pull_pct% of the way to its trade's
+    # mean, which it keeps (steering, 21:22Z), so each trade's capacity is unchanged while earnings p90/p10 falls
+    # from 6-8x to 2.5-3.7x on the stub. Real 8B earnings ran p90/p10 21x (T1n), the bottom tenth at 1.7 coin a day.
     "pay": {"pull_pct": 60},
 }
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
