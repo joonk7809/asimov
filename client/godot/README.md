@@ -1,7 +1,7 @@
 # asiimov Godot client
 
 2026-11-09. Block B10, Track A, PR 2. Godot 4.3-stable, GDScript only. The client draws and sends intents.
-The Python engine is the only source of truth, over protocol 1 (`plan/client-protocol.md`).
+The Python engine is the only source of truth, over protocol 2 (`plan/client-protocol.md`).
 
     python -m asiimov.live --out runs/live --agents 25 --tps 2        # the live world
     godot --path client/godot -- --url ws://127.0.0.1:8765/           # live client
@@ -11,7 +11,7 @@ The Python engine is the only source of truth, over protocol 1 (`plan/client-pro
 - `scripts/world_model.gd` rebuilds who is where from events alone. The engine moves villagers only in
   `activity` and `arrive` events, and positions use worldmap.position's integer math. Interpolation between
   ticks is for drawing only.
-- `scripts/live_client.gd` speaks protocol 1: hello, backlog, ticks, acks, `fire`, controls.
+- `scripts/live_client.gd` speaks protocol 2 in god scope: hello, backlog, ticks, acks, `fire`, controls.
 - `scripts/main.gd` draws the map from genesis, villagers colored by activity, a timeline with a scrubber,
   play/pause and fire.
 

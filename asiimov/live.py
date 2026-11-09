@@ -23,14 +23,15 @@ import sys
 import time
 from collections import defaultdict
 
-from . import persist
+from . import inhabitant, persist
 from .minds import NoisyMind, StubMind
 from .sim import DELIBERATE_ACTIONS, ENGINE_VERSION, TICKS_PER_DAY
 from .worldmap import position
 
-PROTOCOL = 1
-SCOPES = ("god",)          # "inhabitant" is reserved for Track B
+PROTOCOL = 2               # 2 adds the inhabitant scope (plan/player-body-spec.md)
+SCOPES = ("god", "inhabitant")
 MAX_LAG = TICKS_PER_DAY    # an intent seen more than a day ago is stale
+ORPHAN_TICKS = 36          # a body still held on reopen is released this long after, unless an inhabitant claims it
 MAX_FRAME = 1 << 20        # client frames
 BACKLOG_CHUNK = 500        # events per backlog message
 SEND_QUEUE = 4096          # messages a slow client may fall behind before it is dropped
@@ -73,7 +74,14 @@ class LiveRunner:
             with open(self.side_path, "r+b") as f:
                 f.truncate(sum(len(l) + 1 for l in lines))
         self.side = open(self.side_path, "a")
+        self.inhabitant: dict | None = None  # {"client", "agent"} while an inhabitant is connected
         self._reconcile(lines)
+        # An inhabitant's body still held on reopen (a crash, or a stop while it was connected) is released
+        # ORPHAN_TICKS later unless an inhabitant says hello for it. A god-scope possession is left alone,
+        # as it is on a god client's disconnect.
+        (held, since), last = self._held_from(), self._last_inhabit
+        orphan = held is not None and last is not None and last["kind"] == "inhabit" and last["agent"] == held
+        self.orphan_at = since + ORPHAN_TICKS if orphan else None
         self._side("open", reopened=self.reopened, view_tick=self.sim.state["tick"], n_events=len(self.sim.events))
 
     # ------------------------------------------------------------------ sidecar
@@ -86,6 +94,7 @@ class LiveRunner:
     def _reconcile(self, lines: list[bytes]):
         """Rebuild intent outcomes from the sidecar, and finish what a kill interrupted: an intent the
         sidecar received but run.json doesn't schedule is scheduled now; one whose tick has run is applied."""
+        self._last_inhabit = None  # the newest inhabit or leave record
         for line in lines:
             r = json.loads(line)
             if r["kind"] == "received":
@@ -94,6 +103,8 @@ class LiveRunner:
                 self.intents[r["id"]].update(status="applied", event=r["event"])
             elif r["kind"] == "rejected":
                 self.intents[r["id"]] = {"status": "rejected", "reason": r["reason"]}
+            elif r["kind"] in ("inhabit", "leave"):
+                self._last_inhabit = r
         now = self.sim.state["tick"]
         for iid, rec in self.intents.items():
             if rec["status"] == "rejected":
@@ -127,13 +138,59 @@ class LiveRunner:
                 "possess": {"agent": [0, n - 1]}, "release": {},
                 "act": {"action": list(DELIBERATE_ACTIONS), "target": [0, n - 1]}}
 
+    def _held_agent(self) -> int | None:
+        return self._held_from()[0]
+
+    def _held_from(self) -> tuple[int | None, int]:
+        """The body possessed once every action already scheduled applies, and the tick that state takes
+        effect. Scheduled actions can lie past the view: a crash reopen re-runs ticks whose actions run.json
+        already holds. Possession changes only through player actions, which all pass through here, so this
+        is exact."""
+        now = self.sim.state["tick"]
+        held, since = self.sim.state.get("player", {}).get("agent"), now
+        for t in sorted(t for t in self.run.player if t >= now):
+            for act in self.run.player[t]:
+                if act["kind"] in ("possess", "release"):
+                    held, since = (act["agent"] if act["kind"] == "possess" else None), t + 1
+        return held, since
+
     def _held(self) -> bool:
-        """Whether a body is possessed once the actions already scheduled for this tick apply. Possession
-        changes only through player actions, which all pass through here, so this is exact."""
-        held = "player" in self.sim.state
-        for act in self.run.player.get(self.sim.state["tick"], []):
-            held = {"possess": True, "release": False}.get(act["kind"], held)
-        return held
+        return self._held_agent() is not None
+
+    def _internal(self, act: dict) -> None:
+        """A player action the runner itself sends (an inhabitant's possess or release, an orphan's release),
+        through the same durable path as a client's intent. Its id starts with "~", which clients can't use."""
+        tick = self.sim.state["tick"]
+        iid = f"~{act['kind']}-{tick}-{len(self.run.player.get(tick, []))}"
+        rec = {"status": "pending", "tick": tick, "slot": len(self.run.player.get(tick, [])), "act": act}
+        self._side("received", sync=True, id=iid, client="runner", tick=tick, slot=rec["slot"], act=act,
+                   seen_tick=tick)
+        self.intents[iid] = rec
+        self._schedule(rec)
+
+    def inhabit(self, agent, client: str) -> str | None:
+        """An inhabitant's hello for `agent`: possess it, or claim it if a reopened world still holds it.
+        Returns why not, or None."""
+        if not _is_int(agent) or not 0 <= agent < len(self.sim.state["agents"]):
+            return "bad_agent"
+        held = self._held_agent()
+        if self.inhabitant is not None or (held is not None and (held != agent or self.orphan_at is None)):
+            return "body_taken"
+        self._side("inhabit", sync=True, client=client, agent=agent, claimed=held is not None)  # before the possess
+        if held is None:
+            self._internal({"kind": "possess", "agent": agent})
+        self.orphan_at = None
+        self.inhabitant = {"client": client, "agent": agent}
+        return None
+
+    def leave(self, client: str):
+        """An inhabitant disconnected: release its body, and the mind's own deliberations resume."""
+        if self.inhabitant is None or self.inhabitant["client"] != client:
+            return
+        agent, self.inhabitant = self.inhabitant["agent"], None
+        if self._held_agent() == agent:
+            self._internal({"kind": "release"})
+        self._side("leave", client=client, agent=agent)
 
     def _check(self, msg: dict, scope: str) -> tuple[dict | None, str | None]:
         """The engine action for an intent, or why it is refused. This checks shape and the one piece of
@@ -141,11 +198,11 @@ class LiveRunner:
         applies (L2), with a receipt."""
         now = self.sim.state["tick"]
         seen = msg.get("seen_tick")
-        if scope != "god":
-            return None, "scope"
         verb = msg.get("verb")
         if not isinstance(verb, str) or verb not in self.verbs():
             return None, "unknown_verb"
+        if scope == "inhabitant" and verb != "act":
+            return None, "scope"  # divine verbs and the body's own possession are not an inhabitant's
         args = msg.get("args")
         n = len(self.sim.state["agents"])
         if not isinstance(args, dict):
@@ -170,6 +227,10 @@ class LiveRunner:
             return None, "bad_seen_tick"
         if now - seen > MAX_LAG:
             return None, "stale"
+        if scope == "god" and verb != "fire" and self.inhabitant is not None:
+            return None, "inhabited"  # the body is an inhabitant's: god scope keeps fire only
+        if scope == "inhabitant" and (self.inhabitant is None or self._held_agent() != self.inhabitant["agent"]):
+            return None, "no_body"
         held = self._held()
         if verb == "possess" and held:
             return None, "body_taken"  # release first: one action, one player event (see step)
@@ -181,7 +242,7 @@ class LiveRunner:
         """Take an intent. Returns its ack now if it is refused or already decided, or None if it will be
         applied by the next step() (which returns its ack once its event is durable)."""
         iid = msg.get("id")
-        if not isinstance(iid, str) or not 1 <= len(iid) <= 64:
+        if not isinstance(iid, str) or not 1 <= len(iid) <= 64 or iid.startswith("~"):
             return self._ack(iid if isinstance(iid, str) else None, {"status": "rejected", "reason": "bad_id"})
         if iid in self.intents:
             rec = self.intents[iid]
@@ -212,6 +273,10 @@ class LiveRunner:
     def step(self) -> tuple[int, list, list[dict]]:
         """Run one tick. Returns (the tick that ran, its events, acks for the intents it applied)."""
         sim, tick = self.sim, self.sim.state["tick"]
+        if self.orphan_at is not None and tick >= self.orphan_at:
+            self.orphan_at = None
+            if self.inhabitant is None and self._held():
+                self._internal({"kind": "release"})  # reopened with a body held and nobody came back for it
         n0 = len(sim.events)
         self.run.advance(tick + 1)
         events = sim.events[n0:]
@@ -260,7 +325,18 @@ class LiveRunner:
                            {"from": r["from"], "to": r["to"], "depart": r["depart"], "arrive": r["arrive"]}})
         return {"tick": tick, "agents": agents}
 
+    def inhabitant_tick(self, tick: int, events: list[dict], aid: int) -> dict:
+        """A tick as an inhabitant gets it: the events it witnessed and its own whitelisted view."""
+        here = set(inhabitant.present_ids(self.sim, aid))
+        return msg("tick", tick=tick, events=[inhabitant.scrub(e, aid) for e in events if inhabitant.witnessed(e, aid, here, tick)],
+                   view=inhabitant.view(self.sim, aid))
+
     def welcome(self, scope: str, paused: bool, tps: float) -> dict:
+        if scope == "inhabitant":
+            aid = self.inhabitant["agent"]
+            return msg("welcome", scope=scope, view_tick=self.sim.state["tick"], paused=paused, tps=tps,
+                       verbs={"act": self.verbs()["act"]}, world=inhabitant.welcome_world(self.sim, aid),
+                       view=inhabitant.view(self.sim, aid))
         g = self.sim.events[0].data
         return msg("welcome", scope=scope, view_tick=self.sim.state["tick"], n_events=len(self.sim.events),
                    paused=paused, tps=tps, verbs=self.verbs(),
@@ -371,7 +447,7 @@ class Conn:
         Conn.count += 1
         self.name = f"c{Conn.count}"
         self.writer, self.queue = writer, asyncio.Queue()
-        self.scope, self.ready, self.closed = None, False, False
+        self.scope, self.ready, self.closed, self.agent = None, False, False, None
         self.task = asyncio.ensure_future(self._pump())
 
     def send_raw(self, data: bytes):
@@ -447,13 +523,25 @@ class Hub:
         finally:
             conn.close()
             self.conns.discard(conn)
+            if conn.scope == "inhabitant":  # its body is released between ticks, like any intent
+                self.inbox.append((conn, {"type": "leave"}))
+                self.wake.set()
 
     def _drain(self):
         items, self.inbox = self.inbox, []
         for conn, m in items:
             t = m["type"]
             if t == "hello":
+                if conn.scope == "inhabitant":
+                    why = self.runner.inhabit(m.get("agent"), conn.name)
+                    if why:
+                        conn.scope = None  # nothing to release
+                        conn.close(why)
+                        continue
+                    conn.agent = m["agent"]
                 self._welcome(conn, m.get("since", 0))
+            elif t == "leave":
+                self.runner.leave(conn.name)
             elif t == "intent":
                 ack = self.runner.submit(m, client=conn.name, scope=conn.scope)
                 if ack is None:
@@ -469,8 +557,14 @@ class Hub:
             conn.close("bad_since")
             return
         conn.send(self.runner.welcome(conn.scope, self.paused, self.tps))
-        for i in range(since, len(events), BACKLOG_CHUNK):
-            conn.send(msg("events", events=event_dicts(events[i:i + BACKLOG_CHUNK])))
+        if conn.scope == "inhabitant":  # its own, the ones naming it and public ones; no co-presence history
+            mine = [inhabitant.scrub(e, conn.agent) for e in event_dicts(events[since:])
+                    if inhabitant.witnessed(e, conn.agent, set(), -1)]
+            for i in range(0, len(mine), BACKLOG_CHUNK):
+                conn.send(msg("events", events=mine[i:i + BACKLOG_CHUNK]))
+        else:
+            for i in range(since, len(events), BACKLOG_CHUNK):
+                conn.send(msg("events", events=event_dicts(events[i:i + BACKLOG_CHUNK])))
         conn.ready = True
         self.runner._side("client", client=conn.name, scope=conn.scope, since=since)
 
@@ -506,9 +600,12 @@ class Hub:
                 continue
             self.step_once = False
             tick, events, acks = await asyncio.to_thread(self.runner.step)
-            text = json.dumps(msg("tick", tick=tick, events=event_dicts(events), view=self.runner.view()))
+            dicts = event_dicts(events)
+            text = json.dumps(msg("tick", tick=tick, events=dicts, view=self.runner.view()))
             for c in self.conns:
-                if c.ready:
+                if c.ready and c.scope == "inhabitant":
+                    c.send(self.runner.inhabitant_tick(tick, dicts, c.agent))
+                elif c.ready:
                     c.send(text)
             for ack in acks:
                 c = self.waiters.pop(ack["id"], None)
@@ -529,7 +626,9 @@ def _hello_error(m) -> str | None:
         return "unknown_protocol"
     scope = m.get("scope", "god")
     if scope not in SCOPES:
-        return "unsupported_scope" if scope == "inhabitant" else "bad_scope"
+        return "bad_scope"
+    if scope == "inhabitant" and not _is_int(m.get("agent")):
+        return "bad_agent"  # its range is the runner's to check
     since = m.get("since", 0)
     if not _is_int(since) or since < 0:
         return "bad_since"

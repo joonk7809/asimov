@@ -1,6 +1,7 @@
 # Client protocol
 
-2026-11-09. Status: proposal, protocol 1 (B10, Track A, PR 1). Implemented by `asiimov/live.py`.
+2026-11-09. Status: protocol 2 (B10; protocol 1 was PR 1, protocol 2 adds the inhabitant scope of
+plan/player-body-spec.md). Implemented by `asiimov/live.py` and `asiimov/inhabitant.py`.
 Specs: plan/2d-env-eval.md and plan/client-form-factor.md in the shared folder.
 
 The engine is the only source of truth. A client renders what the engine sends and sends intents.
@@ -11,7 +12,7 @@ WebSocket (RFC 6455), text frames, one JSON object per frame, UTF-8. Default `ws
 A frame over 1 MiB from a client closes the connection. Server frames can be larger (a backlog chunk
 with long mind outputs), so a client raises its inbound buffer (Godot: `inbound_buffer_size`).
 
-Every server message carries `"protocol": 1` and `"engine": "<ENGINE_VERSION>"`. A client that sees a
+Every server message carries `"protocol": 2` and `"engine": "<ENGINE_VERSION>"`. A client that sees a
 protocol it doesn't know disconnects. A new engine version needs no protocol change unless a message
 changes shape; new event kinds can appear in any engine, and a client ignores kinds it doesn't draw.
 
@@ -23,16 +24,52 @@ runs. Wall-clock time paces the runner but never enters the engine, the log or t
 ## Scopes
 The first message names a scope. The scope decides what the server sends; it is fixed per connection.
 
-| scope | protocol 1 | sends |
-|---|---|---|
-| `god` | yes | everything: genesis (population with souls, map), every event with its mind output, every villager's view. Dev and review. Accepts `control`. |
-| `inhabitant` | reserved, refused with `unsupported_scope` | Track B. Only what the chosen villager perceives: its own state, the people at its place, the map. Never another villager's soul, mind text, needs or inventory. Its contents get pinned with Track B's player-body spec. |
+| scope | sends |
+|---|---|
+| `god` | everything: genesis (population with souls, map), every event with its mind output, every villager's view. Dev and review. Accepts `control`. |
+| `inhabitant` | only what its villager perceives (below). Never another villager's soul, traits, params or mind output, nor its own villager's numbers. |
+
+### The inhabitant scope
+`hello` names the body: `{"type": "hello", "protocol": 2, "scope": "inhabitant", "agent": 4, "since": 0}`.
+The runner possesses it for the inhabitant (a `possess` player event at the next tick). One body is held
+at a time in a world: a hello while any body is held gets the error `body_taken`, and an `agent` that
+isn't a villager's id gets `bad_agent`. When the inhabitant disconnects, the runner records `release`
+and the villager's mind deliberates again. While an inhabitant is connected, god scope keeps `fire` and
+gets `inhabited` for `possess`, `release` and `act`.
+
+If the world reopens (after a crash or a stop) with an inhabitant's body still held, a hello for that
+same villager claims it with no new `possess`. If nobody does within 36 ticks, the runner records
+`release`. The 36 ticks count from the reopened view tick, or from the tick after the scheduled
+`possess` when a crash re-run left the view before it. A body possessed from god scope is left alone, as it is when a god client
+disconnects.
+
+An inhabitant sends only `act` (anything else gets `scope`). It gets:
+- `welcome`: `world` is `{map, ticks_per_day, me: {id, name, role, family, home}, family: [{id, name, role}]}`,
+  plus `view_tick`, `paused`, `tps`, `verbs` (`act` only) and its first `view`.
+- `events` backlog and `tick` messages carrying only events it would witness: its own, those naming it
+  (`data.with`, `to`, `target` or `household`), public ones (`fire`), and, on the tick they happen,
+  those by people at its place. Of another villager's events it gets only what that villager does in
+  plain sight, by kind and field (`inhabitant.SEEN`: activity, arrive, wake, sleep, talk, meet, snub,
+  eat, sell), plus a receipt whose `to` names it. Never another's intent_*, plan_receipt or day_rhythm.
+  A backlog has no co-presence history, so it carries only its own, naming and public events. No mind
+  event is ever sent (its own plan is in the view), and every event is sent without its `mind` record or
+  chance-stream fields.
+- `tick.view`, built field by field from `inhabitant.VIEW_KEYS`: `tick, place, route, pos, activity,
+  asleep, hunger, food, coin, plan` (activity, start_h, end_h), `recent, present` (id, name, role, kin,
+  has_food, pos), `kin` (id, name, home), `market_food` (at the market only), `occasion` (why, who,
+  text), `offer` and `cooldown_until`. `offer` maps each action a deliberation would be offered from
+  here to the people it may name (empty for non-person actions). The engine checks again when the act
+  applies, so an act can still get `"not offered"`. A field added later needs a spec line.
+
+"Both" (an inhabitant and a god connection held by one person, gated on run.json `"divine": true`) is
+not enforced yet. God scope is the dev and review tool until a game design says what divine power
+costs.
 
 ## Client to server
 
 `hello` must be the first message:
 ```json
-{"type": "hello", "protocol": 1, "scope": "god", "since": 0}
+{"type": "hello", "protocol": 2, "scope": "god", "since": 0}
 ```
 `since` is the first event id the client still needs (default 0). A reattaching client passes the id
 after the last event it has; the server sends the gap as backlog and then live ticks, with no event
@@ -42,10 +79,11 @@ sent twice and none skipped.
 ```json
 {"type": "intent", "id": "c1-0007", "verb": "fire", "args": {"family": 3}, "seen_tick": 210}
 ```
-- `id`: the client's string, 1 to 64 characters, unique per world. Resending an id gets the recorded
+- `id`: the client's string, 1 to 64 characters, unique per world, not starting with `~` (the runner's own
+  intents use that). Resending an id gets the recorded
   outcome again and never applies twice.
 - `seen_tick`: the view tick the client was looking at. It's checked, not used to schedule.
-- Verbs in protocol 1 (god scope), each a player action in sim.py `_player`:
+- Verbs, each a player action in sim.py `_player` (god scope has all four; inhabitant scope, `act`):
   - `fire` with `{"family": int}`.
   - `possess` with `{"agent": int}`. Refused with `body_taken` while a body is held (release first).
   - `release` with `{}`. Refused with `no_body` if none is held.
@@ -54,7 +92,6 @@ sent twice and none skipped.
     phase, and the outcome is a `receipt` event citing the `act` event (plan/player-body-spec.md). The
     ack names the `act` event, not the receipt. An act followed in the same tick by `release`, or by a
     `possess` of another body, gets a `"released"` receipt and never resolves.
-  Protocol 2 adds the inhabitant scope, which sends these on the client's behalf.
 
 `control` (god scope only): `{"type": "control", "op": "pause" | "run" | "step" | "speed", "tps": 2.0}`.
 `step` runs one tick while paused; `speed` takes `tps` between 0.1 and 1000.
@@ -63,7 +100,7 @@ sent twice and none skipped.
 
 `welcome`, once, answering `hello`:
 ```json
-{"type": "welcome", "protocol": 1, "engine": "15", "scope": "god",
+{"type": "welcome", "protocol": 2, "engine": "16", "scope": "god",
  "world": {"seed": 1, "order": "id", "map": {...}, "population": {...}, "ticks_per_day": 144},
  "view_tick": 211, "n_events": 6012, "paused": false, "tps": 1.0, "verbs": {"fire": {"family": [0, 24]}}}
 ```
@@ -90,12 +127,13 @@ A client interpolates between views for display only.
 - `{"type": "ack", "id": "c1-0007", "status": "rejected", "reason": "bad_args"}`, sent at the next tick
   boundary. A rejected intent changes nothing in the world. Reasons: `bad_message`, `bad_id`,
   `unknown_verb`, `bad_args`, `bad_seen_tick` (missing, or ahead of the view), `stale` (more than a
-  day behind the view), `scope`.
+  day behind the view), `scope`, `inhabited`, `body_taken`, `no_body`.
 
 `status`, broadcast after a control: `{"type": "status", "paused": true, "tps": 1.0, "view_tick": 212}`.
 
 `error`, then the server closes: a first message that isn't a valid `hello`, an unknown protocol, an
-unsupported scope (`unsupported_scope`), a `since` past the log (`bad_since`), or a malformed frame. The
+unknown scope (`bad_scope`), an inhabitant hello with a bad `agent` (`bad_agent`) or for a body it can't
+take (`body_taken`), a `since` past the log (`bad_since`), or a malformed frame. The
 close frame repeats the reason with code 4000, since a client can drop a message that arrives just
 before a close (Godot does).
 
@@ -104,8 +142,9 @@ A run directory is a `persist.py` run plus one sidecar file:
 - `run.json` holds the world's inputs. Its `player` list is the schedule of player actions. The live
   runner appends an accepted intent there (atomic write) before the tick it applies at, so
   `persist.resume`, `python -m asiimov.run --resume` and `replay()` all see it like a scripted `--fire`.
-- `runner.jsonl` is the sidecar: wall-clock times, clients, controls and each intent's id, scope and
-  outcome. It's runner metadata and never enters `events.jsonl` or the state hash.
+- `runner.jsonl` is the sidecar: wall-clock times, clients, controls, each intent's id, scope and
+  outcome, and each inhabitant's `inhabit` and `leave` (the newest one decides the orphan release on
+  reopen; `inhabit` is fsynced before its `possess` is scheduled). It's runner metadata and never enters `events.jsonl` or the state hash.
 
 An intent's path is: `received` fsynced in the sidecar, then scheduled in `run.json`, then the tick
 runs, then `events.jsonl` is fsynced, then `applied` in the sidecar and the ack. A kill at any point
