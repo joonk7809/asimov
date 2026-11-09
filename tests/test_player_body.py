@@ -15,7 +15,7 @@ from asiimov.events import Event, read_jsonl
 from asiimov.invariants import Checker
 from asiimov.minds import MindReply, NoisyMind, StubMind
 from asiimov.replay import replay
-from asiimov.sim import DELIBERATE_ACTIONS, INSTANT_STEPS, PERSON_STEPS, RATED_ACTS, TICKS_PER_DAY, Sim
+from asiimov.sim import DELIBERATE_ACTIONS, IDLE_TICKS, INSTANT_STEPS, PERSON_STEPS, RATED_ACTS, TICKS_PER_DAY, Sim
 
 GOLDEN_15 = "1a1677ccd7eec0952ccfa9e52dca9ad9d8e1511391a8eddf7525a48158636f9a"  # tests/test_world.py, engine 15
 
@@ -49,7 +49,7 @@ def body_script(aid, seed=0, start=TICKS_PER_DAY // 2, end=2 * TICKS_PER_DAY, n=
     return player
 
 
-def test_possess_act_release_replays_exactly_and_never_asks_the_mind_to_deliberate():
+def test_possess_act_release_replays_exactly_and_the_mind_deliberates_only_when_idle():
     aid = 3
     player = body_script(aid)
     sim = Sim(5, 12, NoisyMind())
@@ -60,7 +60,10 @@ def test_possess_act_release_replays_exactly_and_never_asks_the_mind_to_delibera
     pos = next(e.id for e in events if e.kind == "possess")
     rel = next(e.id for e in events if e.kind == "release")
     during = [e for e in events[pos:rel] if e.actor == aid]
-    assert not [e for e in during if e.kind == "mind_deliberate"]                     # bar 4
+    orders = sorted({e.tick for e in during if e.kind in ("possess", "act")} | {events[pos].tick})
+    for e in during:  # bar 4, as joon's idle-body choice amends it: only after IDLE_TICKS without an order
+        if e.kind == "mind_deliberate":
+            assert e.tick - max(t for t in orders if t <= e.tick) >= IDLE_TICKS, e
     assert {"mind_plan", "mind_reflect"} <= {e.kind for e in during}                  # its own mind lives on
     acts = [e for e in during if e.kind == "act"]
     receipts = {e.parents[0]: e for e in events if e.kind == "receipt" and e.parents and e.parents[0] in
@@ -309,3 +312,22 @@ def test_a_possessed_villagers_talks_still_count_for_its_partner():
     talks = [e for e in sim.events if e.kind == "talk" and 3 in (e.actor, e.data["with"])]
     assert bodies == [3] and talks and all(e in kept for e in talks)
     assert not [e for e in kept if e.actor == 3 and e.kind != "talk"]
+
+
+def test_an_idle_body_hands_back_to_its_own_mind_until_the_next_order():
+    """joon's idle-body choice: with no order (possess or act) for IDLE_TICKS, the possessed villager's own
+    mind deliberates again; an act takes it back at once. Replays exactly."""
+    aid, start = 3, TICKS_PER_DAY // 2
+    sim = Sim(5, 12, NoisyMind())
+    fam = sim.state["agents"][aid]["family"]  # a fire is an occasion (salience 900), and not an order
+    player = {start: [{"kind": "possess", "agent": aid}], start + 2: [{"kind": "fire", "family": fam}],
+              start + 40: [{"kind": "act", "action": "rest"}], start + 41: [{"kind": "act", "action": "socialize"}],
+              start + 42: [{"kind": "fire", "family": fam}], start + 120: [{"kind": "release"}]}
+    sim.run_until(start + 130, player)
+    sim.finish()
+    delib = [e.tick for e in sim.events if e.kind == "mind_deliberate" and e.actor == aid and start <= e.tick < start + 120]
+    assert delib, "the idle body's mind never deliberated"
+    # The fire's occasion waits for the hour to pass, then the mind is asked at once; after the two orders
+    # the second fire's occasion waits again, the hour counted from the last order.
+    assert delib[:2] == [start + IDLE_TICKS, start + 41 + IDLE_TICKS], delib
+    assert replay(sim.events).state_hash() == sim.state_hash()
