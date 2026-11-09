@@ -355,3 +355,6 @@ def test_a_token_guards_the_hello_and_each_tick_records_its_wall_time(tmp_path):
     asyncio.run(main())
     steps = [r for r in map(json.loads, open(tmp_path / "w" / "runner.jsonl")) if r["kind"] == "step"]
     assert steps and steps[0]["tick"] == 0 and steps[0]["wall_s"] >= 0 and steps[0]["calls"] == 0
+    with pytest.raises(SystemExit, match="pass --token"):  # a public port is never left open
+        live.main(["--out", str(tmp_path / "pub"), "--host", "0.0.0.0"])
+    assert not os.path.exists(tmp_path / "pub")

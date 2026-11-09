@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
 import struct
@@ -519,7 +520,8 @@ class Hub:
                 except (ValueError, RecursionError):
                     m = None
                 if conn.scope is None:
-                    err = _hello_error(m) or (self.token is not None and m.get("token") != self.token and "bad_token")
+                    err = _hello_error(m) or (self.token is not None and not (isinstance(m.get("token"), str) and
+                        hmac.compare_digest(m["token"].encode(), self.token.encode())) and "bad_token")
                     if err:
                         conn.close(err)
                         break
@@ -582,7 +584,7 @@ class Hub:
     def _control(self, conn: Conn, m: dict):
         op, tps = m.get("op"), m.get("tps")
         if conn.scope != "god" or op not in ("pause", "run", "step", "speed") or \
-                (op == "speed" and not (isinstance(tps, (int, float)) and not isinstance(tps, bool) and 0.1 <= tps <= 1000)):
+                (op == "speed" and not (isinstance(tps, (int, float)) and not isinstance(tps, bool) and 0.01 <= tps <= 1000)):
             conn.send(msg("error", reason="bad_control"))
             return
         if op == "pause":
@@ -681,6 +683,8 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args(argv)
+    if args.token is None and args.host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit(f"--host {args.host} is not loopback: pass --token")
     kind = args.mind
     if kind is None:
         kind = (persist.config(args.out).get("mind") if os.path.exists(os.path.join(args.out, "run.json")) else None) or "stub"
