@@ -353,8 +353,11 @@ def t8(base_path: str, live, out: str, arm: str | None, serve: bool, workers: in
     with open(os.path.join(out, "pairs.json"), "w") as f:  # before any twin runs
         json.dump(pairs, f)
     swapped = sorted(a for p in pairs for a in p)
-    swap = _run_or_load(base, live, os.path.join(out, "swap-text"), arm, serve, workers,
-                        souls=swapped_souls(pop, pairs))
+    souls = swapped_souls(pop, pairs)
+    os.makedirs(os.path.join(out, "swap-text"), exist_ok=True)
+    with open(os.path.join(out, "swap-text", "souls.json"), "w") as f:  # what replay_twin needs: not in the log
+        json.dump(souls, f, indent=1)
+    swap = _run_or_load(base, live, os.path.join(out, "swap-text"), arm, serve, workers, souls=souls)
     full = _run_or_load(base, live, os.path.join(out, "swap-full"), arm, serve, workers,
                         genesis=swapped_genesis(pop, pairs))
     noise = _run_or_load(base, live, os.path.join(out, f"noise-{T8_SALT}"), arm, serve, workers,

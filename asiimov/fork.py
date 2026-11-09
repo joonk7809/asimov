@@ -256,6 +256,22 @@ def run_twin(base, live, out: str | None = None, player: dict | None = None, liv
     return sim, mind
 
 
+def replay_twin(events, arm: str | None = None, souls: dict | None = None) -> Sim:
+    """Replay a twin's log without a model, checking every event, with the soul texts it was run with
+    (a souls= twin's genesis is the base's, so its swap lives in the twin's souls.json, not in the log)."""
+    from .minds import ReplayMind
+    sim = build_sim(events, ReplayMind([e for e in events if e.origin == "mind"]), arm)
+    for aid, text in (souls or {}).items():
+        sim.state["agents"][int(aid)]["soul"] = text
+    sim.expected = events
+    sim.run_until(end_tick(events), base_player(events))
+    if events[-1].kind == "end":
+        sim.finish()
+    if len(sim.events) != len(events):
+        raise ReplayDivergence(f"replay produced {len(sim.events)} events, log has {len(events)}")
+    return sim
+
+
 def summary(base, twin, live_agents=(), live_from: int = 0) -> dict:
     div = divergence(base, twin)
     calls = live_calls(base, twin, live_agents, live_from)

@@ -175,6 +175,25 @@ def test_on_the_stub_the_text_swap_fails_and_the_full_swap_is_reported_beside_it
     assert rep["full_swap_descriptive"]["follow_index"] > 0.3  # but its code follows the params
 
 
+
+def test_every_test_8_twin_replays_from_its_own_log_and_the_text_swap_needs_its_souls(tmp_path):
+    from asiimov.fork import read_log, replay_twin
+    from asiimov.minds import ReplayDivergence
+    base = base_world(PromptMind(), days=2)
+    path = tmp_path / "base.jsonl"
+    write_jsonl(base, str(path))
+    t8(str(path), PromptMind(), str(tmp_path / "t8"), None, serve=True, workers=1)
+    d = tmp_path / "t8"
+    souls = json.load(open(d / "swap-text" / "souls.json"))
+    swap = read_log(str(d / "swap-text" / "events.jsonl"))
+    assert logs(replay_twin(swap, souls=souls).events) == logs(swap)
+    with pytest.raises(ReplayDivergence):  # the swap isn't in the log: without its souls it can't replay
+        replay_twin(swap)
+    for name in ("swap-full", "noise-9"):
+        ev = read_log(str(d / name / "events.jsonl"))
+        assert logs(replay_twin(ev).events) == logs(ev)
+
+
 # ---------------------------------------------------------------------------- test 9
 def test_a_theft_is_possess_act_and_release_after_the_receipt():
     assert theft_acts(50, 3, 4, "steal") == {50: [{"kind": "possess", "agent": 3},
