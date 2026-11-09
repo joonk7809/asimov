@@ -284,3 +284,145 @@ def test_a_trade_at_a_raised_price_cites_the_step_in_force():
         assert cites == ([step.id] if step else []), (e.kind, e.data)
         raised += step is not None
     assert raised  # some trades happened at a raised price
+# ------------------------------------------------------------------ sick-1
+import json as _json
+import os as _os
+import re as _re
+
+import pytest as _pytest
+
+SICK = DEFAULT_STAKES["sick"]
+PACK = "/mnt/project-files/research/b5/pilot/pack.jsonl"  # sha 163da069...c5b5, the B5 pilot's asks
+
+
+def _ask(sim, a):
+    """File the sick ask for `a` as _maybe_deliberate would, and return its request."""
+    sim._sick_ask(a)
+    occ = a["occasion"]
+    view = sim._view(a, {a["place"]: [a["id"]]})
+    view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
+    sim._request(a, "deliberate", view, [occ["event"]], lambda *x: None)
+    return sim.pending.pop(a["id"])[0]
+
+
+def _sick_world(seed=2, n=40):
+    sim = Sim(seed, n, StubMind(), genesis={**generate_population(seed, n),
+                                            "stakes": {**DEFAULT_STAKES, "sick": {**SICK, "chance_pm": 0}}})
+    sim.run_until(TICKS_PER_DAY + 40)  # day 1, everyone awake
+    return sim
+
+
+def _awake_adult(sim, role):
+    return next(a for a in sim.state["agents"] if a["role"] == role and not a["asleep"])
+
+
+@_pytest.mark.skipif(not _os.path.exists(PACK), reason="the pilot pack lives in the project files")
+def test_the_sick_ask_is_the_piloted_text_for_every_role():
+    pilot = {}
+    for line in open(PACK):
+        r = _json.loads(line)
+        if r["what"] == "sick":
+            pilot[r["role"]] = r["full"].split("Why you stop to think: ", 1)[1].strip()
+    sim = _sick_world()
+    for role, text in sorted(pilot.items()):
+        a = _awake_adult(sim, role)
+        sim._make_sick(a, [])
+        req = _ask(sim, a)
+        mine = req.prompt.split("Why you stop to think: ", 1)[1].strip()
+        assert _re.sub(r"\d+", "N", mine) == _re.sub(r"\d+", "N", text), role
+        assert req.view["offer"] == ["work", "home"] and '"action":"work|home"' in req.prompt
+
+
+def test_a_sick_body_works_at_half_pace_for_its_days_then_is_immune():
+    sim = _sick_world()
+    a = _awake_adult(sim, "crafter")
+    well = sim._work_rate(a)
+    eid = sim._make_sick(a, [])
+    assert sim._work_rate(a) == well // 2 and sim.events[eid].kind == "sick" and sim.events[eid].actor == a["id"]
+    assert sim._make_sick(a, []) is None  # already sick
+    sim.run_until(sim.state["tick"] + SICK["days"] * TICKS_PER_DAY + 1)
+    assert str(a["id"]) in sim.state["sick"]["immune"] and sim._work_rate(a) == well
+    rec = next(e for e in sim.events if e.kind == "recover" and e.actor == a["id"])
+    assert rec.parents == [eid]
+    assert sim._make_sick(a, []) is None  # immune
+
+
+def test_the_stub_answers_by_the_sandbox_rule_and_home_keeps_it_home_until_bed():
+    sim = _sick_world()
+    for a in [x for x in sim.state["agents"] if x["role"] not in ("child", "elder") and not x["asleep"]][:8]:
+        sim._make_sick(a, [])
+        req = _ask(sim, a)
+        out = _json.loads(sim.mind.decide(req).raw_output) if hasattr(sim.mind, "decide") else None
+        if out is None:
+            continue
+        want = "home" if a["traits"]["agreeableness"] > 500 and a["inv"]["coin"] >= 2 * sim._price() else "work"
+        assert out["action"] == want
+    a = _awake_adult(sim, "farmer")
+    sim._make_sick(a, [])
+    sim._resolve(a, {"action": "home"}, 0, sick=True)
+    r = sim.events[-1]
+    assert r.kind == "receipt" and r.data == {"action": "home", "ok": True, "why": "stays home sick", "sick": 1}
+    assert a["override"]["do"] == "home" and a["override"]["left"] == a["sleep_tick"] - sim.state["tick"]
+
+
+def test_every_catch_cites_its_source_and_a_chat_its_talk():
+    # the sandbox's rates and three forced cases (the twin's seed-case parameter), so every channel fires
+    hot = {**SICK, "catch_talk_pm": 100, "catch_home_pm": 100,
+           "cases": [[TICKS_PER_DAY + 40, 10], [TICKS_PER_DAY + 40, 40], [TICKS_PER_DAY + 40, 70]]}
+    sim = Sim(1, 100, StubMind(), genesis={**generate_population(1, 100), "stakes": {**DEFAULT_STAKES, "sick": hot}})
+    c, bad = Checker(sim), []
+    while sim.state["tick"] < 8 * TICKS_PER_DAY:
+        bad += c.step()
+    sim.finish()
+    assert bad == []
+    by_id = {e.id: e for e in sim.events}
+    sick = [e for e in sim.events if e.kind == "sick"]
+    caught = [e for e in sick if e.parents]
+    assert caught and len(sick) > len(caught)
+    for e in caught:
+        src = [by_id[p] for p in e.parents if by_id[p].kind == "sick"]
+        assert len(src) == 1 and src[0].actor == e.data["near"] and src[0].tick <= e.tick
+        talk = [by_id[p] for p in e.parents if by_id[p].kind == "talk"]
+        assert len(e.parents) == 1 + len(talk) and all({t.actor, t.data["with"]} == {e.actor, e.data["near"]} for t in talk)
+    assert any(by_id[p].kind == "talk" for e in caught for p in e.parents)
+    assert any(e.data["place"].startswith("home_") for e in caught)
+    asks = [e for e in sim.events if e.kind == "receipt" and e.data.get("sick")]
+    assert asks and all(e.data["action"] in ("work", "home") and e.data["ok"] for e in asks)
+    assert replay(sim.events).state_hash() == sim.state_hash()
+
+
+def test_a_possessed_body_gets_no_sick_ask_but_is_still_sick():
+    sim = _sick_world()
+    a = _awake_adult(sim, "crafter")
+    sim.step([{"kind": "possess", "agent": a["id"]}])
+    sim._make_sick(a, [])
+    well = a["body"]["strength"] * a["body"]["stamina"] // 1000
+    for _ in range(TICKS_PER_DAY):
+        sim.step()
+    assert not any(e.kind == "receipt" and e.data.get("sick") and e.actor == a["id"] for e in sim.events)
+    assert str(a["id"]) in sim.state["sick"]["ill"] and sim._work_rate(a) < well
+
+
+def test_sick_notes_carry_no_important_word():
+    from asiimov.sim import IMPORTANT_WORDS
+    sim = Sim(1, 100, StubMind())
+    sim.run(6)
+    notes = {e["text"].split(" ", 2)[2] for a in sim.state["agents"] for e in a["episodes"] if "sick" in e["text"]}
+    notes |= {n for a in sim.state["agents"] for n in a["recent"] if "sick" in n}
+    assert notes and not any(k in n for n in notes for k in IMPORTANT_WORDS)
+
+
+def test_viewing_a_sick_villager_leaves_the_world_unchanged():
+    # review on #49: inhabitant.view calls _offer every tick for each client; a read must not write state,
+    # or the state hash would depend on who is watching
+    from asiimov import inhabitant
+    sim = _sick_world()
+    a = _awake_adult(sim, "farmer")
+    sim._make_sick(a, [])
+    sim._sick_ask(a)
+    before = sim.state_hash()
+    v = inhabitant.view(sim, a["id"])
+    assert v["occasion"]["why"] == "sick" and set(v["offer"]) == {"work", "home"}
+    for o in sim.state["agents"]:
+        inhabitant.view(sim, o["id"])
+    assert sim.state_hash() == before

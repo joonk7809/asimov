@@ -72,6 +72,9 @@ class StubMind:
         return {"plan": blocks}
 
     def _deliberate(self, v: dict) -> dict:
+        if (v.get("occasion") or {}).get("why") == "sick":  # B5 sick-1, the sandbox's rule: the agreeable stay
+            pick = "home" if v["traits"]["agreeableness"] > 500 and v["coin"] >= 2 * v["food_price"] else "work"
+            return {"action": pick, "target": None, "reason": "", "goal": "", "then": []}  # home unless broke
         out = self._intent(v)
         if out is None and (v.get("occasion") or {}).get("why", "hungry") not in ("hungry", "hungry_coin"):
             out = {"action": "wait", "target": None, "reason": "nothing to do about it"}
