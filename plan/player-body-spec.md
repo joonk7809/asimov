@@ -70,9 +70,15 @@ and replay holds by S2: player events are recorded inputs, like `fire`.
    receipt follows later in the same tick, and the ack names the act event. The `goal`/`then` intent fields aren't exposed,
    because the player is the intent. Replay is unchanged: `replay()` passes the player events of each
    tick back to `step`, and `_player` queues the acts again.
-3. Guard: `_maybe_deliberate` skips the possessed villager. Its occasions (hungry, robbed, refused, fire and the rest of `OCCASIONS`) still
+3. Guard: `_maybe_deliberate` skips the possessed villager while it has had an order (its `possess`
+   or an `act`, refused or not) in the last `IDLE_TICKS` = 6 ticks, an hour. After an hour with no order
+   its own mind deliberates again, on its occasions as any villager's does, until the next order takes
+   the body back (joon chose this on 2026-11-09, engine label idle-1). `state["player"]["order"]` holds
+   the last order's tick. Like `release`, the hand-back never asks the mind about the player's own act:
+   an occasion filed by a receipt whose parent is a player `act` (a refusal or failure, on the act's tick
+   or later, when a step the act started fails) is dropped when the guard lifts (review of #42). Its occasions (hungry, robbed, refused, fire and the rest of `OCCASIONS`) still
    fire, and they're shown to the player as prompts to act (the inhabitant view's `occasion`).
-4. Under the recommended option, wake plans and night reflection still go to the villager's mind, so
+4. As in the recommended option, wake plans and night reflection still go to the villager's mind, so
    it keeps one coherent memory and a day plan. The habit/plan layer runs between orders, and an order
    overrides the current step as a deliberation's override does today. (Option 1, standing still, also
    skips plan and reflect and leaves `plan` empty. Option 2 adds an idle counter that lifts the step-3
@@ -139,8 +145,9 @@ is the dev/review tool until a game design says what divine power costs.
    receipt events). For offered acts: replaying each one as a recorded mind deliberation for the same
    villager at the same tick gives the same receipts, because both resolve in `_commit` in `_order`,
    including under contention (two villagers stealing from one target in the same tick).
-4. **No deliberation while possessed:** zero `deliberate` mind events for the possessed villager
-   between possess and release. Its plan and reflect events continue (recommended option).
+4. **No deliberation while ordered:** zero `deliberate` mind events for the possessed villager within
+   `IDLE_TICKS` of its last order. After that its mind deliberates again, and the next order stops it.
+   Its plan and reflect events continue.
 5. **Inhabitant leak test:** over a 3-day world with a player in the inhabitant scope, every message
    sent is scanned. It must contain no `soul`, `traits`, `params`, `raw_output` or `prompt_hash` of any
    villager, and no position of a villager who isn't at the player's place, unless it's family at

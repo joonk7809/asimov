@@ -69,6 +69,7 @@ DAILY_MIND_CALLS = 15       # per agent and calendar day, plans and reflections 
 # agent holding coin unable to tell why it failed (T16b: 95% of famine agents who had failed to buy went
 # back to the empty market).
 BUY_FAIL_TEXT = {"no stock": "no food for sale", "no coin": "not enough coin"}
+IDLE_TICKS = 6              # a possessed body with no order for an hour deliberates with its own mind again
 OCCASION_TICKS = 12         # an occasion the mind hasn't been asked about yet fades after 2 hours
 OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "hungry_coin": "you are hungry with no food, and carry enough coin to buy some",
@@ -127,7 +128,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "16"  # the player's body (plan/player-body-spec.md), on engine 15
+ENGINE_VERSION = "17"  # an idle body's mind takes over (joon 2026-11-09), on engine 16
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -529,7 +530,9 @@ class Sim:
             self._eat(a)
             if a["id"] in self._acts:
                 self._player_deliberate(a, occupancy)
-            elif not self._possessed(a):
+            elif not self._possessed(a) or self._idle(a):
+                if self._possessed(a) and (a["occasion"] or {}).get("player"):
+                    a["occasion"] = None  # the hand-back never asks the mind about the player's own act
                 self._maybe_deliberate(a, occupancy)
 
         self._commit()
@@ -874,6 +877,8 @@ class Sim:
             return
         a["occasion"] = {"why": why, "salience": salience, "who": who, "event": event, "detail": detail,
                          "tick": tick}
+        if self._possessed(a) and self._of_player_act(event):  # about the player's own act (a refusal, a failure)
+            a["occasion"]["player"] = 1  # state holds no bools (invariants)
 
     def _notice(self, a: dict, occupancy: dict) -> dict | None:
         """Someone the agent feels strongly about is here and awake, noticed at most once per person per
@@ -1241,6 +1246,20 @@ class Sim:
     def _possessed(self, a: dict) -> bool:
         return self.state.get("player", {}).get("agent") == a["id"]
 
+    def _of_player_act(self, event: int | None) -> bool:
+        """Whether an event is a receipt for a player's act: its parent is the act, on the act's tick or on a
+        later one (an override step keeps the act as its holder event). By ancestry in the log, which resume
+        reloads, so it holds across snapshots."""
+        if event is None or self.events[event].kind != "receipt" or not self.events[event].parents:
+            return False
+        p = self.events[self.events[event].parents[0]]
+        return p.kind == "act" and p.origin == "player"
+
+    def _idle(self, a: dict) -> bool:
+        """The possessed body has had no order (possess or act) for IDLE_TICKS: its own mind deliberates
+        again until the next order (joon, 2026-11-09, on the idle-body card)."""
+        return self.state["tick"] - self.state["player"]["order"] >= IDLE_TICKS
+
     def _refuse_acts(self, a: dict, why: str):
         for eid, action, _ in self._acts.pop(a["id"], []):
             self._receipt(a, eid, action, False, why)
@@ -1282,7 +1301,7 @@ class Sim:
             if "player" in self.state:  # re-possessing moves the body
                 self._release()
             eid = self._emit("possess", "player", aid, {"agent": aid})
-            self.state["player"] = {"agent": aid, "event": eid}
+            self.state["player"] = {"agent": aid, "event": eid, "order": self.state["tick"]}
             return eid
         if kind == "release":
             if "player" not in self.state:
@@ -1297,6 +1316,7 @@ class Sim:
             aid = self.state["player"]["agent"]
             data = {"action": action} if target is None else {"action": action, "target": target}
             eid = self._emit("act", "player", aid, data, [self.state["player"]["event"]])
+            self.state["player"]["order"] = self.state["tick"]
             self._acts.setdefault(aid, []).append((eid, action, target))
             return eid
         if kind == "fire":

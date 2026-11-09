@@ -171,7 +171,9 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "t25-1": "664b54b907f9143d0d4ed7140194d1690b034c026fae9ed679d5c417fc96bcc7",  # T25 on engine 14, before its number
           "15": "1a1677ccd7eec0952ccfa9e52dca9ad9d8e1511391a8eddf7525a48158636f9a",  # T25 anchored souls
           "pb-1": "00c77fb3225c8ef16e5ed9d847bb0ecd49943624afb9ae2e5f26641c7a8bf862",  # the player's body on 15, before its number
-          "16": "eb9ad93f69adb82ff2a357a437ee45a5e57fc50d813f19ae358aee68432638b5"}  # the player's body; only genesis' engine field differs from 15
+          "16": "eb9ad93f69adb82ff2a357a437ee45a5e57fc50d813f19ae358aee68432638b5",  # the player's body; only genesis' engine field differs from 15
+          "idle-1": "4177bc34b2023defa6c75b6d8e2e3ba7233060ae4ddc8902e8c711a384d3c5ce",  # an idle body's mind takes over, before its number
+          "17": "981d6255337c66f57bb9ec1f1230e3aad8ee30ef31d03a3056a55f5e483075a0"}  # an idle body's mind takes over; only the engine field differs from 16
 
 
 def test_log_changes_bump_the_engine_version():

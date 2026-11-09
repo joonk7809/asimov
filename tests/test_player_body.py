@@ -15,7 +15,7 @@ from asiimov.events import Event, read_jsonl
 from asiimov.invariants import Checker
 from asiimov.minds import MindReply, NoisyMind, StubMind
 from asiimov.replay import replay
-from asiimov.sim import DELIBERATE_ACTIONS, INSTANT_STEPS, PERSON_STEPS, RATED_ACTS, TICKS_PER_DAY, Sim
+from asiimov.sim import DELIBERATE_ACTIONS, IDLE_TICKS, INSTANT_STEPS, PERSON_STEPS, RATED_ACTS, TICKS_PER_DAY, Sim
 
 GOLDEN_15 = "1a1677ccd7eec0952ccfa9e52dca9ad9d8e1511391a8eddf7525a48158636f9a"  # tests/test_world.py, engine 15
 
@@ -49,7 +49,7 @@ def body_script(aid, seed=0, start=TICKS_PER_DAY // 2, end=2 * TICKS_PER_DAY, n=
     return player
 
 
-def test_possess_act_release_replays_exactly_and_never_asks_the_mind_to_deliberate():
+def test_possess_act_release_replays_exactly_and_the_mind_deliberates_only_when_idle():
     aid = 3
     player = body_script(aid)
     sim = Sim(5, 12, NoisyMind())
@@ -60,7 +60,10 @@ def test_possess_act_release_replays_exactly_and_never_asks_the_mind_to_delibera
     pos = next(e.id for e in events if e.kind == "possess")
     rel = next(e.id for e in events if e.kind == "release")
     during = [e for e in events[pos:rel] if e.actor == aid]
-    assert not [e for e in during if e.kind == "mind_deliberate"]                     # bar 4
+    orders = sorted({e.tick for e in during if e.kind in ("possess", "act")} | {events[pos].tick})
+    for e in during:  # bar 4, as joon's idle-body choice amends it: only after IDLE_TICKS without an order
+        if e.kind == "mind_deliberate":
+            assert e.tick - max(t for t in orders if t <= e.tick) >= IDLE_TICKS, e
     assert {"mind_plan", "mind_reflect"} <= {e.kind for e in during}                  # its own mind lives on
     acts = [e for e in during if e.kind == "act"]
     receipts = {e.parents[0]: e for e in events if e.kind == "receipt" and e.parents and e.parents[0] in
@@ -309,3 +312,67 @@ def test_a_possessed_villagers_talks_still_count_for_its_partner():
     talks = [e for e in sim.events if e.kind == "talk" and 3 in (e.actor, e.data["with"])]
     assert bodies == [3] and talks and all(e in kept for e in talks)
     assert not [e for e in kept if e.actor == 3 and e.kind != "talk"]
+
+
+def test_an_idle_body_hands_back_to_its_own_mind_until_the_next_order():
+    """joon's idle-body choice: with no order (possess or act) for IDLE_TICKS, the possessed villager's own
+    mind deliberates again; an act takes it back at once. Replays exactly."""
+    aid, start = 3, TICKS_PER_DAY // 2
+    sim = Sim(5, 12, NoisyMind())
+    fam = sim.state["agents"][aid]["family"]  # a fire is an occasion (salience 900), and not an order
+    player = {start: [{"kind": "possess", "agent": aid}], start + 2: [{"kind": "fire", "family": fam}],
+              start + 40: [{"kind": "act", "action": "rest"}], start + 41: [{"kind": "act", "action": "socialize"}],
+              start + 42: [{"kind": "fire", "family": fam}], start + 120: [{"kind": "release"}]}
+    sim.run_until(start + 130, player)
+    sim.finish()
+    delib = [e.tick for e in sim.events if e.kind == "mind_deliberate" and e.actor == aid and start <= e.tick < start + 120]
+    assert delib, "the idle body's mind never deliberated"
+    # The fire's occasion waits for the hour to pass, then the mind is asked at once; after the two orders
+    # the second fire's occasion waits again, the hour counted from the last order.
+    assert delib[:2] == [start + IDLE_TICKS, start + 41 + IDLE_TICKS], delib
+    assert replay(sim.events).state_hash() == sim.state_hash()
+
+
+def test_the_hand_back_never_asks_the_mind_about_the_players_own_act():
+    """Review of #42: a refused or failed player act files a "failed" occasion that outlives the idle hour,
+    so the first idle deliberation was about the player's act. Like release, the hand-back drops it."""
+    cases = 0
+    for aid in range(25):
+        sim = Sim(1, 25, StubMind())
+        sim.run_until(120, {65: [{"kind": "possess", "agent": aid}], 66: [{"kind": "act", "action": "buy_food"}],
+                            70: [{"kind": "act", "action": "buy_food"}, {"kind": "act", "action": "steal", "target": (aid + 1) % 25}]})
+        mine = {e.id for e in sim.events if e.kind == "act"}
+        mine |= {e.id for e in sim.events if e.kind == "receipt" and e.parents and e.parents[0] in mine}
+        for e in sim.events:
+            if e.kind == "mind_deliberate" and e.actor == aid and e.tick >= 70:
+                assert not set(e.parents) & mine, (aid, e)
+                cases += 1
+    assert cases >= 5  # idle deliberations that could have cited the acts
+
+
+def test_a_player_steps_late_failure_is_never_the_idle_minds_occasion_across_a_kill(tmp_path):
+    """Review of #42 (Steering, and k42b): an act that starts a step (seek, give_food) keeps the act as the
+    step's holder, and the step can fail ticks later, after the hand-back. Its receipt cites the act, so
+    the occasion is the player's by ancestry. A kill and resume between the order and the failure keeps it."""
+    from asiimov import persist
+    late = cases = 0
+    for aid in range(25):
+        player = {65: [{"kind": "possess", "agent": aid}],
+                  66: [{"kind": "act", "action": "seek", "target": (aid + 7) % 25}],
+                  70: [{"kind": "act", "action": "give_food", "target": (aid + 1) % 25}]}
+        out = str(tmp_path / f"w{aid}")
+        run = persist.start(out, 1, 25, StubMind(), "id", player, snapshot_every=24)
+        run.advance(71)  # after the orders, before the steps' late receipts and the hand-back
+        run = persist.resume(out, StubMind())  # a crash: no finish
+        run.advance(140)
+        run.finish()
+        ev = run.sim.events
+        acts = {e.id for e in ev if e.kind == "act"}
+        theirs = {e.id for e in ev if e.kind == "receipt" and e.parents and e.parents[0] in acts}
+        late += sum(1 for e in ev if e.id in theirs and not e.data["ok"] and e.tick > ev[e.parents[0]].tick)
+        for e in ev:
+            if e.kind == "mind_deliberate" and e.actor == aid and e.tick >= 70:
+                assert not set(e.parents) & (acts | theirs), (aid, e)
+                cases += 1
+        assert replay(ev).state_hash() == run.sim.state_hash()
+    assert late and cases >= 5, (late, cases)  # late failures happened, and idle minds were asked

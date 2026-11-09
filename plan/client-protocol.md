@@ -43,7 +43,9 @@ same villager claims it with no new `possess`. If nobody does within 36 ticks, t
 `possess` when a crash re-run left the view before it. A body possessed from god scope is left alone, as it is when a god client
 disconnects.
 
-An inhabitant sends only `act` (anything else gets `scope`). It gets:
+An inhabitant sends only `act` (anything else gets `scope`). After an hour (6 ticks) with no `act`, its
+villager's own mind deliberates again; the next `act` takes the body back (plan/player-body-spec.md).
+It gets:
 - `welcome`: `world` is `{map, ticks_per_day, me: {id, name, role, family, home}, family: [{id, name, role}]}`,
   plus `view_tick`, `paused`, `tps`, `verbs` (`act` only) and its first `view`.
 - `events` backlog and `tick` messages carrying only events it would witness: its own, those naming it
