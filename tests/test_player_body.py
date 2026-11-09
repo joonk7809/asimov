@@ -1,4 +1,4 @@
-"""The player's body (plan/player-body-spec.md, engine pb-1): possess, act, release.
+"""The player's body (plan/player-body-spec.md, engine 16): possess, act, release.
 
 A player act is a deliberation whose output comes from a person: recorded as a player event at the start
 of the tick, resolved in _commit in _order with the minds' replies, held to the offer a mind's reply

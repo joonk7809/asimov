@@ -127,7 +127,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "pb-1"  # the player's body (plan/player-body-spec.md), on engine 15; Steering assigns the integer
+ENGINE_VERSION = "16"  # the player's body (plan/player-body-spec.md), on engine 15
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
