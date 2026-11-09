@@ -330,3 +330,28 @@ def test_websocket_session_hello_backlog_ticks_acks_and_reattach(tmp_path):
     asyncio.run(main())
     assert [r.get("id") for r in map(json.loads, lines(os.path.join(runner.out, "runner.jsonl")))
             if r["kind"] == "received"] == ["w1"]
+
+
+def test_a_token_guards_the_hello_and_each_tick_records_its_wall_time(tmp_path):
+    runner = live.LiveRunner(str(tmp_path / "w"), StubMind(), SEED, AGENTS)
+
+    async def main():
+        ready = asyncio.get_running_loop().create_future()
+        task = asyncio.ensure_future(live.serve(runner, port=0, paused=True, token="s3cret",
+                                                started=lambda port, hub: ready.set_result(port)))
+        port = await ready
+        for bad in ({}, {"token": "nope"}, {"token": ["s3cret"]}):
+            c = await WS.connect(port)
+            c.send({"type": "hello", "protocol": 2, **bad})
+            assert (await c.recv())["reason"] == "bad_token" and await c.recv() is None
+        c = await WS.connect(port)
+        c.send({"type": "hello", "protocol": 2, "token": "s3cret"})
+        assert (await c.recv())["type"] == "welcome"
+        c.send({"type": "control", "op": "step"})
+        await c.until("tick")
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(main())
+    steps = [r for r in map(json.loads, open(tmp_path / "w" / "runner.jsonl")) if r["kind"] == "step"]
+    assert steps and steps[0]["tick"] == 0 and steps[0]["wall_s"] >= 0 and steps[0]["calls"] == 0

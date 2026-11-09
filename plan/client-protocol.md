@@ -135,7 +135,8 @@ A client interpolates between views for display only.
 
 `error`, then the server closes: a first message that isn't a valid `hello`, an unknown protocol, an
 unknown scope (`bad_scope`), an inhabitant hello with a bad `agent` (`bad_agent`) or for a body it can't
-take (`body_taken`), a `since` past the log (`bad_since`), or a malformed frame. The
+take (`body_taken`), a `since` past the log (`bad_since`), a missing or wrong `token` when the server was
+started with `--token` (`bad_token`), or a malformed frame. The
 close frame repeats the reason with code 4000, since a client can drop a message that arrives just
 before a close (Godot does).
 

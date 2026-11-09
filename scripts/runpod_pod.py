@@ -87,7 +87,7 @@ def up(args):
         "cloudType": args.cloud,
         "containerDiskInGb": 80,
         "volumeInGb": 0,
-        "ports": ["8000/http", f"{AGENT_PORT}/http"],
+        "ports": ["8000/http", f"{AGENT_PORT}/http"] + [f"{p}/http" for p in args.port],
         "dockerEntrypoint": ["bash", "-c"],
         "dockerStartCmd": [cmd],
         "env": {"HF_HUB_ENABLE_HF_TRANSFER": "1"},
@@ -159,6 +159,8 @@ def main():
     p.add_argument("--max-len", type=int, default=8192)
     p.add_argument("--vllm-args", default="", help="extra vllm serve flags, e.g. '--async-scheduling'")
     p.add_argument("--name", default=None, help="pod name after the asiimov- prefix (default: the model)")
+    p.add_argument("--port", type=int, action="append", default=[],
+                   help="another HTTP port to expose at https://POD_ID-PORT.proxy.runpod.net, e.g. 8765 for asiimov.live")
     p.add_argument("--ttl-hours", type=float, default=6.0, help="pod terminates itself this long after launch; size it to the planned run")
     p.set_defaults(fn=up)
     p = sub.add_parser("wait")
