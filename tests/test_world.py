@@ -88,6 +88,7 @@ def test_player_intervention_propagates_against_a_twin(monkeypatch):
     # stub's fire reaches nobody outside the family (seeds 1, 2, 5, every family), a true negative
     # (S4); the propagation machinery is tested in the engine-1..4 economy.
     monkeypatch.setattr(sim_mod, "FARM_YIELD", 1)
+    monkeypatch.setitem(sim_mod.DEFAULT_STAKES["year"], "yields", [1] * 7)  # the same scarcity under the year (B5)
     base = run(StubMind(), agents=60, days=4, seed=5)
     fire = run(StubMind(), agents=60, days=4, seed=5, player={TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]})
 
@@ -177,7 +178,9 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "tithe-1": "d0e6fa0c0ec9feaff5f97040248904c7bf0959d0c5dfa0a7031903db214281b5",  # B5 coin sink, on 17, before its number
           "18": "90ff72036ee3f1a7098a5205eb87322ae78079302f2e1252e81a5a65e7bef4a8",  # B5 coin sink; only the engine field differs from tithe-1
           "pay-1": "68989ccaaca8bef56d493eb158644e2e77a459d831091ca60ebfd87dc068e999",  # B5 pay compression, on 18, before its number
-          "19": "fa2887a8e6fd6dcddf0f27b94150b99409a3d9c70ea17cc3887861a4ec98c254"}  # B5 pay compression; only the engine field differs from pay-1
+          "19": "fa2887a8e6fd6dcddf0f27b94150b99409a3d9c70ea17cc3887861a4ec98c254",  # B5 pay compression; only the engine field differs from pay-1
+          "year-1": "330a666ed148282a5b9cfb4a54df0a8ea5a0d7d1f3810be05f9b880393689059",  # B5 the year and the price, on 19, before its number
+          "20": "6a3aa743936f75c44d8dc603cf6197823245ad38b8d5304b26aeb3bc8e769dee"}  # B5 the year and the price; only the engine field differs from year-1
 
 
 def test_log_changes_bump_the_engine_version():

@@ -18,7 +18,8 @@ def test_every_prompt_states_what_work_pays_and_where_food_is_sold():
     assert {r.kind for r in reqs} == {"plan", "deliberate", "reflect"}
     for r in reqs:
         now = r.prompt.split("# Now (", 1)[1]
-        assert f"Food costs {FOOD_PRICE} coin and is sold only at the market, which is open at all hours." in now
+        # the live price (B5 year-1): 3 to 6 by the stall's stock
+        assert re.search(r"Food costs [3-6] coin and is sold only at the market, which is open at all hours\.", now)
         assert not re.search(r"\bclosed\b|opening hours|\bcloses\b", now)  # no prompt implies market hours (T15)
         assert ("pays" in now or "yields" in now or "don't work for pay" in now), now
     assert "coin" not in SCHEMA.split("For kind=")[0]  # the facts are not in the shared SCHEMA (L11)
@@ -29,7 +30,8 @@ def test_the_economy_line_matches_the_role_and_the_world():
     by_role = {a["role"]: a for a in sim.state["agents"]}
     assert f"pays {WORK_WAGE} coin about every" in sim._economy(by_role["crafter"])
     assert "workshop" in sim._economy(by_role["crafter"])
-    assert "yields 3 food" in sim._economy(by_role["farmer"])
+    assert f"yields {sim._food_yield(by_role['farmer'])} food" in sim._economy(by_role["farmer"])  # the year's day
+    assert f"sell at {sim._price() - 1} coin each. Food costs {sim._price()} coin" in sim._economy(by_role["farmer"])
     assert "don't work for pay" in sim._economy(by_role["child"])
     sim._food_yield = lambda a: 1  # an arm that changes the yield changes what the prompt says
     assert "yields 1 food" in sim._economy(by_role["farmer"])
