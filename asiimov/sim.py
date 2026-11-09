@@ -165,7 +165,7 @@ DEFAULT_STAKES = {
     # a home, catch_home_pm to each of a household at midnight. Each day it wakes sick, a working adult is
     # asked: work (at half pace, near others) or home (all day, earning nothing). The ask is the B5 pilot's text.
     # Lowered from the sandbox's 100/3/100 (85-89 of 100 ever sick) to the spec's target: at 24 days, fed, seeds
-    # 1-6, outbreaks reach 54/10/45/59/11 (median 45, none above 70; seed 4 draws no case).
+    # 1-6, outbreaks reach 59/10/50/60/11 (median 50, none above 70; seed 4 draws no case).
     "sick": {"chance_pm": 300, "days": 3, "catch_talk_pm": 5, "catch_work_pm": 3, "catch_home_pm": 20,
              "cases": []},
 }
@@ -220,7 +220,7 @@ class Sim:
         if pop["stakes"]:  # a world with every stake off keeps engine 17's state, hashes included
             self.state.update({"stakes": json.loads(json.dumps(pop["stakes"])), "chest": 0})
         if "sick" in self.state.get("stakes", {}):  # who is sick until when, who is immune, the source events (B5)
-            self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}, "pending": {}}
+            self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}}
         if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
             self.state["stall"] = {"price": None, "step": None, "buys": [], "sells": [], "orders": {}}
         for p in pop["agents"]:
@@ -493,12 +493,8 @@ class Sim:
         nor when today's belief or the stall in front of you says it is empty; buy_from only with the coin.
         The situation says why each is withheld: NO_COIN_LINE, the belief line, the market's shown stock,
         or "sold only at the market"."""
-        if "sick" in self.state:  # sick-1: a sick ask offers work or home, nothing else
-            pend = self.state["sick"]["pending"]
-            if (view.get("occasion") or {}).get("why") == "sick":
-                pend[str(a["id"])] = 1
-                return list(SICK_ACTIONS)
-            pend.pop(str(a["id"]), None)
+        if "sick" in self.state and (view.get("occasion") or {}).get("why") == "sick":
+            return list(SICK_ACTIONS)  # sick-1: a sick ask offers work or home, nothing else (a read: no state)
         coin_ok = a["inv"]["coin"] >= self._price()
         shown = view.get("market_food")
         drop = set()
@@ -1256,7 +1252,7 @@ class Sim:
         view = self._view(a, occupancy)
         view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
         self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [],
-                      lambda eid, out: self._resolve(a, out, eid))
+                      lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick))
 
     # ------------------------------------------------------------------ actions -> receipts
     def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None, parents=()):
@@ -1339,11 +1335,11 @@ class Sim:
                 steps.append({"do": do, "target": target if do in PERSON_STEPS else None})
         return steps, dropped
 
-    def _resolve(self, a: dict, out: dict | None, eid: int):
+    def _resolve(self, a: dict, out: dict | None, eid: int, sick: bool = False):
         """Apply a deliberation: the action happens now; with a goal, it and the `then` steps become an
         intent that persists until done, failed or replaced."""
         out = out or {}
-        if self.state.get("sick", {}).get("pending", {}).pop(str(a["id"]), None):
+        if sick:  # the request's own occasion was the sick ask (sick-1)
             return self._sick_resolve(a, out, eid)
         action, target = out.get("action"), out.get("target")
         first = None

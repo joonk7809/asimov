@@ -359,8 +359,7 @@ def test_the_stub_answers_by_the_sandbox_rule_and_home_keeps_it_home_until_bed()
         assert out["action"] == want
     a = _awake_adult(sim, "farmer")
     sim._make_sick(a, [])
-    sim.state["sick"]["pending"][str(a["id"])] = 1
-    sim._resolve(a, {"action": "home"}, 0)
+    sim._resolve(a, {"action": "home"}, 0, sick=True)
     r = sim.events[-1]
     assert r.kind == "receipt" and r.data == {"action": "home", "ok": True, "why": "stays home sick", "sick": 1}
     assert a["override"]["do"] == "home" and a["override"]["left"] == a["sleep_tick"] - sim.state["tick"]
@@ -411,3 +410,19 @@ def test_sick_notes_carry_no_important_word():
     notes = {e["text"].split(" ", 2)[2] for a in sim.state["agents"] for e in a["episodes"] if "sick" in e["text"]}
     notes |= {n for a in sim.state["agents"] for n in a["recent"] if "sick" in n}
     assert notes and not any(k in n for n in notes for k in IMPORTANT_WORDS)
+
+
+def test_viewing_a_sick_villager_leaves_the_world_unchanged():
+    # review on #49: inhabitant.view calls _offer every tick for each client; a read must not write state,
+    # or the state hash would depend on who is watching
+    from asiimov import inhabitant
+    sim = _sick_world()
+    a = _awake_adult(sim, "farmer")
+    sim._make_sick(a, [])
+    sim._sick_ask(a)
+    before = sim.state_hash()
+    v = inhabitant.view(sim, a["id"])
+    assert v["occasion"]["why"] == "sick" and set(v["offer"]) == {"work", "home"}
+    for o in sim.state["agents"]:
+        inhabitant.view(sim, o["id"])
+    assert sim.state_hash() == before

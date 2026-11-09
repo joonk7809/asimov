@@ -181,7 +181,7 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "19": "fa2887a8e6fd6dcddf0f27b94150b99409a3d9c70ea17cc3887861a4ec98c254",  # B5 pay compression; only the engine field differs from pay-1
           "year-1": "330a666ed148282a5b9cfb4a54df0a8ea5a0d7d1f3810be05f9b880393689059",  # B5 the year and the price, on 19, before its number
           "20": "6a3aa743936f75c44d8dc603cf6197823245ad38b8d5304b26aeb3bc8e769dee",  # B5 the year and the price; only the engine field differs from year-1
-          "sick-1": "102fa78edb69e1de40996715de2a275c7d69198d4bff42f83dac5eb7659fca20"}  # B5 sickness and its ask, on 20, before its number
+          "sick-1": "9355d331182baddd94bca146d71a755411b18d86c10295c514736c263d19bb4d"}  # B5 sickness and its ask, on 20, before its number
 
 
 def test_log_changes_bump_the_engine_version():
