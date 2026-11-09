@@ -207,7 +207,7 @@ class Sim:
         if pop["stakes"]:  # a world with every stake off keeps engine 17's state, hashes included
             self.state.update({"stakes": json.loads(json.dumps(pop["stakes"])), "chest": 0})
         if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
-            self.state["stall"] = {"price": None, "buys": [], "sells": [], "orders": {}}
+            self.state["stall"] = {"price": None, "step": None, "buys": [], "sells": [], "orders": {}}
         for p in pop["agents"]:
             a = json.loads(json.dumps(p))
             fam = pop["families"][p["family"]]
@@ -584,6 +584,8 @@ class Sim:
         if tick % TICKS_PER_DAY == TICKS_PER_DAY - 1:
             self._spoil()
             self._spend_chest()
+            if "stall" in self.state:
+                self.state["stall"]["orders"] = {}  # an order its trip didn't fill lapses with its day
         if "stall" in self.state:
             self._reprice()  # after the night's spoil, so the next tick's price is the stock it will sell from
         if tick % TICKS_PER_DAY == TICKS_PER_DAY - 1:
@@ -948,6 +950,16 @@ class Sim:
     def _stall_cause(self, side: str) -> list[int]:
         return list(self.state["stall"][side]) if "stall" in self.state else []
 
+    def _failed_buy_cause(self, why: str) -> list[int]:
+        """What else made a market buy fail (B5 year-1, review of #48): an empty stall cites the latest buys that
+        emptied it; too little coin cites the price step that put the price above its base, if it is above."""
+        if "stall" not in self.state:
+            return []
+        if why == "no stock":
+            return self._stall_cause("buys")
+        st = self.state["stall"]
+        return [st["step"]] if st["price"] > self._year()["prices"][0] and st["step"] is not None else []
+
     def _reprice(self):
         """The tick's end: the price follows the stall's stock. A step cites the latest buys that drew the stock
         down (a rise) or the latest sells that filled it (a fall)."""
@@ -955,8 +967,9 @@ class Sim:
         new = self._price_now()
         if new != st["price"]:
             side = "buys" if new > st["price"] else "sells"
-            self._emit("price", "rule", None, {"price": new, "was": st["price"], "stock": self.state["market_food"]},
-                       self._stall_cause(side))
+            st["step"] = self._emit("price", "rule", None,
+                                    {"price": new, "was": st["price"], "stock": self.state["market_food"]},
+                                    self._stall_cause(side))
             st["price"] = new
 
     def _stock_for_winter(self, a: dict):
@@ -981,8 +994,8 @@ class Sim:
         fam = self.state["families"][a["family"]]["members"]
         mine = sum(1 for m in fam if m == a["id"] or self.state["agents"][m]["role"] in ("child", "elder"))
         n = 3 * winter * mine
-        st["orders"][str(a["id"])] = n
         eid = self._emit("stock", "rule", a["id"], {"order": n, "winter_days": winter}, [])
+        st["orders"][str(a["id"])] = {"n": n, "event": eid}  # filled only by this trip's buy, dropped at day's end
         a["override"] = {"do": "shop", "target": None, "left": DEFAULT_STEP_TICKS, "event": eid}
 
     def _spoil(self):
@@ -1117,16 +1130,20 @@ class Sim:
             self._receipt(a, eid, "buy_food", False, "not at market")
             return False, "not at market"
         price = self._price()
-        order = self.state.get("stall", {}).get("orders", {}).pop(str(a["id"]), None)  # used up by this trip
+        orders = self.state.get("stall", {}).get("orders", {})
+        order = orders.get(str(a["id"]))
+        if order is not None and (order["event"] == eid or self._possessed(a)):
+            del orders[str(a["id"])]  # its own trip uses it up; a possessed body's never fills it
+        if order is not None and (order["event"] != eid or self._possessed(a)):
+            order = None  # any other buy (a plan's, a deliberation's, a player's) is an ordinary one
         if self.state["market_food"] <= 0 or a["inv"]["coin"] < price:
             why = "no stock" if self.state["market_food"] <= 0 else "no coin"  # both: the stock is what failed
             if why == "no stock":
                 a["market_seen"] = {"tick": self.state["tick"], "food": 0}
-            # the buys that emptied the stall or raised its price are this failure's causes too (B5 year-1)
-            self._receipt(a, eid, "buy_food", False, why, parents=self._stall_cause("buys"))
+            self._receipt(a, eid, "buy_food", False, why, parents=self._failed_buy_cause(why))
             return False, why
         if order is not None:  # the harvest day's winter stock (year-1)
-            n = min(order, a["inv"]["coin"] // price, self.state["market_food"])
+            n = min(order["n"], a["inv"]["coin"] // price, self.state["market_food"])
             self.state["market_food"] -= n
             a["inv"]["coin"] -= n * price
             a["inv"]["food"] += n

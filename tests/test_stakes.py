@@ -178,7 +178,26 @@ def test_on_the_harvest_day_every_working_adult_stocks_its_households_winter_by_
         assert e.data["order"] == 3 * 2 * sum(1 for m in fam if m == a["id"] or ags[m]["role"] in ("child", "elder"))
     buys = [e for e in sim.events if e.kind == "receipt" and e.data.get("stock")]
     assert buys and all(e.data["food"] <= next(s.data["order"] for s in stock if s.actor == e.actor) for e in buys)
-    assert not sim.state["stall"]["orders"] or all(int(k) in {e.actor for e in stock} for k in sim.state["stall"]["orders"])
+    # a stock buy is the order's own trip, on its day; an order its trip didn't fill lapses at the day's end
+    order_of = {s.actor: s.id for s in stock}
+    assert all(e.parents[0] == order_of[e.actor] and e.tick // TICKS_PER_DAY == day for e in buys)
+    assert sim.state["stall"]["orders"] == {}
+
+
+def test_a_winter_order_is_filled_only_by_its_own_trip():
+    sim = Sim(1, 40, StubMind())
+    day = _harvest_day_awake(sim)
+    while not sim.state["stall"]["orders"]:
+        sim.step()
+    who = int(next(iter(sim.state["stall"]["orders"])))
+    a = sim.state["agents"][who]
+    a["place"], a["inv"]["coin"] = "market", 200
+    sim._buy(a, 0)  # some other buy (a plan's or a player's): an ordinary one, and the order still stands
+    assert not sim.events[-1].data.get("stock") and str(who) in sim.state["stall"]["orders"]
+    sim.step([{"kind": "possess", "agent": who}])
+    a["place"] = "market"
+    sim._buy(a, sim.state["stall"]["orders"].get(str(who), {"event": -1})["event"])
+    assert not sim.events[-1].data.get("stock") and str(who) not in sim.state["stall"]["orders"]  # dropped
 
 
 def test_a_possessed_body_gets_no_winter_order_but_lives_in_the_year():
@@ -221,12 +240,18 @@ def test_every_price_step_and_failed_buy_cites_the_stall_moves_that_caused_it():
         else:  # a fall: the sells that filled it
             assert kinds == {"sell"}
         assert all(by_id[p].tick <= e.tick for p in e.parents)
-    first_buy = min(e.id for e in sim.events if e.kind == "receipt" and e.data["action"] == "buy_food" and e.data["ok"]
-                    and e.data["food"])
     fails = [e for e in sim.events if e.kind == "receipt" and e.data["action"] == "buy_food" and not e.data["ok"]
-             and e.data["why"] in ("no stock", "no coin") and e.id > first_buy]
+             and e.data["why"] in ("no stock", "no coin")]
     assert fails
-    for e in fails:
-        cause = [p for p in e.parents[1:]]
-        assert cause and all(by_id[p].kind == "receipt" and by_id[p].data["action"] == "buy_food" for p in cause)
+    base = YEAR["prices"][0]
+    for e in fails:  # review of #48: only a real cause is cited
+        cause = e.parents[1:]
+        if e.data["why"] == "no stock":
+            assert all(by_id[p].kind == "receipt" and by_id[p].data["action"] == "buy_food" for p in cause)
+        else:  # too little coin: the step that put the price above its base, and only then
+            step = [x for x in steps if x.id < e.id][-1:]
+            if step and step[0].data["price"] > base:
+                assert cause == [step[0].id]
+            else:
+                assert cause == []
     assert replay(sim.events).state_hash() == sim.state_hash()
