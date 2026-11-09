@@ -1,4 +1,4 @@
-"""B5 stakes in the engine (plan/b5-build-spec.md). tithe-1: the coin sink."""
+"""B5 stakes in the engine (plan/b5-build-spec.md). tithe-1: the coin sink. pay-1: pay compression."""
 from asiimov.invariants import Checker
 from asiimov.minds import ReplayMind, StubMind
 from asiimov.params import generate_population
@@ -66,3 +66,30 @@ def test_a_tithe_note_is_an_everyday_memory_not_a_gift():
     sim.run(3)
     eps = [e for a in sim.state["agents"] for e in a["episodes"] if "village chest" in e["text"]]
     assert eps and all(e["importance"] == 1 for e in eps)
+def _rates(sim):
+    return {a["id"]: sim._work_rate(a) for a in sim.state["agents"] if a["role"] not in ("child", "elder")}
+
+
+def test_pay_pulls_each_working_adult_toward_its_trades_mean_and_keeps_that_mean():
+    on = Sim(3, 100, StubMind())
+    off = Sim(3, 100, StubMind(), genesis={**generate_population(3, 100), "stakes": {"tithe": DEFAULT_STAKES["tithe"]}})
+    r_on, r_off = _rates(on), _rates(off)
+    pull = DEFAULT_STAKES["pay"]["pull_pct"]
+    trades = {a["role"] for a in on.state["agents"] if a["id"] in r_on}
+    for t in trades:
+        ids = [a["id"] for a in on.state["agents"] if a["role"] == t]
+        mean = sum(r_off[i] for i in ids) // len(ids)
+        for i in ids:
+            assert r_on[i] == mean + (r_off[i] - mean) * (100 - pull) // 100
+            assert min(r_off[i], mean) <= r_on[i] <= max(r_off[i], mean)  # nobody passes the mean; order kept
+        assert abs(sum(r_on[i] for i in ids) / len(ids) - mean) < 1  # the trade's speed is unchanged, up to rounding
+    assert max(r_on.values()) / min(r_on.values()) < max(r_off.values()) / min(r_off.values())
+
+
+def test_pay_off_is_the_body_speed_and_is_recorded_in_genesis():
+    off = Sim(3, 30, StubMind(), genesis={**generate_population(3, 30), "stakes": {"tithe": DEFAULT_STAKES["tithe"]}})
+    for a in off.state["agents"]:
+        assert off._work_rate(a) == a["body"]["strength"] * a["body"]["stamina"] // 1000
+    assert "pay" not in off.events[0].data["population"]["stakes"]
+    assert checked(off, 2, FIRE) == []
+    assert replay(off.events).state_hash() == off.state_hash()

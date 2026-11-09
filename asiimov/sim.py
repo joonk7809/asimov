@@ -128,7 +128,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "18"  # B5 coin sink (plan/b5-build-spec.md), on engine 17 (label tithe-1)
+ENGINE_VERSION = "pay-1"  # B5 pay compression (plan/b5-build-spec.md), on engine 18; its label until merge
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -138,6 +138,10 @@ DEFAULT_STAKES = {
     # TITHE_FREE; at the day's end the chest spends what it holds above CHEST_RESERVE on the village, and that
     # coin leaves the economy. On the stub coin per villager stopped growing near 94 by day 24, against 341.
     "tithe": {"rate_pct": 15, "free": 10, "reserve": 400},
+    # pay-1: work speed (strength x stamina) is pulled PULL_PCT% of the way to the working adults' mean, which
+    # it keeps, so the village makes as much while the slowest body works about 2.6x slower than the fastest
+    # instead of 25x. Real 8B earnings ran p90/p10 21x (T1n), the bottom tenth at 1.7 coin a day.
+    "pay": {"pull_pct": 60},
 }
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -484,7 +488,7 @@ class Sim:
         """What any villager knows about making a living: what this role's work pays, and where food is
         sold. Not in SCHEMA (L11). At engine 5, 4B planned no work on 39% of non-farm plan-days, hungry
         and broke, because nothing in the prompt said work earns coin."""
-        rate = max(1, a["body"]["strength"] * a["body"]["stamina"] // 1000)
+        rate = max(1, self._work_rate(a))
         hours = max(1, (-(-3000 // rate) * 10 + 30) // 60)  # ticks per unit of work, in whole hours
         where = WORKPLACE.get(a["role"])
         if a["role"] == "farmer" and self._food_yield(a) == 0:  # only a capped famine arm gets here
@@ -729,7 +733,7 @@ class Sim:
             if activity == "shop" and step is None and a["place"] == "market":  # a planned shop block buys
                 self._buy(a, parent)                                             # here, or on arrival
         if activity == "work" and a["role"] not in ("child", "elder") and a["place"] == WORKPLACE[a["role"]]:
-            a["work_progress"] += a["body"]["strength"] * a["body"]["stamina"] // 1000
+            a["work_progress"] += self._work_rate(a)
             if a["work_progress"] >= 3000:
                 a["work_progress"] -= 3000
                 if a["role"] == "farmer":
@@ -836,6 +840,24 @@ class Sim:
                    + a["rhythm"]["sleep_need_min"] // 10 * (a["body"]["metabolism"] // 200)
                    for a in self.state["agents"])
         return MARKET_KEEP_DAYS * rise // 450
+
+    def _work_rate(self, a: dict) -> int:
+        """Work progress per tick: the body's own speed, pulled toward its trade's mean under pay (B5). The pull is
+        to the trade's mean, not the village's, so each trade (and so food and coin made) keeps its output."""
+        r = a["body"]["strength"] * a["body"]["stamina"] // 1000
+        p = self.state.get("stakes", {}).get("pay")
+        if not p or a["role"] in ("child", "elder"):
+            return r
+        mean = self._mean_rate(a["role"])
+        return mean + (r - mean) * (100 - p["pull_pct"]) // 100
+
+    def _mean_rate(self, role: str) -> int:
+        """A trade's mean body speed: fixed by genesis (bodies and roles never change), so cached."""
+        cache = self.__dict__.setdefault("_mean_rate_cache", {})
+        if role not in cache:
+            xs = [b["body"]["strength"] * b["body"]["stamina"] // 1000 for b in self.state["agents"] if b["role"] == role]
+            cache[role] = sum(xs) // max(1, len(xs))
+        return cache[role]
 
     def _tithe(self):
         """Midnight: each adult gives the chest its share of the coin it carries above the free amount (B5)."""
