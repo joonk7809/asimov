@@ -87,7 +87,9 @@ A client interpolates between views for display only.
 `status`, broadcast after a control: `{"type": "status", "paused": true, "tps": 1.0, "view_tick": 212}`.
 
 `error`, then the server closes: a first message that isn't a valid `hello`, an unknown protocol, an
-unsupported scope (`unsupported_scope`), or a malformed frame.
+unsupported scope (`unsupported_scope`), a `since` past the log (`bad_since`), or a malformed frame. The
+close frame repeats the reason with code 4000, since a client can drop a message that arrives just
+before a close (Godot does).
 
 ## Durability
 A run directory is a `persist.py` run plus one sidecar file:

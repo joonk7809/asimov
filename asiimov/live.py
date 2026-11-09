@@ -354,8 +354,8 @@ class Conn:
     def close(self, error: str | None = None):
         if error and not self.closed:
             self.queue.put_nowait(frame(1, json.dumps(msg("error", reason=error)).encode()))
-        if not self.closed:
-            self.queue.put_nowait(frame(8, struct.pack(">H", 1000)))
+        if not self.closed:  # the close frame repeats the reason (code 4000): some clients drop data at close
+            self.queue.put_nowait(frame(8, struct.pack(">H", 4000) + error.encode()[:120] if error else struct.pack(">H", 1000)))
         self.closed = True
         self.queue.put_nowait(None)
 
