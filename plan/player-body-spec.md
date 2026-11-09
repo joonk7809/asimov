@@ -113,6 +113,9 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   `data.to` or receipt names it, events at its place this tick by people present, and public events
   (`fire`, which the village sees). No mind output, prompt hash or raw text of any other villager, and
   for its own villager only the plan blocks, never the raw reply.
+  Of another villager's events, only what it does in plain sight (kinds and fields in
+  `inhabitant.SEEN`). A talk's `gossip` between two people at its place is passed: overheard talk is
+  heard. Its own `intent_*` events (from before it was possessed) are sent without `goal` and `steps`.
 - Intents: `act` with the action and target, and `seen_tick`. Divine verbs are refused with `scope`.
 
 A god-scope session is unchanged and keeps `fire`. "Both" is one person holding two connections, an

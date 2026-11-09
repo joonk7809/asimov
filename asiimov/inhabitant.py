@@ -94,8 +94,9 @@ def witnessed(e: dict, aid: int, here: set, tick: int) -> bool:
 def scrub(e: dict, aid: int) -> dict:
     """An event as an inhabitant gets it: no mind record (prompt hash, raw output), no chance-stream draws,
     and of another villager's event only the fields SEEN lists."""
-    if e["actor"] == aid:
-        data = {k: v for k, v in e["data"].items() if k not in ("stream", "index", "pick_stream", "jitter_min")}
+    if e["actor"] == aid:  # its own, but never its mind's words: an intent's goal and steps are the reply's
+        data = {k: v for k, v in e["data"].items() if k not in ("stream", "index", "pick_stream", "jitter_min")
+                and not (e["kind"].startswith("intent_") and k in ("goal", "steps"))}
     else:
         data = {k: e["data"][k] for k in SEEN_NAMING[e["kind"]] if k in e["data"]}
     return {"id": e["id"], "tick": e["tick"], "kind": e["kind"], "origin": e["origin"], "actor": e["actor"],
