@@ -144,6 +144,7 @@ class Checker:
         """Call right before sim.step(acts)."""
         sim = self.sim
         self._tick, self._n0, self._totals = sim.state["tick"], len(sim.events), totals(sim)
+        self._chest = sim.state.get("chest", 0)
         burned = {act["family"] for act in acts if act["kind"] == "fire"}  # two fires on one family burn once
         self._burned = sum(sim.state["agents"][m]["inv"]["food"] for f in sorted(burned)
                            for m in sim.state["families"][f]["members"])
@@ -161,12 +162,17 @@ class Checker:
                      if e.kind == "receipt" and e.data["action"] == "buy_food" and e.data["ok"])
         (food0, coin0), (food1, coin1) = self._totals, totals(sim)
         want_food = produced - eaten - self._burned - spoiled
-        want_coin = coin_made + FARMER_SELL_PRICE * sold - FOOD_PRICE * bought
+        tithed = sum(e.data["coin"] for e in new if e.kind == "tithe")
+        spent = sum(e.data["coin"] for e in new if e.kind == "chest_spent")
+        want_coin = coin_made + FARMER_SELL_PRICE * sold - FOOD_PRICE * bought - tithed
         out = []
         if food1 - food0 != want_food:
             out.append(f"food ledger: {food1 - food0} vs {want_food}")
         if coin1 - coin0 != want_coin:
             out.append(f"coin ledger: {coin1 - coin0} vs {want_coin}")
+        chest = sim.state.get("chest", 0)
+        if chest - self._chest != tithed - spent or chest < 0:
+            out.append(f"chest ledger: {chest - self._chest} vs {tithed - spent}")
         out += state_violations(sim)
         out += log_violations(sim.events, n0)
         out += presence_violations(sim.events, n0, self.where)

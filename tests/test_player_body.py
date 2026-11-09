@@ -25,11 +25,17 @@ def log_lines(sim):
 
 
 def test_a_world_with_no_player_is_engine_15_but_for_the_version_field():
-    """Bar 1: the same fixed world as test_world's golden, with genesis' engine field set back to 15."""
-    from test_world import FIRE, run
-    lines = log_lines(run(StubMind(), agents=20, days=2, seed=3, player=FIRE))
+    """Bar 1: the same fixed world as test_world's golden, with genesis' engine field set back to 15. From
+    tithe-1 (B5) the world's stakes are on by default, so this world turns them off and drops their record."""
+    from asiimov.params import generate_population
+    from test_world import FIRE
+    sim = Sim(3, 20, StubMind(), genesis={**generate_population(3, 20), "stakes": {}})
+    sim.run(2, FIRE)
+    sim.finish()
+    lines = log_lines(sim)
     g = json.loads(lines[0])
     g["data"]["engine"] = "15"
+    del g["data"]["population"]["stakes"]
     lines[0] = json.dumps(g, sort_keys=True, separators=(",", ":"))
     assert hashlib.sha256("".join(l + "\n" for l in lines).encode()).hexdigest() == GOLDEN_15
 

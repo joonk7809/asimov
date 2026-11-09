@@ -173,7 +173,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "pb-1": "00c77fb3225c8ef16e5ed9d847bb0ecd49943624afb9ae2e5f26641c7a8bf862",  # the player's body on 15, before its number
           "16": "eb9ad93f69adb82ff2a357a437ee45a5e57fc50d813f19ae358aee68432638b5",  # the player's body; only genesis' engine field differs from 15
           "idle-1": "4177bc34b2023defa6c75b6d8e2e3ba7233060ae4ddc8902e8c711a384d3c5ce",  # an idle body's mind takes over, before its number
-          "17": "981d6255337c66f57bb9ec1f1230e3aad8ee30ef31d03a3056a55f5e483075a0"}  # an idle body's mind takes over; only the engine field differs from 16
+          "17": "981d6255337c66f57bb9ec1f1230e3aad8ee30ef31d03a3056a55f5e483075a0",  # an idle body's mind takes over; only the engine field differs from 16
+          "tithe-1": "6e2063dc1a0f7c0228bdafa6ae905f6ca1a5370393d92de71fd9b40e42691000"}  # B5 coin sink, on 17, before its number
 
 
 def test_log_changes_bump_the_engine_version():
