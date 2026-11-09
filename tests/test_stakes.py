@@ -174,8 +174,11 @@ def test_on_the_harvest_day_every_working_adult_stocks_its_households_winter_by_
     for e in stock:
         a = ags[e.actor]
         assert a["role"] not in ("child", "elder") and e.data["winter_days"] == 2
-        fam = sim.state["families"][a["family"]]["members"]
-        assert e.data["order"] == 3 * 2 * sum(1 for m in fam if m == a["id"] or ags[m]["role"] in ("child", "elder"))
+        assert e.data["order"] == 3 * 2 * sim._stock_share(a)
+    for f in sim.state["families"]:  # each person's winter meals are ordered once (steering on #48)
+        workers = [m for m in f["members"] if ags[m]["role"] not in ("child", "elder")]
+        if workers:
+            assert sum(sim._stock_share(ags[m]) for m in workers) == len(f["members"])
     buys = [e for e in sim.events if e.kind == "receipt" and e.data.get("stock")]
     assert buys and all(e.data["food"] <= next(s.data["order"] for s in stock if s.actor == e.actor) for e in buys)
     # a stock buy is the order's own trip, on its day; an order its trip didn't fill lapses at the day's end
@@ -255,3 +258,29 @@ def test_every_price_step_and_failed_buy_cites_the_stall_moves_that_caused_it():
             else:
                 assert cause == []
     assert replay(sim.events).state_hash() == sim.state_hash()
+
+
+def test_a_trade_at_a_raised_price_cites_the_step_in_force():
+    """Steering on #48: a market buy, a sell, a buy_from and a give_coin made while the price is off its base cite
+    the price step that set it; at the base price they cite none."""
+    sim = Sim(1, 100, StubMind())
+    sim.run(8)
+    sim.finish()
+    by_id = {e.id: e for e in sim.events}
+    steps = [e for e in sim.events if e.kind == "price"]
+    base = YEAR["prices"][0]
+
+    def in_force(e):
+        last = [x for x in steps if x.id < e.id][-1:]
+        return last[0] if last and last[0].data["price"] != base else None
+
+    trades = [e for e in sim.events if (e.kind == "receipt" and e.data["ok"] and (
+        (e.data["action"] == "buy_food" and e.data.get("food")) or e.data["action"] in ("buy_from", "give_coin")))
+        or e.kind == "sell"]
+    raised = 0
+    for e in trades:
+        step = in_force(e)
+        cites = [p for p in e.parents if by_id[p].kind == "price"]
+        assert cites == ([step.id] if step else []), (e.kind, e.data)
+        raised += step is not None
+    assert raised  # some trades happened at a raised price

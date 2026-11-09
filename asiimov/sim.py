@@ -860,7 +860,8 @@ class Sim:
             a["inv"]["food"] -= surplus
             a["inv"]["coin"] += surplus * self._sell_price()
             self.state["market_food"] += surplus
-            sid = self._emit("sell", "rule", a["id"], {"food": surplus}, [a["plan_event"]])
+            sid = self._emit("sell", "rule", a["id"], {"food": surplus},
+                             [p for p in [a["plan_event"]] + self._price_cause() if p is not None])
             self._stall_moved("sells", sid)
 
     def _market_cap(self) -> int:
@@ -957,8 +958,16 @@ class Sim:
             return []
         if why == "no stock":
             return self._stall_cause("buys")
-        st = self.state["stall"]
-        return [st["step"]] if st["price"] > self._year()["prices"][0] and st["step"] is not None else []
+        return self._price_cause()
+
+    def _price_cause(self) -> list[int]:
+        """The price step in force, when the price is off its base: a trade at that price cites it (steering on
+        #48), so a raised price links a buy, a sell, a buy_from, a give_coin or a "no coin" failure to the buys
+        that raised it."""
+        st = self.state.get("stall")
+        if not st or st["price"] == self._year()["prices"][0] or st["step"] is None:
+            return []
+        return [st["step"]]
 
     def _reprice(self):
         """The tick's end: the price follows the stall's stock. A step cites the latest buys that drew the stock
@@ -975,8 +984,8 @@ class Sim:
     def _stock_for_winter(self, a: dict):
         """On the harvest day (the last day with a yield before winter), an awake working adult that has been up
         two hours and can pay a meal goes to the market and lays in its share of the household's winter meals:
-        3 a day for itself and the children and elders of its family, over the winter's days. A rule, no ask.
-        A possessed body is the player's to move, so it gets no order."""
+        3 a day for itself and its share of the family's children and elders (_stock_share), over the winter.
+        A rule, no ask. A possessed body is the player's to move, so it gets no order."""
         y = self._year()
         if not y or a["role"] in ("child", "elder") or self._possessed(a):
             return
@@ -991,12 +1000,19 @@ class Sim:
             return
         done[str(a["id"])] = day
         winter = next(k for k in range(1, n_days + 1) if not self._winter(day + k)) - 1
-        fam = self.state["families"][a["family"]]["members"]
-        mine = sum(1 for m in fam if m == a["id"] or self.state["agents"][m]["role"] in ("child", "elder"))
-        n = 3 * winter * mine
+        n = 3 * winter * self._stock_share(a)
         eid = self._emit("stock", "rule", a["id"], {"order": n, "winter_days": winter}, [])
         st["orders"][str(a["id"])] = {"n": n, "event": eid}  # filled only by this trip's buy, dropped at day's end
         a["override"] = {"do": "shop", "target": None, "left": DEFAULT_STEP_TICKS, "event": eid}
+
+    def _stock_share(self, a: dict) -> int:
+        """The people a worker stocks for: itself and its share of the family's children and elders, split among
+        the family's workers, any remainder to the lowest ids (steering on #48: each person's meals once)."""
+        ags, fam = self.state["agents"], self.state["families"][a["family"]]["members"]
+        workers = sorted(m for m in fam if ags[m]["role"] not in ("child", "elder"))
+        deps = sum(1 for m in fam if ags[m]["role"] in ("child", "elder"))
+        i = workers.index(a["id"])
+        return 1 + deps // len(workers) + (1 if i < deps % len(workers) else 0)
 
     def _spoil(self):
         """Food left on the stall past a cap rots overnight, so a fed village still needs its farmers. Under the
@@ -1149,7 +1165,8 @@ class Sim:
             a["inv"]["food"] += n
             if n:
                 self._note(a["id"], f"bought {n} food at the market for the winter")
-            rid = self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n, "stock": 1})
+            rid = self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n, "stock": 1},
+                                parents=self._price_cause() if n else ())
             if n:
                 self._stall_moved("buys", rid)
             return True, "bought"
@@ -1165,7 +1182,8 @@ class Sim:
         a["inv"]["food"] += n
         if n:
             self._note(a["id"], "bought food at the market")
-        rid = self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n})
+        rid = self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n},
+                            parents=self._price_cause() if n else ())
         if n:
             self._stall_moved("buys", rid)
         return True, "bought"
@@ -1324,7 +1342,8 @@ class Sim:
                 self._note(a["id"], f"{t['name']} gave me 1 food when I asked")
                 self._note(t["id"], f"gave 1 food to {a['name']}, who asked")
             r["affinity"] = min(1000, r["affinity"] + 50)
-            return self._receipt(a, eid, action, True, "sold" if action == "buy_from" else "gave", "chance", extra)
+            return self._receipt(a, eid, action, True, "sold" if action == "buy_from" else "gave", "chance", extra,
+                                 parents=self._price_cause() if action == "buy_from" else ())
         self._note(a["id"], f"{t['name']} refused to {'sell me' if action == 'buy_from' else 'give me'} food")
         r["affinity"] = max(-1000, r["affinity"] - 50)
         rid = self._receipt(a, eid, action, False, "refused", "chance", extra)
@@ -1348,7 +1367,8 @@ class Sim:
             return self._receipt(a, eid, do, False, f"no {what} to give", extra={"to": b["id"]})
         a["inv"][what] -= n
         b["inv"][what] += n
-        rid = self._receipt(a, eid, do, True, "gave", extra={"to": b["id"], what: n})
+        rid = self._receipt(a, eid, do, True, "gave", extra={"to": b["id"], what: n},
+                            parents=self._price_cause() if what == "coin" else ())
         r = self._met(b, a["id"])
         r["affinity"] = min(1000, r["affinity"] + 100)
         r["cause"] = rid
