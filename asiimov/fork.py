@@ -205,9 +205,11 @@ def build_sim(base, mind, arm: str | None = None, genesis: dict | None = None, w
 
 def run_twin(base, live, out: str | None = None, player: dict | None = None, live_agents=(), live_from: int = 0,
              salt: int = 0, arm: str | None = None, genesis: dict | None = None, until: int | None = None,
-             workers: int = 1, prior=(), serve: bool = True) -> tuple[Sim, ForkMind]:
-    """Run the base world again with `player` actions added (tick -> actions), `genesis` edits and
-    `live_agents` forced live, to `until` (default: where the base stops). Returns the finished sim
+             workers: int = 1, prior=(), serve: bool = True, drop=()) -> tuple[Sim, ForkMind]:
+    """Run the base world again with `player` actions added (tick -> actions), the base's own player
+    actions in `drop` ((tick, action) pairs) removed, `genesis` edits and `live_agents` forced live,
+    to `until` (default: where the base stops). A dropped action is a change at its tick: the
+    counterfactual twin of the base's own fire drops it. Returns the finished sim
     and its mind (whose counts say how each call was answered).
 
     Nothing may differ from the base before the first change: the player actions' first tick,
@@ -217,10 +219,14 @@ def run_twin(base, live, out: str | None = None, player: dict | None = None, liv
     """
     player = {t: list(acts) for t, acts in (player or {}).items()}
     merged = base_player(base)
+    for t, act in drop:
+        if act not in merged.get(t, []):
+            raise ValueError(f"drop: the base has no player action {act} at tick {t}")
+        merged[t].remove(act)
     for t, acts in player.items():
         merged[t] = merged[t] + acts
     edited = genesis is not None and genesis != base[0].data["population"]
-    changes = [t for t in player if player[t]] + ([live_from] if live_agents else []) + ([0] if edited else [])
+    changes = [t for t in player if player[t]] + [t for t, _ in drop] + ([live_from] if live_agents else []) + ([0] if edited else [])
     calm = min(changes, default=end_tick(base))
     models = {e.mind["model"] for e in base if e.origin == "mind"}
     if not serve and models - {getattr(live, "model", None)}:
