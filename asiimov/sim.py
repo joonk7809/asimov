@@ -1314,5 +1314,10 @@ class Sim:
     def _release(self) -> int:
         p = self.state.pop("player")
         a = self.state["agents"][p["agent"]]
+        # An act queued this tick before the release (or before a possess moved the body) would resolve on a
+        # body the player no longer holds, and its receipt's occasion would ask the freed mind about the
+        # player's act. It is refused here instead and never resolves; the clear below drops its occasion.
+        for eid, action, _ in self._acts.pop(a["id"], []):
+            self._receipt(a, eid, action, False, "released")
         a["occasion"] = None  # the player handled whatever it was; the mind isn't asked about it later
         return self._emit("release", "player", a["id"], {"agent": a["id"]}, [p["event"]])

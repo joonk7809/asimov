@@ -45,10 +45,11 @@ def read_jsonl(path: str) -> list[Event]:
 def drop_possessed(events: list) -> tuple[list, list[int]]:
     """A log without the events of any villager a player possessed at some point (plan/player-body-spec.md):
     their behavior is partly a person's, so no scorecard or diagnostic reading counts it. Works on Event
-    objects or dicts. Returns the kept events and the dropped villagers' ids."""
+    objects or dicts. A talk is kept: it is also the partner's, and a reader counts only the side it still
+    tracks. Returns the kept events and the dropped villagers' ids."""
     get = (lambda e, k: e[k]) if events and isinstance(events[0], dict) else getattr
     bodies = sorted({get(e, "actor") for e in events if get(e, "kind") == "possess"})
     if not bodies:
         return events, []
     gone = set(bodies)
-    return [e for e in events if get(e, "actor") not in gone], bodies
+    return [e for e in events if get(e, "actor") not in gone or get(e, "kind") == "talk"], bodies

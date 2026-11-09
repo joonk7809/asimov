@@ -52,7 +52,8 @@ sent twice and none skipped.
   - `act` with `{"action": one of DELIBERATE_ACTIONS, "target": int?}`, on the possessed body. Refused
     with `no_body` if none is held. Whether the act works is the engine's call in that tick's commit
     phase, and the outcome is a `receipt` event citing the `act` event (plan/player-body-spec.md). The
-    ack names the `act` event, not the receipt.
+    ack names the `act` event, not the receipt. An act followed in the same tick by `release`, or by a
+    `possess` of another body, gets a `"released"` receipt and never resolves.
   Protocol 2 adds the inhabitant scope, which sends these on the client's behalf.
 
 `control` (god scope only): `{"type": "control", "op": "pause" | "run" | "step" | "speed", "tps": 2.0}`.

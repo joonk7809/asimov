@@ -260,3 +260,52 @@ def test_scorecard_and_diagnostics_leave_out_a_possessed_villager():
     assert diagnose(events)["possessed_dropped"] == [3]
     assert 3 not in extract(events)["periods"] and 4 in extract(events)["periods"]
     assert diagnose([Event(**json.loads(l)) for l in log_lines(Sim(5, 12, StubMind()))])["possessed_dropped"] == []
+
+
+def test_an_act_queued_before_a_release_in_its_tick_is_refused_and_never_reaches_the_freed_mind():
+    """Review of #39: [act, release] in one tick resolved the act on a body the player no longer held, and
+    its failed receipt filed an occasion the freed mind was then asked about. Possessing another body
+    releases the first the same way."""
+    cases = 0
+    agents = Sim(1, 25, StubMind()).state["agents"]
+    # bodies a failed receipt's occasion would reach (salience at least the threshold), plus two it wouldn't
+    reach = [a["id"] for a in agents
+             if 300 + a["traits"]["conscientiousness"] // 3 >= a["cognition"]["deliberation_threshold"]]
+    bodies = reach[:4] + [a["id"] for a in agents if a["id"] not in reach][:2]
+    assert len(bodies) == 6
+    for aid in bodies:
+        for action in ("buy_food", "steal", "work"):
+            player = {65: [{"kind": "possess", "agent": aid}], 66: [{"kind": "act", "action": "buy_food"}],
+                      70: [{"kind": "act", "action": action, "target": (aid + 1) % 25}, {"kind": "release"}],
+                      80: [{"kind": "possess", "agent": aid}],
+                      90: [{"kind": "act", "action": action, "target": (aid + 2) % 25},
+                           {"kind": "possess", "agent": (aid + 1) % 25}],
+                      100: [{"kind": "release"}]}
+            sim = Sim(1, 25, StubMind())
+            for end, freed in ((71, aid), (91, aid), (120, None)):
+                sim.run_until(end, player)
+                if freed is not None:  # what the freed mind would be asked about next
+                    occ = sim.state["agents"][freed]["occasion"]
+                    assert occ is None or sim.events[occ["event"]].tick < end - 1, (aid, action, occ)
+            sim.finish()
+            acts = [e for e in sim.events if e.kind == "act" and e.tick in (70, 90)]
+            gone = {e.id for e in acts}
+            for e in sim.events:
+                if e.kind == "receipt" and e.parents and e.parents[0] in gone:
+                    assert e.data["why"] == "released" and e.id == e.parents[0] + 1, e
+                    gone.add(e.id)
+                    cases += 1
+            assert cases and all(not set(e.parents) & gone for e in sim.events
+                                 if e.kind not in ("receipt", "release", "possess") and e.actor == aid), (aid, action)
+            assert replay(sim.events).state_hash() == sim.state_hash()
+    assert cases == 2 * 6 * 3
+
+
+def test_a_possessed_villagers_talks_still_count_for_its_partner():
+    from asiimov.events import drop_possessed
+    sim = Sim(5, 12, StubMind())
+    sim.run_until(2 * TICKS_PER_DAY, body_script(3))
+    kept, bodies = drop_possessed(sim.events)
+    talks = [e for e in sim.events if e.kind == "talk" and 3 in (e.actor, e.data["with"])]
+    assert bodies == [3] and talks and all(e in kept for e in talks)
+    assert not [e for e in kept if e.actor == 3 and e.kind != "talk"]
