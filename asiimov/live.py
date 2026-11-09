@@ -603,15 +603,23 @@ class Hub:
 
     async def tick_loop(self):
         loop = asyncio.get_running_loop()
-        due = loop.time()
+        last = None  # when the last tick started; None steps at once (on start and on leaving pause)
         while not self.stopping:
             self._drain()
             if self.paused and not self.step_once:
                 self.wake.clear()
                 await self.wake.wait()
-                due = loop.time()
+                last = None
                 continue
-            self.step_once = False
+            wait = 0 if self.step_once or last is None else last + 1 / self.tps - loop.time()
+            if wait > 0:  # a message is drained and the wait resumes, at the tps it now has: only time steps
+                self.wake.clear()
+                try:
+                    await asyncio.wait_for(self.wake.wait(), wait)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            self.step_once, last = False, loop.time()
             tick, events, acks = await asyncio.to_thread(self.runner.step)
             dicts = event_dicts(events)
             text = json.dumps(msg("tick", tick=tick, events=dicts, view=self.runner.view()))
@@ -624,12 +632,6 @@ class Hub:
                 c = self.waiters.pop(ack["id"], None)
                 if c:
                     c.send(ack)
-            due = max(due + 1 / self.tps, loop.time())
-            self.wake.clear()
-            try:  # a control or hello cuts the wait short
-                await asyncio.wait_for(self.wake.wait(), due - loop.time())
-            except asyncio.TimeoutError:
-                pass
 
 
 def _hello_error(m) -> str | None:
