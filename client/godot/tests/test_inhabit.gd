@@ -97,7 +97,7 @@ func _process(_delta: float) -> bool:
 				_fail("act %s was rejected: %s" % [id, ack])
 		if done:
 			return true
-		if applied < 20 or receipted < applied - 2 or buttons == 0:
+		if applied < 20 or receipted != applied or buttons == 0:  # an ack follows the tick that carries its receipt
 			_fail("%d acts sent, %d applied, %d with receipts, %d buttons shown" % [pressed.size(), applied, receipted, buttons])
 			return true
 		print("inhabited villager %d for %d ticks: %d buttons shown, %d acts applied, %d with receipts"
