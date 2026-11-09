@@ -24,6 +24,7 @@ var paused := false
 var acks := {}          # intent id -> ack
 var _hello_sent := false
 var _closed := false
+var _reload := false   # the server refused our since (the world reopened shorter after a crash)
 var _seq := 0
 
 
@@ -36,17 +37,25 @@ func connect_to(u: String) -> int:
 
 func poll() -> void:
 	ws.poll()
-	match ws.get_ready_state():
-		WebSocketPeer.STATE_OPEN:
-			if not _hello_sent:
-				_hello_sent = true
-				_send({"type": "hello", "protocol": PROTOCOL, "scope": scope, "since": model.events.size()})
-			while ws.get_available_packet_count() > 0:
-				_handle(ws.get_packet().get_string_from_utf8())
-		WebSocketPeer.STATE_CLOSED:
-			if not _closed:
-				_closed = true
-				failed.emit("closed %d %s" % [ws.get_close_code(), ws.get_close_reason()])
+	var state := ws.get_ready_state()
+	if state == WebSocketPeer.STATE_OPEN and not _hello_sent:
+		_hello_sent = true
+		_send({"type": "hello", "protocol": PROTOCOL, "scope": scope, "since": model.events.size()})
+	while ws.get_available_packet_count() > 0:  # also while closing: an error arrives just before the close
+		_handle(ws.get_packet().get_string_from_utf8())
+	if state != WebSocketPeer.STATE_CLOSED:
+		return
+	if ws.get_close_reason() == "bad_since" and not model.events.is_empty():
+		_reload = true  # Godot can drop the error message that came just before the close; the close repeats it
+	if _reload:  # start over from event 0, as the protocol asks after bad_since
+		_reload = false
+		_hello_sent = false
+		model.events.clear()
+		model.last_tick = -1
+		connect_to(url)
+	elif not _closed:
+		_closed = true
+		failed.emit("closed %d %s" % [ws.get_close_code(), ws.get_close_reason()])
 
 
 func _handle(text: String) -> void:
@@ -85,6 +94,9 @@ func _handle(text: String) -> void:
 			tps = float(m["tps"])
 			status_changed.emit(m)
 		"error":
+			if m["reason"] == "bad_since" and not model.events.is_empty():
+				_reload = true
+				return
 			failed.emit(str(m["reason"]))
 
 

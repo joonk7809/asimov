@@ -67,6 +67,8 @@ func _process(_delta: float) -> bool:
 		var fired := client.model.events.filter(func(e): return e["kind"] == "fire" and e["origin"] == "player")
 		if not done and (fired.size() != 1 or int(fired[0]["id"]) != int(ack["event"])):
 			_fail("expected one fire event matching the ack, got %d" % fired.size())
+		if not done and walkers == 0:
+			_fail("vacuous: no villager was on a route in any view")
 		if done:
 			return true
 		print("checked %d ticks, %d walker positions, %d mismatches; fire acked as event %s"
