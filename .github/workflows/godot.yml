@@ -1,0 +1,36 @@
+name: godot-client
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+    env:
+      # The same pinned build as the cloud environment's setup script. The SHA-512 is the Linux x86-64
+      # zip's line in the release's own SHA512-SUMS.txt (github.com/godotengine/godot/releases/tag/4.3-stable).
+      GODOT_URL: https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+      GODOT_SHA512: fd52bb4ba8acc30ca5accd1c566d470ad7282f891ccc0995dfafabcf92bcf76280ce182bf9d80ebd885f3ed2165d01e1fc3f2928436b15498dfbd98656c2a45a
+      GODOT_VERSION: 4.3.stable.official.77dcf97d8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the pinned Godot
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/godot.zip" "$GODOT_URL"
+          echo "$GODOT_SHA512  $RUNNER_TEMP/godot.zip" | sha512sum -c -
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          sudo install -m 755 "$RUNNER_TEMP/godot/Godot_v4.3-stable_linux.x86_64" /usr/local/bin/godot
+          test "$(godot --headless --version)" = "$GODOT_VERSION"
+          godot --headless --quit
+      - name: Positions from a recorded log equal the engine's at every tick boundary
+        run: |
+          python client/godot/tests/make_fixture.py "$RUNNER_TEMP/fx" --agents 100 --days 3 --seed 4
+          godot --headless --path client/godot --script res://tests/test_positions.gd -- "$RUNNER_TEMP/fx"
+      - name: Live client against the live runner, every tick checked against the engine's view
+        run: |
+          python -m asiimov.live --out "$RUNNER_TEMP/live" --agents 25 --paused --port 8765 &
+          for i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8765) 2>/dev/null && break; sleep 0.2; done
+          godot --headless --path client/godot --script res://tests/test_live.gd -- ws://127.0.0.1:8765/ 300
