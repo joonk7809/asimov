@@ -1,8 +1,8 @@
-# Protocol 1 client (plan/client-protocol.md): hello, then welcome, backlog and ticks into a WorldModel.
+# Protocol 2 client (god scope) (plan/client-protocol.md): hello, then welcome, backlog and ticks into a WorldModel.
 # Sends intents and controls only; never state.
 extends RefCounted
 
-const PROTOCOL := 1
+const PROTOCOL := 2
 const WorldModel := preload("res://scripts/world_model.gd")
 
 signal welcomed(msg: Dictionary)

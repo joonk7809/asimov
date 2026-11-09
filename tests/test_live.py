@@ -260,9 +260,9 @@ def test_websocket_session_hello_backlog_ticks_acks_and_reattach(tmp_path):
                                                 started=lambda port, hub: ready.set_result(port)))
         port = await ready
         c = await WS.connect(port)
-        c.send({"type": "hello", "protocol": 1, "scope": "god"})
+        c.send({"type": "hello", "protocol": 2, "scope": "god"})
         w = await c.recv()
-        assert (w["type"], w["protocol"], w["view_tick"], w["paused"]) == ("welcome", 1, 30, True)
+        assert (w["type"], w["protocol"], w["view_tick"], w["paused"]) == ("welcome", 2, 30, True)
         assert w["engine"] == runner.sim.events[0].data["engine"] and w["world"]["map"] == runner.sim.map
         got = []
         while len(got) < w["n_events"]:
@@ -299,7 +299,7 @@ def test_websocket_session_hello_backlog_ticks_acks_and_reattach(tmp_path):
 
         since = len(runner.sim.events) // 2  # paused, so the log is still
         d = await WS.connect(port)            # reattach mid-world: the gap, then live ticks, nothing twice
-        d.send({"type": "hello", "protocol": 1, "since": since})
+        d.send({"type": "hello", "protocol": 2, "since": since})
         w2 = await d.recv()
         back = []
         while len(back) < w2["n_events"] - since:
@@ -310,13 +310,13 @@ def test_websocket_session_hello_backlog_ticks_acks_and_reattach(tmp_path):
         assert [e["id"] for e in back + t2["events"]] == list(range(since, len(runner.sim.events)))
 
         e = await WS.connect(port)
-        e.send({"type": "hello", "protocol": 1, "scope": "inhabitant", "agent": 0})
-        assert (await e.recv())["reason"] == "unsupported_scope" and await e.recv() is None
+        e.send({"type": "hello", "protocol": 2, "scope": "watcher"})
+        assert (await e.recv())["reason"] == "bad_scope" and await e.recv() is None
         f = await WS.connect(port)
-        f.raw(1, b'{"type": "hello", "protocol": 1}', masked=False)  # clients must mask
+        f.raw(1, b'{"type": "hello", "protocol": 2}', masked=False)  # clients must mask
         assert (await f.recv())["reason"].startswith("bad_frame") and await f.recv() is None
         g = await WS.connect(port)
-        g.send({"type": "hello", "protocol": 2})
+        g.send({"type": "hello", "protocol": 1})  # protocol 2 replaced 1
         assert (await g.recv())["reason"] == "unknown_protocol"
         h = await WS.connect(port)
         h.send({"type": "hello", "protocol": True})
