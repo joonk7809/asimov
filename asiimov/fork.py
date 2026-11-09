@@ -205,11 +205,13 @@ def build_sim(base, mind, arm: str | None = None, genesis: dict | None = None, w
 
 def run_twin(base, live, out: str | None = None, player: dict | None = None, live_agents=(), live_from: int = 0,
              salt: int = 0, arm: str | None = None, genesis: dict | None = None, until: int | None = None,
-             workers: int = 1, prior=(), serve: bool = True, drop=()) -> tuple[Sim, ForkMind]:
+             workers: int = 1, prior=(), serve: bool = True, drop=(), souls: dict | None = None) -> tuple[Sim, ForkMind]:
     """Run the base world again with `player` actions added (tick -> actions), the base's own player
     actions in `drop` ((tick, action) pairs) removed, `genesis` edits and `live_agents` forced live,
     to `until` (default: where the base stops). A dropped action is a change at its tick: the
-    counterfactual twin of the base's own fire drops it. Returns the finished sim
+    counterfactual twin of the base's own fire drops it. `souls` (agent id -> text) replaces those
+    agents' soul text from tick 0 and nothing else: their params stay, so only a mind reading the
+    prompt can follow it (test 8, Steering's ruling 2026-11-09). A twin with souls replays only with them. Returns the finished sim
     and its mind (whose counts say how each call was answered).
 
     Nothing may differ from the base before the first change: the player actions' first tick,
@@ -226,13 +228,16 @@ def run_twin(base, live, out: str | None = None, player: dict | None = None, liv
     for t, acts in player.items():
         merged[t] = merged[t] + acts
     edited = genesis is not None and genesis != base[0].data["population"]
-    changes = [t for t in player if player[t]] + [t for t, _ in drop] + ([live_from] if live_agents else []) + ([0] if edited else [])
+    changes = ([t for t in player if player[t]] + [t for t, _ in drop] + ([live_from] if live_agents else [])
+               + ([0] if edited or souls else []))
     calm = min(changes, default=end_tick(base))
     models = {e.mind["model"] for e in base if e.origin == "mind"}
     if not serve and models - {getattr(live, "model", None)}:
         raise ForkLeak(f"a full rerun needs the base log's own mind; the base was run with {sorted(models)}")
     mind = ForkMind(base, live, live_agents, live_from, salt, calm, prior, serve)
     sim = build_sim(base, mind, arm, genesis, workers)
+    for aid, text in (souls or {}).items():
+        sim.state["agents"][aid]["soul"] = text
     stop = end_tick(base) if until is None else until
     if out:
         os.makedirs(out, exist_ok=True)  # before the run, so an unwritable --out fails before paying
@@ -249,6 +254,31 @@ def run_twin(base, live, out: str | None = None, player: dict | None = None, liv
     if early:
         raise ForkLeak(f"agents {sorted(early)[:10]} diverged before the first change at tick {calm}")
     return sim, mind
+
+
+def replay_twin(events, arm: str | None = None, souls_path: str | None = None,
+                souls_sha256: str | None = None) -> Sim:
+    """Replay a twin's log without a model, checking every event. A souls= twin's genesis is the base's, so
+    its swap lives beside the log in a souls file, whose sha256 the twin's summary records: it replays only
+    with that file, and a file whose sha256 doesn't match is refused (Steering, 2026-11-09 10:47Z)."""
+    from .minds import ReplayMind
+    souls = {}
+    if souls_path is not None:
+        with open(souls_path, "rb") as f:
+            blob = f.read()
+        if hashlib.sha256(blob).hexdigest() != souls_sha256:
+            raise ReplayDivergence(f"{souls_path} has sha256 {hashlib.sha256(blob).hexdigest()}, the twin recorded {souls_sha256}")
+        souls = json.loads(blob)
+    sim = build_sim(events, ReplayMind([e for e in events if e.origin == "mind"]), arm)
+    for aid, text in souls.items():
+        sim.state["agents"][int(aid)]["soul"] = text
+    sim.expected = events
+    sim.run_until(end_tick(events), base_player(events))
+    if events[-1].kind == "end":
+        sim.finish()
+    if len(sim.events) != len(events):
+        raise ReplayDivergence(f"replay produced {len(sim.events)} events, log has {len(events)}")
+    return sim
 
 
 def summary(base, twin, live_agents=(), live_from: int = 0) -> dict:

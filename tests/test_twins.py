@@ -125,3 +125,128 @@ def test_grade_reads_the_frozen_bar():
     assert grade([row, row, {**row, "reach": 3}])["verdict"] == "pass"  # medians
     assert grade([{**row, "depth": 5}] * 3)["verdict"] == "fail"
     assert grade([{**row, "null_reach": 5}] * 3)["verdict"] == "inconclusive (noise floor)"
+
+
+# ---------------------------------------------------------------------------- test 8
+from asiimov.twins import (interactions, read_t9, sign_test, stole, swap_pairs, swapped_genesis,  # noqa: E402
+                           swapped_souls, t8, t9, theft_acts)
+
+
+def test_swap_pairs_match_role_age_band_and_family_size():
+    pop = base_world(StubMind(), days=1)[0].data["population"]
+    size = {f["id"]: len(f["members"]) for f in pop["families"]}
+    key = lambda i: (pop["agents"][i]["role"], pop["agents"][i]["age"] // 20, size[pop["agents"][i]["family"]])  # noqa: E731
+    pairs = swap_pairs(pop)
+    assert pairs and all(key(x) == key(y) and x < y for x, y in pairs)
+    flat = [a for p in pairs for a in p]
+    assert len(flat) == len(set(flat))
+
+
+def test_the_text_swap_moves_only_the_soul_lines_and_leaves_params_with_the_body():
+    pop = base_world(StubMind(), days=1)[0].data["population"]
+    (x, y), = swap_pairs(pop)[:1]
+    souls = swapped_souls(pop, [(x, y)])
+    from asiimov.memory import render_soul
+    ax, ay = pop["agents"][x], pop["agents"][y]
+    assert souls[x].splitlines()[:3] == render_soul(ax).splitlines()[:3]  # name, age and role, rhythm: the body's
+    assert souls[x].splitlines()[3:] == render_soul(ay).splitlines()[3:]  # character lines and anchors: the donor's
+    g = swapped_genesis(pop, [(x, y)])
+    assert g["agents"][x]["traits"] == ay["traits"] and g["agents"][x]["rhythm"] == ax["rhythm"]
+
+
+def test_a_soul_text_twin_changes_prompts_from_tick_zero_but_no_params():
+    base = base_world(PromptMind(), days=2)
+    pop = base[0].data["population"]
+    pairs = swap_pairs(pop)[:2]
+    live = Recording(PromptMind())
+    sim, mind = run_twin(base, live, souls=swapped_souls(pop, pairs))
+    swapped = {a for p in pairs for a in p}
+    assert {r.agent_id for r in live.asked if r.tick < TICKS_PER_DAY} & swapped  # their prompts changed at once
+    for a in sim.state["agents"]:
+        assert a["traits"] == pop["agents"][a["id"]]["traits"]
+
+
+def test_on_the_stub_the_text_swap_fails_and_the_full_swap_is_reported_beside_it(tmp_path):
+    base = base_world(StubMind(), agents=60, days=4)
+    path = tmp_path / "base.jsonl"
+    write_jsonl(base, str(path))
+    rep = t8(str(path), StubMind(), str(tmp_path / "t8"), None, serve=False, workers=1)
+    assert rep["follow_index"] == 0 and rep["verdict"] != "pass"  # the stub can't read the prompt
+    assert rep["full_swap_descriptive"]["follow_index"] > 0.3  # but its code follows the params
+
+
+
+def test_every_test_8_twin_replays_from_its_own_log_and_the_text_swap_needs_its_souls(tmp_path):
+    from asiimov.fork import read_log, replay_twin
+    from asiimov.minds import ReplayDivergence
+    base = base_world(PromptMind(), days=2)
+    path = tmp_path / "base.jsonl"
+    write_jsonl(base, str(path))
+    t8(str(path), PromptMind(), str(tmp_path / "t8"), None, serve=True, workers=1)
+    d = tmp_path / "t8"
+    sp = d / "swap-text" / "souls.json"
+    sha = json.load(open(d / "swap-text" / "summary.json"))["souls_sha256"]
+    swap = read_log(str(d / "swap-text" / "events.jsonl"))
+    assert logs(replay_twin(swap, souls_path=str(sp), souls_sha256=sha).events) == logs(swap)
+    with pytest.raises(ReplayDivergence):  # the swap isn't in the log: without its souls it can't replay
+        replay_twin(swap)
+    souls = json.load(open(sp))
+    first = next(iter(souls))
+    souls[first] = souls[first].replace("You are ", "You were ")
+    sp.write_text(json.dumps(souls, indent=1))
+    with pytest.raises(ReplayDivergence, match="sha256"):  # an edited souls file is refused before replaying
+        replay_twin(swap, souls_path=str(sp), souls_sha256=sha)
+    for name in ("swap-full", "noise-9"):
+        ev = read_log(str(d / name / "events.jsonl"))
+        assert logs(replay_twin(ev).events) == logs(ev)
+
+
+# ---------------------------------------------------------------------------- test 9
+def test_a_theft_is_possess_act_and_release_after_the_receipt():
+    assert theft_acts(50, 3, 4, "steal") == {50: [{"kind": "possess", "agent": 3},
+                                                 {"kind": "act", "action": "steal", "target": 4}],
+                                            51: [{"kind": "release"}]}
+    assert theft_acts(50, 3, 4, "wait")[50][1] == {"kind": "act", "action": "wait"}
+
+
+def test_interactions_count_only_mind_authored_acts_toward_the_other():
+    def ev(i, tick, kind, origin, actor, data, parents=()):
+        return Event(i, tick, kind, origin, actor, data, list(parents))
+    events = [ev(0, 0, "genesis", "chance", None, {}),
+              ev(1, 5, "mind_deliberate", "mind", 4, {"kind": "deliberate"}),
+              ev(2, 5, "receipt", "rule", 4, {"action": "ask_food", "ok": True, "why": "", "to": 3, "roll": 1}, [1]),
+              ev(3, 6, "intent_set", "rule", 4, {}, [1]),
+              ev(4, 7, "meet", "rule", 4, {"with": 3, "place": "plaza"}, [3]),
+              ev(5, 8, "receipt", "rule", 4, {"action": "ask_food", "ok": True, "why": "", "to": 3, "roll": 1}),  # code
+              ev(6, 9, "meet", "rule", 4, {"with": 7, "place": "plaza"}, [3]),  # someone else
+              ev(7, 30, "meet", "rule", 4, {"with": 3, "place": "plaza"}, [3])]  # after the window
+    assert interactions(events, 4, 3, 0, 20) == 2
+
+
+def test_the_sign_test_and_the_precondition():
+    assert sign_test(5, 5) == pytest.approx(1 / 32)
+    rows = [{"stole": True, "theft": 1, "control": 5}] * 20
+    assert read_t9(rows)["verdict"] == "pass"
+    assert read_t9([{**r, "control": 3, "theft": 1} for r in rows])["verdict"] == "inconclusive (precondition)"
+    assert read_t9(rows[:19] + [{"stole": False}])["verdict"] == "inconclusive (too few thefts)"
+    assert read_t9([{**r, "theft": 4} for r in rows])["verdict"] == "fail"  # a 20% drop
+
+
+def test_the_stub_theft_driver_injects_real_thefts(tmp_path):
+    base = base_world(StubMind(), agents=60, days=4)
+    path = tmp_path / "base.jsonl"
+    write_jsonl(base, str(path))
+    rep = t9(str(path), StubMind(), str(tmp_path / "t9"), None, serve=False, workers=1)
+    assert rep["verdict"] != "pass" and rep["thefts"] > 0
+    for r in rep["rows"]:
+        theft = read_log_events(tmp_path / "t9" / f"{r['i']:03d}" / "probe" / "events.jsonl")
+        assert stole(theft, r["tick"], r["thief"]) == r["stole"]
+        if r["stole"]:
+            ctl = read_log_events(tmp_path / "t9" / f"{r['i']:03d}" / "control" / "events.jsonl")
+            acts = [e for e in ctl if e.kind == "act"]
+            assert [a.data for a in acts] == [{"action": "wait"}] and acts[0].tick == r["tick"]
+
+
+def read_log_events(p):
+    from asiimov.fork import read_log
+    return read_log(str(p))
