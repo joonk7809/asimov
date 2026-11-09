@@ -166,6 +166,12 @@ def read(out: str, cues_path: str | None):
             res[f"{what}/{arm}"] = {
                 "n": n, "parse_share": round(parsed / n, 3) if n else None,
                 f"{first}_share": round(k / n, 3) if n else None, "wilson95": wilson(k, n),
+                # rule 2 (the gate) and Steering's thin-room line beside it: the minority option's share and
+                # its Wilson lower bound; a pass at 0.15 with a lower bound under 0.10 is flagged as thin room
+                "minority_share": round(min(k, parsed - k) / n, 3) if n else None,
+                "minority_wilson_low": wilson(min(k, parsed - k), n)[0],
+                "room": bool(n) and parsed / n >= 0.95 and min(k, parsed - k) / n >= 0.15,
+                "thin_room": bool(n) and min(k, parsed - k) / n >= 0.15 and wilson(min(k, parsed - k), n)[0] < 0.10,
                 "r_with_trait": {t: corr([it["traits"][t] for it, _, _ in rows], y) for t in TRAITS},
                 "r_with_coin": corr([it["coin"] for it, _, _ in rows], y),
                 "plan_word_share": round(sum(1 for x in low if PLAN_WORDS.search(x)) / n, 3) if n else None,
