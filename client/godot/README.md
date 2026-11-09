@@ -11,7 +11,8 @@ The Python engine is the only source of truth, over protocol 2 (`plan/client-pro
 - `scripts/world_model.gd` rebuilds who is where from events alone. The engine moves villagers only in
   `activity` and `arrive` events, and positions use worldmap.position's integer math. Interpolation between
   ticks is for drawing only.
-- `scripts/live_client.gd` speaks protocol 2 in god scope: hello, backlog, ticks, acks, `fire`, controls.
+- `scripts/live_client.gd` speaks protocol 2: in god scope hello, backlog, ticks, acks, `fire` and controls; in inhabitant scope (`--inhabit N`) its villager's view, witnessed events and `act`. The action menu is the server's `offer`, one button per action (and person it may name), never computed in GDScript.
+- `tests/test_inhabit.gd` (bar 6): inhabits a villager while a god client steps the world, presses menu buttons and checks every applied act's receipt arrives in its own stream.
 - `scripts/main.gd` draws the map from genesis, villagers colored by activity, a timeline with a scrubber,
   play/pause and fire.
 
