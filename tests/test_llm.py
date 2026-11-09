@@ -86,6 +86,11 @@ def test_deliberate_schema_only_takes_targets_the_prompt_lists():
     assert reqs
     for req in reqs:
         schema, people = schema_for(req), req.view["people"]
+        if req.view["occasion"]["why"] == "sick":  # B5 sick-1: the sick ask takes work or home, target null
+            valid = jsonschema.Draft202012Validator(schema).is_valid
+            assert all(valid({"action": x, "target": None, "reason": "", "goal": "", "then": []}) == (x in ("work", "home"))
+                       for x in ("work", "home", "rest", "wait", "buy_food"))
+            continue
         kin, kin_here = [k["id"] for k in req.view["kin"]], [p["id"] for p in req.view["present"] if p["kin"]]
         ok = lambda out, then=(): jsonschema.Draft202012Validator(schema).is_valid(  # noqa: E731
             {"reason": "x", "goal": "", "then": list(then), **out})

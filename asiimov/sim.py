@@ -80,7 +80,11 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "failed": "you could not {detail}", "person": "{who}, whom you {detail}, is here",
     "intent_done": "you did what you set out to do: {detail}",
     "blocked": "you had to give up on what you set out to do: {detail}",
+    "sick": "{detail}",  # B5 sick-1: the piloted ask (_sick_detail)
 }
+# The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
+SICK_ACTIONS = ("work", "home")
+SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
 # What a deliberation may answer, in the order its prompt lists them (engine 10). Only the ones that can
 # work now are offered (_offer): with impossible ones listed, 63% of 4B famine answers chose buy_food away
 # from the market or facing an empty one (T16e), and cutting them sent minds to people instead (T16f).
@@ -134,7 +138,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "year-1"  # B5 the year and the floating price (plan/b5-build-spec.md), on engine 19; its label until merge
+ENGINE_VERSION = "sick-1"  # B5 sickness and its ask (plan/b5-build-spec.md), on year-1; its label until merge
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -155,6 +159,15 @@ DEFAULT_STAKES = {
     # at the price less 1. On the harvest day every working adult lays in its household's winter food, a rule
     # with no ask (8B stocked in 150 of 150 pilot asks).
     "year": {"yields": [4, 4, 4, 4, 5, 0, 0], "prices": [3, 4, 5, 6]},
+    # sick-1: at 06:00 a working adult falls sick with chance_pm per mille (keyed draws); cases lists forced
+    # [tick, agent] cases (a twin's seed case). A sick body works at half pace for `days` days, then is immune.
+    # It passes per sick person: catch_talk_pm in a chat, catch_work_pm each hour at a shared place that is not
+    # a home, catch_home_pm to each of a household at midnight. Each day it wakes sick, a working adult is
+    # asked: work (at half pace, near others) or home (all day, earning nothing). The ask is the B5 pilot's text.
+    # Lowered from the sandbox's 100/3/100 (85-89 of 100 ever sick) to the spec's target: at 24 days, fed, seeds
+    # 1-6, outbreaks reach 54/10/45/59/11 (median 45, none above 70; seed 4 draws no case).
+    "sick": {"chance_pm": 300, "days": 3, "catch_talk_pm": 5, "catch_work_pm": 3, "catch_home_pm": 20,
+             "cases": []},
 }
 STALL_PARENTS = 8  # a price step or failed buy cites at most this many of the latest stall buys (or sells)
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
@@ -206,6 +219,8 @@ class Sim:
         self.state = {"tick": 0, "market_food": 10, "families": pop["families"], "agents": []}
         if pop["stakes"]:  # a world with every stake off keeps engine 17's state, hashes included
             self.state.update({"stakes": json.loads(json.dumps(pop["stakes"])), "chest": 0})
+        if "sick" in self.state.get("stakes", {}):  # who is sick until when, who is immune, the source events (B5)
+            self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}, "pending": {}}
         if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
             self.state["stall"] = {"price": None, "step": None, "buys": [], "sells": [], "orders": {}}
         for p in pop["agents"]:
@@ -417,7 +432,11 @@ class Sim:
         if kind == "deliberate":
             if a["inv"]["coin"] < self._price():
                 rest += NO_COIN_LINE
-            rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"], self._price())
+            if (view.get("occasion") or {}).get("why") == "sick":  # the piloted tail (B5 sick-1)
+                rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
+                         + ". ".join(SICK_CLAUSES[x] for x in view["offer"]) + ". Leave goal empty and then [].")
+            else:
+                rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"], self._price())
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
@@ -474,6 +493,12 @@ class Sim:
         nor when today's belief or the stall in front of you says it is empty; buy_from only with the coin.
         The situation says why each is withheld: NO_COIN_LINE, the belief line, the market's shown stock,
         or "sold only at the market"."""
+        if "sick" in self.state:  # sick-1: a sick ask offers work or home, nothing else
+            pend = self.state["sick"]["pending"]
+            if (view.get("occasion") or {}).get("why") == "sick":
+                pend[str(a["id"])] = 1
+                return list(SICK_ACTIONS)
+            pend.pop(str(a["id"]), None)
         coin_ok = a["inv"]["coin"] >= self._price()
         shown = view.get("market_food")
         drop = set()
@@ -540,6 +565,8 @@ class Sim:
             self._player(act)
         if tick and tick % TICKS_PER_DAY == 0:
             self._tithe()
+        if "sick" in st:
+            self._sickness()
         for a in agents:
             if a["route"] and tick >= a["route"]["arrive"]:
                 self._arrive(a)
@@ -571,6 +598,7 @@ class Sim:
             elif not self._possessed(a) or self._idle(a):
                 if self._possessed(a) and (a["occasion"] or {}).get("player"):
                     a["occasion"] = None  # the hand-back never asks the mind about the player's own act
+                self._sick_ask(a)
                 self._maybe_deliberate(a, occupancy)
 
         self._commit()
@@ -877,11 +905,13 @@ class Sim:
         Rounded to nearest from the trade's exact sum, so the trade's mean is kept to within rounding, unbiased."""
         r = a["body"]["strength"] * a["body"]["stamina"] // 1000
         p = self.state.get("stakes", {}).get("pay")
-        if not p or a["role"] in ("child", "elder"):
-            return r
-        total, n = self._trade_speed(a["role"])
-        pull = p["pull_pct"]
-        return (pull * total + (100 - pull) * n * r + 50 * n) // (100 * n)
+        if p and a["role"] not in ("child", "elder"):
+            total, n = self._trade_speed(a["role"])
+            pull = p["pull_pct"]
+            r = (pull * total + (100 - pull) * n * r + 50 * n) // (100 * n)
+        if str(a["id"]) in self.state.get("sick", {}).get("ill", {}):  # sick-1: half pace
+            r //= 2
+        return r
 
     def _trade_speed(self, role: str) -> tuple[int, int]:
         """A trade's summed body speed and head count: fixed by genesis (bodies and roles never change), so cached."""
@@ -913,6 +943,106 @@ class Sim:
             spent = self.state["chest"] - t["reserve"]
             self.state["chest"] = t["reserve"]
             self._emit("chest_spent", "rule", None, {"coin": spent, "chest": t["reserve"]})
+
+    # ------------------------------------------------------------------ sickness (B5 sick-1)
+    def _make_sick(self, a: dict, parents: list, where: str | None = None, near: int | None = None) -> int | None:
+        sk, aid = self.state["sick"], str(a["id"])
+        if aid in sk["ill"] or aid in sk["immune"]:
+            return None
+        sk["ill"][aid] = self.state["tick"] + self.state["stakes"]["sick"]["days"] * TICKS_PER_DAY
+        data = {"agent": a["id"]}
+        if near is not None:
+            data.update(place=where, near=near)
+        eid = self._emit("sick", "chance", a["id"], data, parents)
+        sk["src"][aid] = eid  # the cause whoever catches it from this agent cites
+        # no IMPORTANT_WORDS key ("caught" weighs a theft's 8; L27)
+        self._note(a["id"], "fell sick" if near is None
+                   else f"fell sick at the {where.replace('_', ' ')} near {self.state['agents'][near]['name']}")
+        return eid
+
+    def _sickness(self):
+        """The tick's start: recoveries, the 06:00 chance case and forced cases, then catching at shared places
+        (each hour) and in homes (at midnight, sleepers included). Draws are keyed by (who, tick)."""
+        sk, tick, ag, cfg = self.state["sick"], self.state["tick"], self.state["agents"], self.state["stakes"]["sick"]
+        for aid in sorted(sk["ill"], key=int):
+            if tick >= sk["ill"][aid]:
+                del sk["ill"][aid]
+                sk["immune"][aid] = tick
+                self._note(int(aid), "got over the sickness")
+                self._emit("recover", "rule", int(aid), {"agent": int(aid)}, [sk["src"][aid]])
+        for t, who in cfg["cases"]:
+            if t == tick:
+                self._make_sick(ag[who], [])
+        d = tick // TICKS_PER_DAY
+        if tick % TICKS_PER_DAY == 36 and self.rng.at("sick-chance", d, 0, 999) < cfg["chance_pm"]:  # 06:00
+            adults = [a for a in ag if a["role"] not in ("child", "elder")]
+            self._make_sick(adults[self.rng.at("sick-pick", d, 0, len(adults) - 1)], [])
+        midnight = tick % TICKS_PER_DAY == 0
+        if tick % 6 or not sk["ill"]:
+            return
+        by_place = defaultdict(list)
+        for a in ag:
+            if a["place"] is not None and (not a["asleep"] or midnight):
+                by_place[a["place"]].append(a)
+        for place in sorted(by_place):
+            here = by_place[place]
+            home = place.startswith("home_")
+            sick = [a for a in here if str(a["id"]) in sk["ill"]]
+            if not sick or (home and not midnight):
+                continue
+            p = cfg["catch_home_pm"] if home else cfg["catch_work_pm"]
+            src = min(a["id"] for a in sick)
+            for b in here:
+                if str(b["id"]) in sk["ill"] or str(b["id"]) in sk["immune"]:
+                    continue
+                if self.rng.at(f"catch:{b['id']}", tick, 0, 999) < p * len(sick):
+                    self._make_sick(b, [sk["src"][str(src)]], place, src)
+
+    def _catch_in_talk(self, n0: int):
+        sk, p = self.state["sick"], self.state["stakes"]["sick"]["catch_talk_pm"]
+        for e in list(self.events[n0:]):
+            if e.kind != "talk":
+                continue
+            for x, y in ((e.actor, e.data["with"]), (e.data["with"], e.actor)):
+                if (str(x) in sk["ill"] and str(y) not in sk["ill"] and str(y) not in sk["immune"]
+                        and self.rng.at(f"catch-talk:{y}", e.tick, 0, 999) < p):
+                    self._make_sick(self.state["agents"][y], [e.id, sk["src"][str(x)]], e.data["place"], x)
+
+    def _sick_detail(self, a: dict) -> str:
+        """The piloted ask (B5, pack sha 163da069...c5b5): facts only, no cue words (L25)."""
+        left = -(-(self.state["sick"]["ill"][str(a["id"])] - self.state["tick"]) // TICKS_PER_DAY)
+        pay = "about half the food" if a["role"] == "farmer" else "about half the coin"
+        return (f"you are sick; it passes in about {left} days. At work today you would make {pay} you make when"
+                f" well, and people near you can catch it. Answering work sends you to the {WORKPLACE[a['role']]} at"
+                f" half pace; answering home keeps you at home all day, earning nothing, and nobody catches it from you")
+
+    def _sick_ask(self, a: dict):
+        """Once a day, from its first waking tick, a sick working adult is asked: work or home. A possessed body
+        is the player's to move: it gets no ask, and it is still sick."""
+        sk = self.state.get("sick")
+        if not sk or str(a["id"]) not in sk["ill"] or a["role"] in ("child", "elder") or self._possessed(a):
+            return
+        tick, d = self.state["tick"], self.state["tick"] // TICKS_PER_DAY
+        woke = tick - (a["sleep_tick"] - (1440 - a["rhythm"]["sleep_need_min"]) // 10)
+        if sk["asked"].get(str(a["id"])) == d or woke < 1 or (a["occasion"] or {}).get("why") == "sick":
+            return
+        sk["asked"][str(a["id"])] = d
+        self._occasion(a, "sick", a["cognition"]["deliberation_threshold"], event=sk["src"][str(a["id"])],
+                       detail=self._sick_detail(a))
+
+    def _sick_resolve(self, a: dict, out: dict, eid: int):
+        """The sick ask's answer, as a receipt marked sick: home keeps the body home until bed; work sends it to
+        work. Anything else is refused as an unknown action is elsewhere."""
+        pick = out.get("action") if out.get("action") in SICK_ACTIONS else None
+        if pick is None:  # as an unknown action anywhere else
+            return self._receipt(a, eid, str(out.get("action")), False, "unparseable or unknown action", extra={"sick": 1})
+        self._receipt(a, eid, pick, True, "stays home sick" if pick == "home" else "works sick", extra={"sick": 1})
+        if pick == "home":
+            a["intent"] = None
+            a["override"] = {"do": "home", "target": None, "left": max(1, a["sleep_tick"] - self.state["tick"]),
+                             "event": eid}
+        elif pick == "work":
+            a["override"] = {"do": "work", "target": None, "left": DEFAULT_STEP_TICKS, "event": eid}
 
     # ------------------------------------------------------------------ the year and the stall (B5 year-1)
     def _year(self) -> dict | None:
@@ -1213,6 +1343,8 @@ class Sim:
         """Apply a deliberation: the action happens now; with a goal, it and the `then` steps become an
         intent that persists until done, failed or replaced."""
         out = out or {}
+        if self.state.get("sick", {}).get("pending", {}).pop(str(a["id"]), None):
+            return self._sick_resolve(a, out, eid)
         action, target = out.get("action"), out.get("target")
         first = None
         if action == "buy_food":
@@ -1410,6 +1542,12 @@ class Sim:
         return rid
 
     def _talk(self):
+        n0 = len(self.events)
+        self._talk_pairs()
+        if "sick" in self.state:
+            self._catch_in_talk(n0)
+
+    def _talk_pairs(self):
         agents = self.state["agents"]
         by_place = defaultdict(list)
         for a in agents:
