@@ -5,7 +5,7 @@ unattended run (asiimov/soak.py, which counts them and keeps going). Each check 
 violation strings instead of raising, so a long run can report every one it hits.
 """
 from .events import ORIGINS, Event
-from .sim import FARMER_SELL_PRICE, FOOD_PRICE, PERSON_STEPS, STEP_DOS, Sim
+from .sim import PERSON_STEPS, STEP_DOS, Sim
 from .worldmap import travel_ticks
 
 BOOL_FIELDS = ("asleep", "has_food", "kin")
@@ -145,6 +145,7 @@ class Checker:
         sim = self.sim
         self._tick, self._n0, self._totals = sim.state["tick"], len(sim.events), totals(sim)
         self._chest = sim.state.get("chest", 0)
+        self._price, self._sell = sim._price(), sim._sell_price()  # in force for the whole step (B5 year-1)
         burned = {act["family"] for act in acts if act["kind"] == "fire"}  # two fires on one family burn once
         self._burned = sum(sim.state["agents"][m]["inv"]["food"] for f in sorted(burned)
                            for m in sim.state["families"][f]["members"])
@@ -164,7 +165,7 @@ class Checker:
         want_food = produced - eaten - self._burned - spoiled
         tithed = sum(e.data["coin"] for e in new if e.kind == "tithe")
         spent = sum(e.data["coin"] for e in new if e.kind == "chest_spent")
-        want_coin = coin_made + FARMER_SELL_PRICE * sold - FOOD_PRICE * bought - tithed
+        want_coin = coin_made + self._sell * sold - self._price * bought - tithed
         out = []
         if food1 - food0 != want_food:
             out.append(f"food ledger: {food1 - food0} vs {want_food}")

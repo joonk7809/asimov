@@ -63,7 +63,7 @@ MAX_STEPS = 4
 # from 0.269 to 0.171). A caught steal or any other failure still ends it.
 ASK_STEPS = ("ask_food", "buy_from", "ask_kin")
 ASK_NOS = ("nothing to spare", "refused", "kin refused", "kin has nothing to spare")
-GIFT_COIN = FOOD_PRICE      # give_coin hands over one meal's price
+GIFT_COIN = FOOD_PRICE      # give_coin hands over one meal's price: Sim._gift_coin, which reads the live price
 DAILY_MIND_CALLS = 15       # per agent and calendar day, plans and reflections included
 # What a mind reads for a failed buy (engine 9). At engine 8 one bundled "no stock or no coin" left an
 # agent holding coin unable to tell why it failed (T16b: 95% of famine agents who had failed to buy went
@@ -93,7 +93,7 @@ ACTION_CLAUSES = {
     "go_market": "go_market takes you to the market, where you can buy food if you carry enough coin and it has some",
     "ask_kin": "ask_kin asks a family member here for 1 food",  # "here" since the map's place check
     "ask_food": "ask_food asks a person here for 1 food; they may say no",
-    "buy_from": f"buy_from offers a person here {FOOD_PRICE} coin for 1 food; they may say no",
+    "buy_from": f"buy_from offers a person here {FOOD_PRICE} coin for 1 food; they may say no",  # see action_clauses
     "steal": "steal tries to take 1 food from a person here, and you may be caught",
     "give_food": "give_food hands them 1 food",
     "give_coin": f"give_coin hands them {GIFT_COIN} coin",
@@ -107,14 +107,20 @@ ACTION_CLAUSES = {
     "wait": "wait does nothing for now",
 }
 assert set(ACTION_CLAUSES) == set(DELIBERATE_ACTIONS)
+
+
+def action_clauses(price: int) -> dict:
+    """ACTION_CLAUSES at a food price: the two clauses that name coin say the live price (B5 year-1)."""
+    return {**ACTION_CLAUSES, "buy_from": f"buy_from offers a person here {price} coin for 1 food; they may say no",
+            "give_coin": f"give_coin hands them {price} coin"}
 NO_COIN_LINE = " You have too little coin to buy food."  # why buy_food, go_market and buy_from are withheld
 
 
-def deliberate_ask(offer) -> str:
+def deliberate_ask(offer, price: int = FOOD_PRICE) -> str:
     """The deliberate ask for the offered actions. A shop step buys like go_market, so it goes with it."""
     shop = ", or shop" if "go_market" in offer else ""
     return (" Your action happens now; target is a person's #id or null. "
-            + ". ".join(ACTION_CLAUSES[x] for x in offer) + "."
+            + ". ".join(action_clauses(price)[x] for x in offer) + "."
             f" To pursue something over hours or days, set goal and up to 3 more steps in then (these words{shop}),"
             " done in order; for a one-off, leave goal empty and then []."
             " A new goal replaces the intention you have now; to keep it, leave goal empty.")
@@ -128,7 +134,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "pay-1"  # B5 pay compression (plan/b5-build-spec.md), on engine 18; its label until merge
+ENGINE_VERSION = "year-1"  # B5 the year and the floating price (plan/b5-build-spec.md), on pay-1; its label until merge
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -142,7 +148,15 @@ DEFAULT_STAKES = {
     # mean, which it keeps (steering, 21:22Z), so each trade's capacity is unchanged while earnings p90/p10 falls
     # from 6-8x to 2.5-3.7x on the stub. Real 8B earnings ran p90/p10 21x (T1n), the bottom tenth at 1.7 coin a day.
     "pay": {"pull_pct": 60},
+    # year-1: a year of len(yields) days. A unit of farm work yields yields[day of year] food; 0 is winter, and the
+    # year makes what a flat year at FARM_YIELD makes (21 units in 7 days), so winter is a timing pressure, not a
+    # cut. The stall doesn't spoil from the harvest night through winter. Food costs prices[0] while the stall
+    # holds a day of the village's meals, prices[1] under a day, [2] under half, [3] under a quarter; farmers sell
+    # at the price less 1. On the harvest day every working adult lays in its household's winter food, a rule
+    # with no ask (8B stocked in 150 of 150 pilot asks).
+    "year": {"yields": [4, 4, 4, 4, 5, 0, 0], "prices": [3, 4, 5, 6]},
 }
+STALL_PARENTS = 8  # a price step or failed buy cites at most this many of the latest stall buys (or sells)
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
 
@@ -192,6 +206,8 @@ class Sim:
         self.state = {"tick": 0, "market_food": 10, "families": pop["families"], "agents": []}
         if pop["stakes"]:  # a world with every stake off keeps engine 17's state, hashes included
             self.state.update({"stakes": json.loads(json.dumps(pop["stakes"])), "chest": 0})
+        if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
+            self.state["stall"] = {"price": None, "buys": [], "sells": [], "orders": {}}
         for p in pop["agents"]:
             a = json.loads(json.dumps(p))
             fam = pop["families"][p["family"]]
@@ -209,6 +225,8 @@ class Sim:
             })
             self.state["agents"].append(a)
         self.map = build_map([f["home"] for f in pop["families"]])
+        if "stall" in self.state:
+            self.state["stall"]["price"] = self._price_now()
         self._emit("genesis", "chance", None,
                    {"engine": ENGINE_VERSION, "seed": seed, "order": order, "population": pop, "map": self.map}, [])
         for a in self.state["agents"]:
@@ -377,7 +395,7 @@ class Sim:
         kin = [{"id": o, "has_food": agents[o]["inv"]["food"] > 1} for o in fam if o != a["id"]]
         at_market = a["place"] == "market"
         view = {"role": a["role"], "traits": a["traits"], "hour": self._hour(), "coin": a["inv"]["coin"],
-                "food": a["inv"]["food"], "hunger": a["needs"]["hunger"], "food_price": FOOD_PRICE,
+                "food": a["inv"]["food"], "hunger": a["needs"]["hunger"], "food_price": self._price(),
                 "at_market": at_market, "present": present, "kin": kin, "recent": list(a["recent"])}
         if at_market:
             view["market_food"] = self.state["market_food"]
@@ -395,11 +413,11 @@ class Sim:
         if kind == "deliberate":
             rest += self._market_belief(a)
         if "market_food" in view:
-            rest += f" The market has {view['market_food']} food at {FOOD_PRICE} coin."
+            rest += f" The market has {view['market_food']} food at {self._price()} coin."
         if kind == "deliberate":
-            if a["inv"]["coin"] < FOOD_PRICE:
+            if a["inv"]["coin"] < self._price():
                 rest += NO_COIN_LINE
-            rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"])
+            rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"], self._price())
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
@@ -456,7 +474,7 @@ class Sim:
         nor when today's belief or the stall in front of you says it is empty; buy_from only with the coin.
         The situation says why each is withheld: NO_COIN_LINE, the belief line, the market's shown stock,
         or "sold only at the market"."""
-        coin_ok = a["inv"]["coin"] >= FOOD_PRICE
+        coin_ok = a["inv"]["coin"] >= self._price()
         shown = view.get("market_food")
         drop = set()
         if not (view["at_market"] and coin_ok and shown):
@@ -495,14 +513,14 @@ class Sim:
             s = f"The {where} will give no more food today."
         elif a["role"] == "farmer":
             s = (f"Working at the {where} yields {self._food_yield(a)} food about every {hours} hours; what you"
-                 f" don't keep you sell at {FARMER_SELL_PRICE} coin each.")
+                 f" don't keep you sell at {self._sell_price()} coin each.")
         elif where is None or a["role"] in ("child", "elder"):
             s = "You don't work for pay; when you have no food you eat from your family's."
         else:
             s = f"Working at the {where} pays {WORK_WAGE} coin about every {hours} hours."
         # "open at all hours": at engine 6, 4B answered "wait" to 0.195 of deliberations, some citing a
         # closed market, which never exists (T1j).
-        return s + f" Food costs {FOOD_PRICE} coin and is sold only at the market, which is open at all hours."
+        return s + f" Food costs {self._price()} coin and is sold only at the market, which is open at all hours."
 
     # ------------------------------------------------------------------ tick
     def run(self, days: int, player_events: dict | None = None):
@@ -545,6 +563,7 @@ class Sim:
                     self._bedtime_walk(a)
                     self._refuse_acts(a, "bedtime")
                 continue
+            self._stock_for_winter(a)
             self._act(a)
             self._eat(a)
             if a["id"] in self._acts:
@@ -565,6 +584,9 @@ class Sim:
         if tick % TICKS_PER_DAY == TICKS_PER_DAY - 1:
             self._spoil()
             self._spend_chest()
+        if "stall" in self.state:
+            self._reprice()  # after the night's spoil, so the next tick's price is the stock it will sell from
+        if tick % TICKS_PER_DAY == TICKS_PER_DAY - 1:
             self._emit("checkpoint", "rule", None, {"day": tick // TICKS_PER_DAY, "hash": self.state_hash()})
         st["tick"] = tick + 1
 
@@ -808,7 +830,11 @@ class Sim:
         return self._food_yield(a)
 
     def _food_yield(self, a: dict) -> int:
-        """Food from one completed unit of farm work. A hook so experiment arms can change it."""
+        """Food from one completed unit of farm work. A hook so experiment arms can change it. Under the year
+        (B5) it is the day of the year's yield."""
+        y = self._year()
+        if y:
+            return y["yields"][self.state["tick"] // TICKS_PER_DAY % len(y["yields"])]
         return FARM_YIELD
 
     def _habit(self, a: dict) -> str:
@@ -830,9 +856,10 @@ class Sim:
         surplus = a["inv"]["food"] - keep
         if surplus > 0:
             a["inv"]["food"] -= surplus
-            a["inv"]["coin"] += surplus * FARMER_SELL_PRICE
+            a["inv"]["coin"] += surplus * self._sell_price()
             self.state["market_food"] += surplus
-            self._emit("sell", "rule", a["id"], {"food": surplus}, [a["plan_event"]])
+            sid = self._emit("sell", "rule", a["id"], {"food": surplus}, [a["plan_event"]])
+            self._stall_moved("sells", sid)
 
     def _market_cap(self) -> int:
         """MARKET_KEEP_DAYS of the village's meals, from each agent's metabolism and sleep."""
@@ -884,8 +911,86 @@ class Sim:
             self.state["chest"] = t["reserve"]
             self._emit("chest_spent", "rule", None, {"coin": spent, "chest": t["reserve"]})
 
+    # ------------------------------------------------------------------ the year and the stall (B5 year-1)
+    def _year(self) -> dict | None:
+        return self.state.get("stakes", {}).get("year")
+
+    def _winter(self, day: int) -> bool:
+        y = self._year()
+        return bool(y) and y["yields"][day % len(y["yields"])] == 0
+
+    def _price(self) -> int:
+        """The food price in force this tick: the stall's, set at the end of the last tick, or FOOD_PRICE."""
+        return self.state["stall"]["price"] if "stall" in self.state else FOOD_PRICE
+
+    def _sell_price(self) -> int:
+        return self._price() - 1 if "stall" in self.state else FARMER_SELL_PRICE
+
+    def _gift_coin(self) -> int:
+        """give_coin hands over one meal's price."""
+        return self._price() if "stall" in self.state else GIFT_COIN
+
+    def _day_need(self) -> int:
+        """A day of the village's meals (fixed by genesis: metabolisms and sleep never change)."""
+        return self._market_cap() // MARKET_KEEP_DAYS
+
+    def _price_now(self) -> int:
+        p, s, n = self._year()["prices"], self.state["market_food"], self._day_need()
+        return p[0] if s >= n else p[1] if 2 * s >= n else p[2] if 4 * s >= n else p[3]
+
+    def _stall_moved(self, side: str, eid: int):
+        """Remember a buy or sell that moved the stall's stock, the cause a later price step or failed buy cites."""
+        if "stall" in self.state:
+            xs = self.state["stall"][side]
+            xs.append(eid)
+            del xs[:-STALL_PARENTS]
+
+    def _stall_cause(self, side: str) -> list[int]:
+        return list(self.state["stall"][side]) if "stall" in self.state else []
+
+    def _reprice(self):
+        """The tick's end: the price follows the stall's stock. A step cites the latest buys that drew the stock
+        down (a rise) or the latest sells that filled it (a fall)."""
+        st = self.state["stall"]
+        new = self._price_now()
+        if new != st["price"]:
+            side = "buys" if new > st["price"] else "sells"
+            self._emit("price", "rule", None, {"price": new, "was": st["price"], "stock": self.state["market_food"]},
+                       self._stall_cause(side))
+            st["price"] = new
+
+    def _stock_for_winter(self, a: dict):
+        """On the harvest day (the last day with a yield before winter), an awake working adult that has been up
+        two hours and can pay a meal goes to the market and lays in its share of the household's winter meals:
+        3 a day for itself and the children and elders of its family, over the winter's days. A rule, no ask.
+        A possessed body is the player's to move, so it gets no order."""
+        y = self._year()
+        if not y or a["role"] in ("child", "elder") or self._possessed(a):
+            return
+        tick, n_days = self.state["tick"], len(y["yields"])
+        day = tick // TICKS_PER_DAY
+        if self._winter(day) or not self._winter(day + 1):
+            return
+        st = self.state["stall"]
+        woke = tick - (a["sleep_tick"] - (1440 - a["rhythm"]["sleep_need_min"]) // 10)
+        done = st.setdefault("stocked", {})
+        if done.get(str(a["id"])) == day or woke < 12 or a["inv"]["coin"] < self._price():
+            return
+        done[str(a["id"])] = day
+        winter = next(k for k in range(1, n_days + 1) if not self._winter(day + k)) - 1
+        fam = self.state["families"][a["family"]]["members"]
+        mine = sum(1 for m in fam if m == a["id"] or self.state["agents"][m]["role"] in ("child", "elder"))
+        n = 3 * winter * mine
+        st["orders"][str(a["id"])] = n
+        eid = self._emit("stock", "rule", a["id"], {"order": n, "winter_days": winter}, [])
+        a["override"] = {"do": "shop", "target": None, "left": DEFAULT_STEP_TICKS, "event": eid}
+
     def _spoil(self):
-        """Food left on the stall past a cap rots overnight, so a fed village still needs its farmers."""
+        """Food left on the stall past a cap rots overnight, so a fed village still needs its farmers. Under the
+        year (B5) the stall keeps what it holds from the harvest night through winter."""
+        day = self.state["tick"] // TICKS_PER_DAY
+        if self._winter(day) or self._winter(day + 1):
+            return
         cap = self._market_cap()
         if self.state["market_food"] > cap:
             lost = self.state["market_food"] - cap
@@ -980,7 +1085,7 @@ class Sim:
         pending = a["occasion"] if a["occasion"] and tick - a["occasion"]["tick"] < OCCASION_TICKS else None
         refused = pending is not None and pending["why"] == "refused"
         if a["inv"]["food"] == 0 and a["needs"]["hunger"] >= trigger and not refused:
-            occ = {"why": "hungry_coin" if a["inv"]["coin"] >= FOOD_PRICE else "hungry", "who": None,
+            occ = {"why": "hungry_coin" if a["inv"]["coin"] >= self._price() else "hungry", "who": None,
                    "event": a["last_food_loss_event"]}
         else:
             occ = pending or self._notice(a, occupancy)
@@ -995,10 +1100,10 @@ class Sim:
                       lambda eid, out: self._resolve(a, out, eid))
 
     # ------------------------------------------------------------------ actions -> receipts
-    def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None):
+    def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None, parents=()):
         data = {"action": action, "ok": ok, "why": why}
         data.update(extra or {})
-        rid = self._emit("receipt", origin, a["id"], data, [eid])
+        rid = self._emit("receipt", origin, a["id"], data, [eid] + [p for p in parents if p != eid])
         if not ok and why not in ("kin refused", "refused", "caught"):  # those have occasions of their own
             self._occasion(a, "failed", 300 + a["traits"]["conscientiousness"] // 3, event=rid,
                            detail=f"{action.replace('_', ' ')} ({BUY_FAIL_TEXT.get(why, why)})")
@@ -1011,25 +1116,41 @@ class Sim:
         if a["place"] != "market":
             self._receipt(a, eid, "buy_food", False, "not at market")
             return False, "not at market"
-        if self.state["market_food"] <= 0 or a["inv"]["coin"] < FOOD_PRICE:
+        price = self._price()
+        order = self.state.get("stall", {}).get("orders", {}).pop(str(a["id"]), None)  # used up by this trip
+        if self.state["market_food"] <= 0 or a["inv"]["coin"] < price:
             why = "no stock" if self.state["market_food"] <= 0 else "no coin"  # both: the stock is what failed
             if why == "no stock":
                 a["market_seen"] = {"tick": self.state["tick"], "food": 0}
-            self._receipt(a, eid, "buy_food", False, why)
+            # the buys that emptied the stall or raised its price are this failure's causes too (B5 year-1)
+            self._receipt(a, eid, "buy_food", False, why, parents=self._stall_cause("buys"))
             return False, why
+        if order is not None:  # the harvest day's winter stock (year-1)
+            n = min(order, a["inv"]["coin"] // price, self.state["market_food"])
+            self.state["market_food"] -= n
+            a["inv"]["coin"] -= n * price
+            a["inv"]["food"] += n
+            if n:
+                self._note(a["id"], f"bought {n} food at the market for the winter")
+            rid = self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n, "stock": 1})
+            if n:
+                self._stall_moved("buys", rid)
+            return True, "bought"
         want = max(0, self._meals_left_today(a) - a["inv"]["food"])
         if a["role"] not in ("child", "elder"):
             for m in self.state["families"][a["family"]]["members"]:
                 d = self.state["agents"][m]
                 if m != a["id"] and d["role"] in ("child", "elder") and d["sleep_tick"] is not None:
                     want += max(0, self._meals_left_today(d) - d["inv"]["food"])
-        n = min(want, a["inv"]["coin"] // FOOD_PRICE, self.state["market_food"])
+        n = min(want, a["inv"]["coin"] // price, self.state["market_food"])
         self.state["market_food"] -= n
-        a["inv"]["coin"] -= n * FOOD_PRICE
+        a["inv"]["coin"] -= n * price
         a["inv"]["food"] += n
         if n:
             self._note(a["id"], "bought food at the market")
-        self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n})
+        rid = self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n})
+        if n:
+            self._stall_moved("buys", rid)
         return True, "bought"
 
     def _target_error(self, a: dict, target) -> str | None:
@@ -1152,14 +1273,15 @@ class Sim:
         return 400 + t["traits"]["agreeableness"] // 2 + self._rel(t, a["id"])["affinity"] // 4
 
     def _ask_share(self, a: dict, t: dict, action: str, eid: int) -> int:
-        """ask_food or buy_from: ask a person here, kin or not, for 1 food (buy_from pays FOOD_PRICE coin
+        """ask_food or buy_from: ask a person here, kin or not, for 1 food (buy_from pays the food price in coin
         for it). Code decides with a seeded draw logged on the receipt; a refusal is the "refused" occasion."""
         to = {"to": t["id"]}
         if not self._together(a, t):  # live places (L2)
             return self._receipt(a, eid, action, False, "target not here", extra=to)
         if t["asleep"]:
             return self._receipt(a, eid, action, False, "target asleep", extra=to)
-        if action == "buy_from" and a["inv"]["coin"] < FOOD_PRICE:
+        price = self._price()
+        if action == "buy_from" and a["inv"]["coin"] < price:
             return self._receipt(a, eid, action, False, "no coin", extra=to)
         if t["inv"]["food"] <= 1:  # they keep one for themselves
             return self._receipt(a, eid, action, False, "nothing to spare", extra=to)
@@ -1177,10 +1299,10 @@ class Sim:
             t["inv"]["food"] -= 1
             a["inv"]["food"] += 1
             if action == "buy_from":
-                a["inv"]["coin"] -= FOOD_PRICE
-                t["inv"]["coin"] += FOOD_PRICE
-                self._note(a["id"], f"bought 1 food from {t['name']} for {FOOD_PRICE} coin")
-                self._note(t["id"], f"sold 1 food to {a['name']} for {FOOD_PRICE} coin")
+                a["inv"]["coin"] -= price
+                t["inv"]["coin"] += price
+                self._note(a["id"], f"bought 1 food from {t['name']} for {price} coin")
+                self._note(t["id"], f"sold 1 food to {a['name']} for {price} coin")
             else:
                 self._note(a["id"], f"{t['name']} gave me 1 food when I asked")
                 self._note(t["id"], f"gave 1 food to {a['name']}, who asked")
@@ -1204,7 +1326,7 @@ class Sim:
 
     def _give(self, a: dict, b: dict, do: str, eid: int) -> int:
         """A gift: a transfer with a receipt. The receiver warms to the giver and may stop to think about it."""
-        what, n = ("food", 1) if do == "give_food" else ("coin", GIFT_COIN)
+        what, n = ("food", 1) if do == "give_food" else ("coin", self._gift_coin())
         if a["inv"][what] < n:
             return self._receipt(a, eid, do, False, f"no {what} to give", extra={"to": b["id"]})
         a["inv"][what] -= n

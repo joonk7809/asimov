@@ -4,7 +4,7 @@ import json
 
 from asiimov.memory import E9_ACTIONS, SCHEMA
 from asiimov.minds import MindReply, StubMind
-from asiimov.sim import (ACTION_CLAUSES, FOOD_PRICE, NO_COIN_LINE, OCCASION_TICKS, SHARE_BASE, SHARE_KIN,
+from asiimov.sim import (ACTION_CLAUSES, FOOD_PRICE, action_clauses, NO_COIN_LINE, OCCASION_TICKS, SHARE_BASE, SHARE_KIN,
                          TICKS_PER_DAY, Sim)
 from test_intents import Scripted, awake, deliberate_now
 
@@ -32,7 +32,7 @@ def test_only_actions_that_can_work_are_offered_and_the_prompt_says_why():
     assert not {"buy_food", "go_market", "buy_from"} & set(off) and "ask_food" in off and "steal" in off
     assert offered_line(req.prompt) == off  # the SCHEMA line lists exactly the offer
     assert NO_COIN_LINE in req.prompt
-    for x, clause in ACTION_CLAUSES.items():
+    for x, clause in action_clauses(sim._price()).items():  # the live price (B5 year-1)
         assert (clause in req.prompt) == (x in off)
     assert "(these words)" in req.prompt and "or shop" not in req.prompt
 
@@ -101,7 +101,8 @@ def test_ask_food_and_buy_from_move_food_and_coin_on_a_yes():
     r = [e for e in sim.events if e.kind == "receipt"][-1]
     assert r.data["ok"] and r.data["why"] == "sold" and r.data["limit"] > SHARE_BASE["ask_food"] + 600 // 4
     assert (a["inv"]["food"], b["inv"]["food"]) == (2, 1)
-    assert (a["inv"]["coin"], b["inv"]["coin"]) == (10 - FOOD_PRICE, FOOD_PRICE)
+    p = sim._price()  # the live price (B5 year-1)
+    assert (a["inv"]["coin"], b["inv"]["coin"]) == (10 - p, p) and f"for {p} coin" in a["recent"][-1]
     assert any("bought 1 food from" in n for n in a["recent"]) and any("sold 1 food to" in n for n in b["recent"])
     deliberate_now(sim, a, {"action": "ask_food", "target": b["id"]})  # b is down to 1: nothing to spare, no draw
     r = [e for e in sim.events if e.kind == "receipt"][-1]

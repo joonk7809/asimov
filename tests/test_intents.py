@@ -64,9 +64,9 @@ def test_a_goal_makes_an_intent_whose_steps_run_in_order_and_log_each_stage():
     assert [e.kind for e in log] == ["meet", "intent_step", "intent_step", "intent_step", "intent_done"]
     assert log[0].data["with"] == 5
     gift = next(e for e in sim.events[n0:] if e.kind == "receipt" and e.data["action"] == "give_coin")
-    assert gift.data["ok"] and gift.data["coin"] == GIFT_COIN and gift.parents == [set_ev.id]
+    assert gift.data["ok"] and gift.data["coin"] == sim._gift_coin() and gift.parents == [set_ev.id]  # live price
     assert any(e.kind == "intent_done" for e in sim.events[n0:]) and a["intent"] is None
-    assert sim._rel(b, 0)["affinity"] >= 100 and b["inv"]["coin"] >= GIFT_COIN
+    assert sim._rel(b, 0)["affinity"] >= 100 and b["inv"]["coin"] >= sim._gift_coin()
 
 
 def test_an_intent_outlives_the_night_and_the_next_prompts_show_it():

@@ -240,7 +240,7 @@ def test_one_buy_covers_the_rest_of_the_day_capped_by_coin_and_stock():
     a["inv"]["coin"], sim.state["market_food"] = 100, 100
     sim._resolve(a, {"action": "buy_food"}, 0)
     assert sim.events[-1].data["food"] == a["inv"]["food"] == want
-    a["inv"]["food"], a["inv"]["coin"] = 0, FOOD_PRICE * (want - 1) + 1  # coin for one fewer
+    a["inv"]["food"], a["inv"]["coin"] = 0, sim._price() * (want - 1) + 1  # coin for one fewer, at the live price
     sim._resolve(a, {"action": "buy_food"}, 0)
     assert a["inv"]["food"] == want - 1 and a["inv"]["coin"] == 1
     a["inv"]["food"], a["inv"]["coin"], sim.state["market_food"] = 0, 100, 1  # one left on the stall

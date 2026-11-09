@@ -1,9 +1,10 @@
-"""B5 stakes in the engine (plan/b5-build-spec.md). tithe-1: the coin sink. pay-1: pay compression."""
+"""B5 stakes in the engine (plan/b5-build-spec.md). tithe-1: the coin sink. pay-1: pay compression. year-1: the year
+and the floating price."""
 from asiimov.invariants import Checker
 from asiimov.minds import ReplayMind, StubMind
 from asiimov.params import generate_population
 from asiimov.replay import replay
-from asiimov.sim import DEFAULT_STAKES, TICKS_PER_DAY, Sim
+from asiimov.sim import DEFAULT_STAKES, FARM_YIELD, FOOD_PRICE, STALL_PARENTS, TICKS_PER_DAY, Sim
 
 FIRE = {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]}
 
@@ -95,3 +96,137 @@ def test_pay_off_is_the_body_speed_and_is_recorded_in_genesis():
     assert "pay" not in off.events[0].data["population"]["stakes"]
     assert checked(off, 2, FIRE) == []
     assert replay(off.events).state_hash() == off.state_hash()
+
+
+# ------------------------------------------------------------------ year-1
+YEAR = DEFAULT_STAKES["year"]
+NO_YEAR = {k: v for k, v in DEFAULT_STAKES.items() if k != "year"}
+
+
+def _farmer(sim):
+    return next(a for a in sim.state["agents"] if a["role"] == "farmer")
+
+
+def test_the_year_yields_what_a_flat_year_yields_and_nothing_in_winter():
+    assert sum(YEAR["yields"]) == FARM_YIELD * len(YEAR["yields"]) == 21
+    sim = Sim(1, 20, StubMind())
+    f, n = _farmer(sim), len(YEAR["yields"])
+    made = []
+    for day in range(2 * n):
+        sim.state["tick"] = day * TICKS_PER_DAY + 70
+        made.append(sim._food_yield(f))
+    assert made == YEAR["yields"] * 2
+    winter = [d for d in range(n) if YEAR["yields"][d] == 0]
+    assert winter == [5, 6]
+    sim.state["tick"] = 5 * TICKS_PER_DAY + 70
+    assert "will give no more food today" in sim._economy(f)
+    off = Sim(1, 20, StubMind(), genesis={**generate_population(1, 20), "stakes": NO_YEAR})
+    assert "stall" not in off.state and off._food_yield(_farmer(off)) == FARM_YIELD and off._price() == FOOD_PRICE
+
+
+def test_the_price_ladder_follows_the_stall_against_a_day_of_the_villages_meals():
+    sim = Sim(3, 60, StubMind())
+    need = sim._day_need()
+    p = YEAR["prices"]
+    for stock, want in ((need * 3, p[0]), (need, p[0]), (need - 1, p[1]), ((need + 1) // 2, p[1]),
+                        ((need + 1) // 2 - 1, p[2]), ((need + 3) // 4, p[2]), ((need + 3) // 4 - 1, p[3]), (0, p[3])):
+        sim.state["market_food"] = stock
+        assert sim._price_now() == want, (stock, need)
+    # the step's end sets the next tick's price, as a step event; farmers sell at it less 1
+    sim.state["market_food"] = need * 2
+    n0 = len(sim.events)
+    sim.step()
+    assert sim._price() == p[0] and sim._sell_price() == p[0] - 1 and sim._gift_coin() == p[0]
+    assert [(e.data["was"], e.data["price"]) for e in sim.events[n0:] if e.kind == "price"] == [(p[3], p[0])]
+
+
+def test_the_live_price_is_in_every_clause_and_line_that_names_it():
+    from asiimov.sim import action_clauses
+    sim = Sim(1, 12, StubMind())
+    a = next(x for x in sim.state["agents"] if x["role"] == "farmer")
+    sim.state["stall"]["price"] = 5
+    assert "sell at 4 coin each. Food costs 5 coin" in sim._economy(a)
+    c = action_clauses(5)
+    assert c["buy_from"] == "buy_from offers a person here 5 coin for 1 food; they may say no"
+    assert c["give_coin"] == "give_coin hands them 5 coin"
+    view = sim._view(a, {a["place"]: [a["id"]]})
+    assert view["food_price"] == 5
+
+
+def _harvest_day_awake(sim):
+    """Run to the harvest day (the last day with a yield before winter), with its adults up two hours."""
+    day = next(d for d in range(len(YEAR["yields"])) if YEAR["yields"][d] and not YEAR["yields"][d + 1])
+    sim.run_until(day * TICKS_PER_DAY)
+    return day
+
+
+def test_on_the_harvest_day_every_working_adult_stocks_its_households_winter_by_rule():
+    sim = Sim(2, 40, StubMind())
+    c, bad = Checker(sim), []
+    day = _harvest_day_awake(sim)
+    while sim.state["tick"] < (day + 1) * TICKS_PER_DAY:
+        bad += c.step()
+    assert bad == []
+    stock = [e for e in sim.events if e.kind == "stock"]
+    assert stock and all(e.tick // TICKS_PER_DAY == day for e in stock)
+    assert len({e.actor for e in stock}) == len(stock)  # once each
+    ags = sim.state["agents"]
+    for e in stock:
+        a = ags[e.actor]
+        assert a["role"] not in ("child", "elder") and e.data["winter_days"] == 2
+        fam = sim.state["families"][a["family"]]["members"]
+        assert e.data["order"] == 3 * 2 * sum(1 for m in fam if m == a["id"] or ags[m]["role"] in ("child", "elder"))
+    buys = [e for e in sim.events if e.kind == "receipt" and e.data.get("stock")]
+    assert buys and all(e.data["food"] <= next(s.data["order"] for s in stock if s.actor == e.actor) for e in buys)
+    assert not sim.state["stall"]["orders"] or all(int(k) in {e.actor for e in stock} for k in sim.state["stall"]["orders"])
+
+
+def test_a_possessed_body_gets_no_winter_order_but_lives_in_the_year():
+    sim = Sim(2, 40, StubMind())
+    who = next(a["id"] for a in sim.state["agents"] if a["role"] == "crafter")
+    sim.run_until(TICKS_PER_DAY)
+    sim.step([{"kind": "possess", "agent": who}])
+    day = _harvest_day_awake(sim)
+    sim.run_until((day + 1) * TICKS_PER_DAY)
+    assert sim.state["player"]["agent"] == who
+    assert not any(e.kind == "stock" and e.actor == who for e in sim.events)
+    assert any(e.kind == "stock" for e in sim.events)
+    assert sim._price() in YEAR["prices"]  # its coin buys at the live price like anyone's
+
+
+def test_the_stall_keeps_its_stock_from_the_harvest_night_through_winter():
+    sim = Sim(1, 60, StubMind())
+    sim.run(15)
+    nights = {e.tick // TICKS_PER_DAY % len(YEAR["yields"]) for e in sim.events if e.kind == "spoil"}
+    assert nights and not nights & {4, 5, 6}
+
+
+def test_every_price_step_and_failed_buy_cites_the_stall_moves_that_caused_it():
+    sim = Sim(1, 60, StubMind(), genesis={**generate_population(1, 60),
+                                          "stakes": {**DEFAULT_STAKES, "year": {**YEAR, "yields": [2, 2, 2, 2, 3, 0, 0]}}})
+    c, bad = Checker(sim), []
+    while sim.state["tick"] < 10 * TICKS_PER_DAY:
+        bad += c.step()
+    sim.finish()
+    assert bad == []
+    by_id = {e.id: e for e in sim.events}
+    steps = [e for e in sim.events if e.kind == "price"]
+    assert any(e.data["price"] > e.data["was"] for e in steps) and any(e.data["price"] < e.data["was"] for e in steps)
+    for e in steps:
+        kinds = {by_id[p].kind for p in e.parents}
+        assert e.parents and len(e.parents) <= STALL_PARENTS
+        if e.data["price"] > e.data["was"]:  # a rise: the buys that drew the stall down
+            assert all(by_id[p].kind == "receipt" and by_id[p].data["action"] == "buy_food" and by_id[p].data["food"]
+                       for p in e.parents)
+        else:  # a fall: the sells that filled it
+            assert kinds == {"sell"}
+        assert all(by_id[p].tick <= e.tick for p in e.parents)
+    first_buy = min(e.id for e in sim.events if e.kind == "receipt" and e.data["action"] == "buy_food" and e.data["ok"]
+                    and e.data["food"])
+    fails = [e for e in sim.events if e.kind == "receipt" and e.data["action"] == "buy_food" and not e.data["ok"]
+             and e.data["why"] in ("no stock", "no coin") and e.id > first_buy]
+    assert fails
+    for e in fails:
+        cause = [p for p in e.parents[1:]]
+        assert cause and all(by_id[p].kind == "receipt" and by_id[p].data["action"] == "buy_food" for p in cause)
+    assert replay(sim.events).state_hash() == sim.state_hash()
