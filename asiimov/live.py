@@ -131,7 +131,7 @@ class LiveRunner:
         seen = msg.get("seen_tick")
         if scope != "god":
             return None, "scope"
-        if msg.get("verb") not in self.verbs():
+        if not isinstance(msg.get("verb"), str) or msg["verb"] not in self.verbs():
             return None, "unknown_verb"
         args = msg.get("args")
         if not isinstance(args, dict) or set(args) != {"family"} or not _is_int(args["family"]) \
@@ -203,6 +203,10 @@ class LiveRunner:
         self.side.close()
 
     def close(self):
+        """Stop serving; the world stays open. A snapshot at the current tick lets reopen continue right here
+        instead of taking resume's crash path, which re-runs the last recorded tick."""
+        if not os.path.exists(self.run._snap_path(self.sim.state["tick"])):
+            self.run._snapshot()
         os.fsync(self.run.log.fileno())
         self.run.log.close()
         self._side("close", view_tick=self.sim.state["tick"])
@@ -303,8 +307,7 @@ async def read_message(reader, send) -> str | None:
         mask = await reader.readexactly(4)
         data = _unmask(await reader.readexactly(n), mask)
         if op == 8:
-            send(frame(8, data[:2]))
-            return None
+            return None  # Conn.close() answers it
         if op == 9:
             send(frame(10, data))
             continue
@@ -390,9 +393,9 @@ class Hub:
             while (text := await read_message(reader, conn.send_raw)) is not None:
                 try:
                     m = json.loads(text)
-                    if not isinstance(m, dict):
+                    if not isinstance(m, dict) or not isinstance(m.get("type"), str):
                         raise ValueError
-                except ValueError:
+                except (ValueError, RecursionError):
                     m = None
                 if conn.scope is None:
                     err = _hello_error(m)
@@ -488,7 +491,7 @@ class Hub:
 def _hello_error(m) -> str | None:
     if m is None or m.get("type") != "hello":
         return "expected_hello"
-    if m.get("protocol") != PROTOCOL:
+    if not _is_int(m.get("protocol")) or m["protocol"] != PROTOCOL:
         return "unknown_protocol"
     scope = m.get("scope", "god")
     if scope not in SCOPES:

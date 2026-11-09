@@ -103,7 +103,12 @@ leaves the intent applied (it's in `run.json`), rescheduled from its `received` 
 not acknowledged at all (it never reached the sidecar, and the client resends it by id). An intent
 the sidecar received is never dropped.
 
-On resume, persist re-runs the last recorded tick. A player action is applied at the start of its
-tick, before any mind is asked, so its event id doesn't change. With a live LLM mind, the rest of that
-tick can come out differently from what was streamed before the crash; a reattaching client
-reloads from the log.
+A clean stop (Ctrl-C) snapshots the current tick, so reopening continues at the same view tick with
+every event and ack, and a client reattaches with its own `since`.
+
+After a crash, persist resumes from the newest snapshot and re-runs the recorded tail, dropping the last
+recorded tick with events (and any empty ticks after it), so the view can move back more than one tick.
+A client whose `since` is past the reopened log gets `bad_since` and reloads with `since: 0`. A
+player action applies at the start of its tick, before any mind is asked, so its event id survives the
+re-run and its ack stands. With a live LLM mind, the rest of a re-run tick can differ from what was
+streamed before the crash.

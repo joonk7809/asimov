@@ -153,12 +153,29 @@ def test_kill_anywhere_and_reopen_loses_no_received_intent(tmp_path, trial):
     assert all(r.intents[i]["status"] == "applied" for _, i, _ in SCRIPT)
 
 
+def test_a_clean_close_reopens_at_the_same_tick_with_every_event_and_ack(tmp_path):
+    out = str(tmp_path / "w")
+    r = live.LiveRunner(out, StubMind(), SEED, AGENTS)
+    acks = drive(r, SCRIPT[:2], 21)
+    n, view = len(r.sim.events), r.view()
+    r.close()
+    r = live.LiveRunner(out, StubMind())
+    assert (len(r.sim.events), r.view()) == (n, view)
+    assert [r.submit(intent(a["id"], 9, 21)) for a in acks] == acks  # resends get the recorded acks
+    assert r.submit(intent("late", 0, 21)) is None                    # a caught-up client's intent is fine
+    drive(r, SCRIPT, END, {"a", "b"})
+    r.finish()
+    assert lines(os.path.join(out, "events.jsonl")) == batch_log(SCRIPT + [(21, "late", 0)])[0]
+
+
 def test_hostile_client_changes_nothing_but_recorded_player_events(tmp_path):
     rng = random.Random(7)
     runner = live.LiveRunner(str(tmp_path / "w"), StubMind(), SEED, AGENTS)
     nfam = len(runner.sim.state["families"])
     bad_args = [None, [], {}, {"family": True}, {"family": 1.0}, {"family": -1}, {"family": nfam},
-                {"family": 10 ** 30}, {"family": "1"}, {"family": 1, "extra": 2}, {"fam": 1}]
+                {"family": 10 ** 30}, {"family": "1"}, {"family": 1, "extra": 2}, {"fam": 1},
+                {"family": [1]}, {"family": {"a": 1}}]
+    junk = [None, True, "3", 1.5, [], ["fire"], {}, {"x": 1}]  # every field also gets lists and dicts
     valid, seq = [], 0
     while runner.sim.state["tick"] < END:
         now = runner.sim.state["tick"]
@@ -168,10 +185,10 @@ def test_hostile_client_changes_nothing_but_recorded_player_events(tmp_path):
             m = rng.choice([
                 lambda: intent(iid, rng.randrange(nfam), now + rng.randrange(1, 9)),       # from the future
                 lambda: intent(iid, rng.randrange(nfam), now - live.MAX_LAG - 1),          # stale
-                lambda: {**intent(iid, 0, now), "seen_tick": rng.choice([None, True, "3", 1.5])},
-                lambda: {**intent(iid, 0, now), "verb": rng.choice(["steal", "", None, "FIRE"])},
+                lambda: {**intent(iid, 0, now), "seen_tick": rng.choice(junk)},
+                lambda: {**intent(iid, 0, now), "verb": rng.choice(["steal", "", "FIRE"] + junk)},
                 lambda: {**intent(iid, 0, now), "args": rng.choice(bad_args)},
-                lambda: {**intent(iid, 0, now), "id": rng.choice([None, 3, "", "x" * 65])},
+                lambda: {**intent(iid, 0, now), "id": rng.choice(["", "x" * 65] + junk)},
                 lambda: intent(rng.choice(valid)[1], rng.randrange(nfam), now) if valid else intent(iid, 0, -1),
                 lambda: intent(iid, rng.randrange(nfam), max(0, now - rng.randrange(live.MAX_LAG))),  # valid
             ])()
@@ -256,6 +273,12 @@ def test_websocket_session_hello_backlog_ticks_acks_and_reattach(tmp_path):
         c.send(intent("w1", 2, 30))           # a resend before the ack: still one fire
         c.send(intent("w2", 99, 30))
         assert await c.recv() == live.msg("ack", id="w2", status="rejected", reason="bad_args")
+        for field, v in [("verb", ["fire"]), ("verb", {"k": 1}), ("id", ["x"]), ("seen_tick", [30]), ("args", [2])]:
+            c.send({**intent("w3", 2, 30), field: v})   # unhashable or wrong-typed fields: rejected, world runs on
+            assert (await c.recv())["status"] == "rejected"
+        c.send({"type": "intent", "id": "deep", "verb": "fire", "seen_tick": 30,
+                "args": {"family": json.loads("[" * 50 + "]" * 50)}})
+        assert (await c.recv())["status"] == "rejected"
         c.send({"type": "control", "op": "step"})
         await c.until("status")
         t = await c.recv()
@@ -295,6 +318,12 @@ def test_websocket_session_hello_backlog_ticks_acks_and_reattach(tmp_path):
         g = await WS.connect(port)
         g.send({"type": "hello", "protocol": 2})
         assert (await g.recv())["reason"] == "unknown_protocol"
+        h = await WS.connect(port)
+        h.send({"type": "hello", "protocol": True})
+        assert (await h.recv())["reason"] == "unknown_protocol"
+        k = await WS.connect(port)
+        k.raw(1, b"[" * 60000)  # nesting deeper than json's recursion limit
+        assert (await k.recv())["reason"] == "expected_hello"
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
