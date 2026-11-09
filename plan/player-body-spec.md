@@ -16,18 +16,37 @@ has exactly one place where those are made: a deliberation, whose output `_resol
 into an action now and maybe an override step (sim.py `_resolve`). A player order is a deliberation
 whose output comes from a person instead of a model. It's recorded as an `origin="player"` event, and
 `_resolve` runs it with every check a mind's choice gets: `_target_error`, the live place checks in
-`_person_act` (L2), receipts and chance rolls. No second rules path exists, so the player can't do
-anything a villager can't, and replay holds by S2: player events are recorded inputs, like `fire`.
+`_person_act` (L2), receipts and chance rolls. One thing a mind has that `_resolve` doesn't check is the
+offer: a mind is held to `_offer` only by its reply schema, and `_resolve` itself never reads the offer
+(review of #38: with 0 coin, `_resolve(go_market)` still starts a shop step). So the player path adds
+an explicit offer check (change 2). With it, the player can't do anything a villager couldn't choose,
+and replay holds by S2: player events are recorded inputs, like `fire`.
 
-## Engine changes (all in `Sim._player`, plus one guard)
+## Engine changes (in `Sim._player`, plus the deliberation point)
 1. `possess {agent}` (player event): sets `state["player"] = {"agent": id, "event": eid}`. The key is
    added only on the first possess, so a world with no player has the same state, hash and log as
    today, apart from the genesis engine field. Re-possessing moves the body, and `release` removes the key.
-2. `act {action, target?}` (player event, on the possessed villager only): calls
-   `_resolve(a, {"action": action, "target": target}, eid)`. Actions are the deliberation menu
-   (`DELIBERATE_ACTIONS`), filtered by the same `_offer` the villager's mind would get at that moment.
-   An action that isn't offered gets a failed receipt with the reason, exactly as a mind's unoffered
-   choice does. The deliberation's `goal`/`then` intent fields are not exposed. The player is the intent.
+2. `act {action, target?}` (player event, on the possessed villager only). **When it resolves:** in the
+   same phase as a mind's deliberation, not at the start of the tick. `_player` only queues the act
+   (`fire` keeps applying at the start). In the agent loop, where `_maybe_deliberate` would run for this
+   villager (after arrivals, occupancy, `_body`, `_act` and `_eat`), the engine:
+   - emits the `act` player event;
+   - computes `view = _view(a, occupancy)`, `_situation` (which fills `view["people"]`) and
+     `offer = _offer(a, view)`, exactly as a deliberation request would;
+   - registers it in `pending` with the player's output as its reply.
+
+   `_commit` then applies it in `_order` among the minds' replies. So its receipts, rolls and ordering
+   against other villagers are those a mind's identical deliberation would get on that tick. At commit
+   it runs these checks in order, each a failed receipt with a named reason and no other effect:
+   - `action not in offer` gives `"not offered"`, with the offer recorded in the receipt;
+   - a target outside `view["people"]` for a person action gives `"unknown target"`;
+   - then `_resolve(a, {"action": action, "target": target}, eid)`.
+
+   If the body is asleep, or walking home for bed, on the tick the act arrives, the act event is
+   emitted with a failed receipt, `"asleep"` or `"bedtime"`. Queued acts never carry over to the next
+   tick: the client resends after reading the receipt. The `goal`/`then` intent fields aren't exposed,
+   because the player is the intent. Replay is unchanged: `replay()` passes the player events of each
+   tick back to `step`, and `_player` queues the acts again.
 3. Guard: `_maybe_deliberate` skips the possessed villager. Its occasions (hungry, robbed, refused, fire and the rest of `OCCASIONS`) still
    fire, and they're shown to the player as prompts to act (the inhabitant view's `occasion`).
 4. Under the recommended option, wake plans and night reflection still go to the villager's mind, so
@@ -38,7 +57,9 @@ anything a villager can't, and replay holds by S2: player events are recorded in
 
 No prompt text changes. Other villagers see the possessed villager as an ordinary person. So L11, L18
 and L19 have nothing to re-measure, and no test reads a decision this changes, except the possessed
-villager's own (it is excluded from every scorecard reading, as a player arm is). B5/B6's test-11 arm
+villager's own. The scorecard has no way to exclude a villager yet, so the build adds one: any villager
+with a `possess` event in the log is dropped from every scorecard and diagnostic reading, with the count
+dropped reported. B5/B6's test-11 arm
 doesn't apply: this adds no mind choices.
 
 D2's rule, that a reply lands on the tick it's asked, holds. Everything another villager asks of the
@@ -79,8 +100,10 @@ is the dev/review tool until a game design says what divine power costs.
 3. **Same rules as a mind (S1):** a hostile player sends every action with random, missing, wrong-typed
    and absent targets every tick for 3 days. Invariants and ledgers are checked every tick
    (test_invariants), and every refusal is a receipt with the same reason a mind's identical choice
-   gets. Concretely: replaying each player `act` as a recorded mind deliberation for the same villager
-   gives the same receipts.
+   gets. Every act outside that tick's offer is refused with `"not offered"` and changes nothing else
+   (this is checked against a twin where the act is absent: the same log apart from the act and
+   receipt events). For offered acts: replaying each one as a recorded mind deliberation for the same
+   villager at the same tick gives the same receipts, because both resolve in `_commit` in `_order`.
 4. **No deliberation while possessed:** zero `deliberate` mind events for the possessed villager
    between possess and release. Its plan and reflect events continue (recommended option).
 5. **Inhabitant leak test:** over a 3-day world with a player in the inhabitant scope, every message
