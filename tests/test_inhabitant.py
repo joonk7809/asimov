@@ -101,7 +101,9 @@ def test_a_body_left_held_by_a_crash_is_released_36_ticks_after_reopening(tmp_pa
             reopened = r.sim.state["tick"]
             assert r.orphan_at == reopened + live.ORPHAN_TICKS
         else:
-            assert r.orphan_at is None and "player" not in r.sim.state
+            # released: either already in the view, or scheduled in run.json past a view tick that a reopen
+            # rolled back to the log's last flushed tick (where the buffer cut it moves with the log's size)
+            assert r.orphan_at is None and r._held_agent() is None
     while r.sim.state["tick"] < 160:
         r.step()
     r.finish()

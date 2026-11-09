@@ -14,7 +14,7 @@ from asiimov.memory import assemble_prompt
 from asiimov.minds import MindReply, ReplayDivergence, StubMind
 from asiimov.params import generate_population
 from asiimov.replay import replay
-from asiimov.sim import TICKS_PER_DAY, WORKPLACE, Sim
+from asiimov.sim import DEFAULT_STAKES, TICKS_PER_DAY, WORKPLACE, Sim
 from asiimov.worldmap import WALK, build_map, position, travel_ticks
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -214,7 +214,9 @@ def test_the_presence_check_catches_a_planted_talk_between_walkers():
 
 
 def test_a_stub_world_never_meets_away_from_a_shared_place():
-    sim = Sim(1, 60, StubMind())
+    # pay off: compressed pay (pay-1) lifts the slowest earners, so nobody asks kin in 3 days on seeds 1 to 6,
+    # and the check must still see an ask_kin receipt
+    sim = Sim(1, 60, StubMind(), genesis={**generate_population(1, 60), "stakes": {"tithe": DEFAULT_STAKES["tithe"]}})
     check = Checker(sim)
     bad = []
     for tick in range(3 * TICKS_PER_DAY):

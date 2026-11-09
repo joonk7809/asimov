@@ -213,14 +213,14 @@ def test_two_records_for_one_agent_tick_are_refused():
 
 def test_stub_twins_are_full_reruns(monkeypatch):
     # StubMind reads who carries food from its view, which the prompt doesn't show. Served from the
-    # record, its twin keeps an old answer where a full rerun changes it (seed 2, family 1, yield 1 with the
-    # tithe; seed 6 on the map; 11 at engine 8; 3 at engine 7, 9 at engine 6), so stub controls run with serve=False.
+    # record, its twin keeps an old answer where a full rerun changes it (seed 1, family 0, yield 1 with pay
+    # compression; seed 2, family 1 with the tithe; seed 6 on the map; 11 at engine 8; 3 at engine 7, 9 at engine 6), so stub controls run with serve=False.
     monkeypatch.setattr(sim_mod, "FARM_YIELD", 1)
-    base = Sim(2, 50, StubMind()); base.run(4); base.finish()
-    truth = Sim(2, 50, StubMind()); truth.run(4, fire(1)); truth.finish()
-    served, _ = run_twin(base.events, StubMind(), player=fire(1))
+    base = Sim(1, 50, StubMind()); base.run(4); base.finish()
+    truth = Sim(1, 50, StubMind()); truth.run(4, fire(0)); truth.finish()
+    served, _ = run_twin(base.events, StubMind(), player=fire(0))
     assert logs(served.events) != logs(truth.events)
-    rerun, mind = run_twin(base.events, StubMind(), player=fire(1), serve=False)
+    rerun, mind = run_twin(base.events, StubMind(), player=fire(0), serve=False)
     assert logs(rerun.events) == logs(truth.events) and mind.counts["base"] == 0
     s = summary(base.events, rerun.events)
     assert s["agents_diverged"] == len(divergence(base.events, truth.events))

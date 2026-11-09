@@ -164,8 +164,9 @@ def test_famine_cuts_farm_food_from_its_start_day_only():
         assert food["famine"][day] == food["full"][day]
     # Agents work a bit differently once hungry, so roughly a third. The top is 0.5 from engine 10: stub
     # farmers who buy from or are given food by a neighbour work longer (day 3: 55 of 117; engine 9, 48).
+    # 0.55 from pay-1: compressed pay makes the slowest farmers faster, so more of them work on (day 3: 51 of 102).
     for day in range(sc.FAMINE_FROM_DAY, 4):
-        assert 0.2 < food["famine"][day] / food["full"][day] < 0.5
+        assert 0.2 < food["famine"][day] / food["full"][day] < 0.55
 
 
 def test_fiction_arm_changes_only_the_framing_and_the_soul_holds_its_anchors_once():

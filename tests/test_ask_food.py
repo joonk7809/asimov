@@ -160,7 +160,8 @@ def test_the_prompt_the_reply_schema_and_withheld_agree_on_what_is_offered():
     steal, ask_food, buy_from or ask_kin while the reply schema dropped them)."""
     from asiimov.bench import collect_prompts
     from asiimov.llm import schema_for
-    reqs = [r for r in collect_prompts(agents=30, days=2, seed=3) if r.kind == "deliberate"]
+    # seed 7 from pay-1: seed 3's 41 deliberations there all have someone present
+    reqs = [r for r in collect_prompts(agents=30, days=2, seed=7) if r.kind == "deliberate"]
     assert any(not r.view["present"] for r in reqs)
     for req in reqs:
         grammar = {x for b in schema_for(req)["anyOf"] for x in b["properties"]["action"]["enum"]}
