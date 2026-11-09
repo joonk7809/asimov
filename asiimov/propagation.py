@@ -13,7 +13,7 @@ Left out on purpose:
     any prompt change, so text alone would make every agent whose prompt moved look affected.
   - RNG bookkeeping (stream, index, roll) and quantities derived from state rather than chosen
     (a kin limit): a shifted draw counter with the same outcome is not an act.
-  - day_rhythm (a chance draw) and plan_receipt (a restatement of the plan).
+  - day_rhythm (a chance draw), plan_receipt (a restatement of the plan) and tithe (a rule taking coin).
   - Things done to the agent (a fire, being talked to): those show up as the agent's own acts or not
     at all.
 An agent counts "by day d" when its first difference falls before intervention_tick + d days.
@@ -69,7 +69,7 @@ ACT_FIELDS = {
     "produce": ("food", "coin"),
     "sell": ("food",),
 }
-NOT_ACTS = ("day_rhythm", "plan_receipt")
+NOT_ACTS = ("day_rhythm", "plan_receipt", "tithe")  # tithe (B5): a rule taking coin, not a choice
 CHATS = ("talk", "snub")  # chance encounters: whom an agent happens to talk to where it is
 CATEGORIES = ("act", "act_besides_chats", "thought")
 

@@ -128,8 +128,17 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "17"  # an idle body's mind takes over (joon 2026-11-09), on engine 16
+ENGINE_VERSION = "18"  # B5 coin sink (plan/b5-build-spec.md), on engine 17 (label tithe-1)
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
+# The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
+# genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
+# without them gets these, the package as built.
+DEFAULT_STAKES = {
+    # tithe-1: at midnight every adult gives the village chest TITHE_RATE% of the coin it carries above
+    # TITHE_FREE; at the day's end the chest spends what it holds above CHEST_RESERVE on the village, and that
+    # coin leaves the economy. On the stub coin per villager stopped growing near 94 by day 24, against 341.
+    "tithe": {"rate_pct": 15, "free": 10, "reserve": 400},
+}
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
 
@@ -174,7 +183,11 @@ class Sim:
                  expected: list[Event] | None = None, order: str = "id", workers: int = 1):
         self._setup(seed, mind, expected, order, workers)
         pop = genesis if genesis is not None else generate_population(seed, n_agents)
+        if "stakes" not in pop:  # recorded in genesis below, so the log carries every parameter
+            pop = {**pop, "stakes": json.loads(json.dumps(DEFAULT_STAKES))}
         self.state = {"tick": 0, "market_food": 10, "families": pop["families"], "agents": []}
+        if pop["stakes"]:  # a world with every stake off keeps engine 17's state, hashes included
+            self.state.update({"stakes": json.loads(json.dumps(pop["stakes"])), "chest": 0})
         for p in pop["agents"]:
             a = json.loads(json.dumps(p))
             fam = pop["families"][p["family"]]
@@ -503,6 +516,8 @@ class Sim:
         self._acts = {}
         for act in player_actions:
             self._player(act)
+        if tick and tick % TICKS_PER_DAY == 0:
+            self._tithe()
         for a in agents:
             if a["route"] and tick >= a["route"]["arrive"]:
                 self._arrive(a)
@@ -545,6 +560,7 @@ class Sim:
                 self.metrics["activity"][(tick // TICKS_PER_DAY, self._hour())][a["activity"]] += 1
         if tick % TICKS_PER_DAY == TICKS_PER_DAY - 1:
             self._spoil()
+            self._spend_chest()
             self._emit("checkpoint", "rule", None, {"day": tick // TICKS_PER_DAY, "hash": self.state_hash()})
         st["tick"] = tick + 1
 
@@ -820,6 +836,29 @@ class Sim:
                    + a["rhythm"]["sleep_need_min"] // 10 * (a["body"]["metabolism"] // 200)
                    for a in self.state["agents"])
         return MARKET_KEEP_DAYS * rise // 450
+
+    def _tithe(self):
+        """Midnight: each adult gives the chest its share of the coin it carries above the free amount (B5)."""
+        t = self.state.get("stakes", {}).get("tithe")
+        if not t:
+            return
+        for a in self.state["agents"]:
+            if a["role"] in ("child", "elder"):
+                continue
+            k = max(0, a["inv"]["coin"] - t["free"]) * t["rate_pct"] // 100
+            if k:
+                a["inv"]["coin"] -= k
+                self.state["chest"] += k
+                self._emit("tithe", "rule", a["id"], {"coin": k})
+                self._note(a["id"], f"paid {k} coin to the village chest")  # no IMPORTANT_WORDS key: not a gift (L27)
+
+    def _spend_chest(self):
+        """The day's end: the chest spends what it holds above its reserve on the village; that coin is gone."""
+        t = self.state.get("stakes", {}).get("tithe")
+        if t and self.state["chest"] > t["reserve"]:
+            spent = self.state["chest"] - t["reserve"]
+            self.state["chest"] = t["reserve"]
+            self._emit("chest_spent", "rule", None, {"coin": spent, "chest": t["reserve"]})
 
     def _spoil(self):
         """Food left on the stall past a cap rots overnight, so a fed village still needs its farmers."""
