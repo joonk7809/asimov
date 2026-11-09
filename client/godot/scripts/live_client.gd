@@ -1,5 +1,7 @@
-# Protocol 2 client (god scope) (plan/client-protocol.md): hello, then welcome, backlog and ticks into a WorldModel.
-# Sends intents and controls only; never state.
+# Protocol 2 client (plan/client-protocol.md): hello, then welcome, backlog and ticks.
+# God scope rebuilds every villager into a WorldModel. Inhabitant scope (agent >= 0) keeps only what the
+# server sends its villager: the latest whitelisted view and the events it witnessed. Its action menu is the
+# server's offer, never computed here. Sends intents and controls only; never state.
 extends RefCounted
 
 const PROTOCOL := 2
@@ -15,6 +17,10 @@ var model := WorldModel.new()
 var ws := WebSocketPeer.new()
 var url := ""
 var scope := "god"
+var agent := -1         # inhabitant scope: the villager this client is
+var me := {}            # inhabitant scope: welcome.world.me
+var places := {}        # inhabitant scope: the map's places
+var seen_events := []   # inhabitant scope: every event the server sent it, in order
 var welcome := {}
 var view := {}          # the latest engine view: {tick, agents: [{id, place, activity, asleep, pos, route}]}
 var view_tick := 0
@@ -40,7 +46,11 @@ func poll() -> void:
 	var state := ws.get_ready_state()
 	if state == WebSocketPeer.STATE_OPEN and not _hello_sent:
 		_hello_sent = true
-		_send({"type": "hello", "protocol": PROTOCOL, "scope": scope, "since": model.events.size()})
+		var hello := {"type": "hello", "protocol": PROTOCOL, "scope": scope, "since": model.events.size()}
+		if scope == "inhabitant":
+			hello["agent"] = agent
+			hello["since"] = 0
+		_send(hello)
 	while ws.get_available_packet_count() > 0:  # also while closing: an error arrives just before the close
 		_handle(ws.get_packet().get_string_from_utf8())
 	if state != WebSocketPeer.STATE_CLOSED:
@@ -73,15 +83,20 @@ func _handle(text: String) -> void:
 			view_tick = int(m["view_tick"])
 			tps = float(m["tps"])
 			paused = m["paused"]
-			if model.events.is_empty():
+			if scope == "inhabitant":
+				me = m["world"]["me"]
+				places = m["world"]["map"]["places"]
+				seen_events.clear()
+				view = m["view"]
+			elif model.events.is_empty():
 				model.load_world(m["world"])
 			welcomed.emit(m)
 		"events":
 			for e in m["events"]:
-				model.add_event(e)
+				_add(e)
 		"tick":
 			for e in m["events"]:
-				model.add_event(e)
+				_add(e)
 			view = m["view"]
 			view_tick = int(view["tick"])
 			tick_wall = Time.get_ticks_msec()
@@ -100,6 +115,13 @@ func _handle(text: String) -> void:
 			failed.emit(str(m["reason"]))
 
 
+func _add(e: Dictionary) -> void:
+	if scope == "inhabitant":
+		seen_events.append(e)
+	else:
+		model.add_event(e)
+
+
 func _send(m: Dictionary) -> void:
 	ws.send_text(JSON.stringify(m))
 
@@ -110,6 +132,35 @@ func fire(family: int) -> String:
 	var id := "g%x%x-%d" % [Time.get_ticks_usec(), randi(), _seq]  # unique per world, as the protocol asks
 	_send({"type": "intent", "id": id, "verb": "fire", "args": {"family": family}, "seen_tick": view_tick})
 	return id
+
+
+func act(action: String, target: int = -1) -> String:
+	## Inhabitant scope: the body's act. Its ack names the act event; the receipt follows in a tick's events.
+	_seq += 1
+	var id := "i%x%x-%d" % [Time.get_ticks_usec(), randi(), _seq]
+	var args := {"action": action}
+	if target >= 0:
+		args["target"] = target
+	_send({"type": "intent", "id": id, "verb": "act", "args": args, "seen_tick": view_tick})
+	return id
+
+
+static func menu(v: Dictionary) -> Array:
+	## The buttons for a view: one per offered action, or per action and person it may name. Straight from
+	## the server's offer; the client adds nothing and drops nothing.
+	var names := {}
+	for p in v.get("present", []) + v.get("kin", []):
+		names[int(p["id"])] = p["name"]
+	var out := []
+	var offer: Dictionary = v.get("offer", {})
+	for action in offer:
+		var people: Array = offer[action]
+		if people.is_empty():
+			out.append({"label": action.replace("_", " "), "action": action, "target": -1})
+		for t in people:
+			out.append({"label": "%s %s" % [action.replace("_", " "), names.get(int(t), "#%d" % int(t))],
+					"action": action, "target": int(t)})
+	return out
 
 
 func control(op: String, rate: float = 0.0) -> void:

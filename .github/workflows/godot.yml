@@ -35,3 +35,8 @@ jobs:
           for i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8765) 2>/dev/null && break; sleep 0.2; done
           godot --headless --path client/godot --script res://tests/test_live.gd -- ws://127.0.0.1:8765/ 300
           godot --headless --path client/godot --script res://tests/test_reload.gd -- ws://127.0.0.1:8765/
+      - name: Inhabitant client acts from the server's menu and gets every receipt (bar 6)
+        run: |
+          python -m asiimov.live --out "$RUNNER_TEMP/inhabit" --agents 25 --paused --port 8766 &
+          for i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8766) 2>/dev/null && break; sleep 0.2; done
+          godot --headless --path client/godot --script res://tests/test_inhabit.gd -- ws://127.0.0.1:8766/ 3 200
