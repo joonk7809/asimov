@@ -57,3 +57,12 @@ def test_a_world_without_stakes_keeps_engine_17_state():
     assert "chest" not in off.state and "stakes" not in off.state
     rep = Sim(2, 20, ReplayMind([]), genesis={**generate_population(2, 20), "stakes": {}})
     assert rep.state_hash() == off.state_hash()
+
+
+def test_a_tithe_note_is_an_everyday_memory_not_a_gift():
+    # "gave" weighs 4 in IMPORTANT_WORDS (meant for gifts); a nightly tithe note scored so would crowd out
+    # everyday memories, then real gifts (steering's condition on tithe-1)
+    sim = Sim(1, 60, StubMind())
+    sim.run(3)
+    eps = [e for a in sim.state["agents"] for e in a["episodes"] if "village chest" in e["text"]]
+    assert eps and all(e["importance"] == 1 for e in eps)

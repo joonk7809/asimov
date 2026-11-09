@@ -850,7 +850,7 @@ class Sim:
                 a["inv"]["coin"] -= k
                 self.state["chest"] += k
                 self._emit("tithe", "rule", a["id"], {"coin": k})
-                self._note(a["id"], f"gave {k} coin to the village chest")
+                self._note(a["id"], f"paid {k} coin to the village chest")  # no IMPORTANT_WORDS key: not a gift (L27)
 
     def _spend_chest(self):
         """The day's end: the chest spends what it holds above its reserve on the village; that coin is gone."""
