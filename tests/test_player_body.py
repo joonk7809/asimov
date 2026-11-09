@@ -1,0 +1,262 @@
+"""The player's body (plan/player-body-spec.md, engine pb-1): possess, act, release.
+
+A player act is a deliberation whose output comes from a person: recorded as a player event at the start
+of the tick, resolved in _commit in _order with the minds' replies, held to the offer a mind's reply
+schema would have held it to, and never sent to the mind."""
+import hashlib
+import json
+import os
+import random
+
+import pytest
+
+from asiimov import live
+from asiimov.events import Event, read_jsonl
+from asiimov.invariants import Checker
+from asiimov.minds import MindReply, NoisyMind, StubMind
+from asiimov.replay import replay
+from asiimov.sim import DELIBERATE_ACTIONS, INSTANT_STEPS, PERSON_STEPS, RATED_ACTS, TICKS_PER_DAY, Sim
+
+GOLDEN_15 = "1a1677ccd7eec0952ccfa9e52dca9ad9d8e1511391a8eddf7525a48158636f9a"  # tests/test_world.py, engine 15
+
+
+def log_lines(sim):
+    return [e.to_json() for e in sim.events]
+
+
+def test_a_world_with_no_player_is_engine_15_but_for_the_version_field():
+    """Bar 1: the same fixed world as test_world's golden, with genesis' engine field set back to 15."""
+    from test_world import FIRE, run
+    lines = log_lines(run(StubMind(), agents=20, days=2, seed=3, player=FIRE))
+    g = json.loads(lines[0])
+    g["data"]["engine"] = "15"
+    lines[0] = json.dumps(g, sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256("".join(l + "\n" for l in lines).encode()).hexdigest() == GOLDEN_15
+
+
+def body_script(aid, seed=0, start=TICKS_PER_DAY // 2, end=2 * TICKS_PER_DAY, n=12):
+    """Possess `aid` at `start`, a spread of acts (some targeted, one pair in one tick), release at the end."""
+    rng = random.Random(seed)
+    player = {start: [{"kind": "possess", "agent": aid}]}
+    for t in sorted(rng.sample(range(start + 1, end - 1), n)):
+        action = rng.choice(DELIBERATE_ACTIONS)
+        act = {"kind": "act", "action": action}
+        if action in PERSON_STEPS:
+            act["target"] = rng.randrange(12)
+        player.setdefault(t, []).append(act)
+    player.setdefault(start + 3, []).extend([{"kind": "act", "action": "work"}, {"kind": "act", "action": "rest"}])
+    player.setdefault(end - 1, []).append({"kind": "release"})
+    return player
+
+
+def test_possess_act_release_replays_exactly_and_never_asks_the_mind_to_deliberate():
+    aid = 3
+    player = body_script(aid)
+    sim = Sim(5, 12, NoisyMind())
+    sim.run_until(2 * TICKS_PER_DAY + 20, player)
+    sim.finish()
+    events = [Event(**json.loads(l)) for l in log_lines(sim)]
+    assert replay(events).state_hash() == sim.state_hash()
+    pos = next(e.id for e in events if e.kind == "possess")
+    rel = next(e.id for e in events if e.kind == "release")
+    during = [e for e in events[pos:rel] if e.actor == aid]
+    assert not [e for e in during if e.kind == "mind_deliberate"]                     # bar 4
+    assert {"mind_plan", "mind_reflect"} <= {e.kind for e in during}                  # its own mind lives on
+    acts = [e for e in during if e.kind == "act"]
+    receipts = {e.parents[0]: e for e in events if e.kind == "receipt" and e.parents and e.parents[0] in
+                {a.id for a in acts}}
+    assert len(receipts) == len(acts)  # every act ends its tick with a receipt (S8), or started a step
+    assert any(r.data["why"] == "one act per tick" for r in receipts.values())
+    assert not any(e.kind == "mind_deliberate" and e.actor == aid for e in events[rel:rel + 1])
+    assert sim.state.get("player") is None and "player" not in sim.state
+
+
+def test_every_unoffered_act_is_refused_and_rolled_acts_keep_a_minds_cooldown():
+    """Bar 3: a hostile player sends a random act every tick for 3 days. Invariants and ledgers hold every
+    tick, nothing outside the offer goes through, and rolled acts per day never exceed a mind's 12."""
+    rng = random.Random(11)
+    sim = Sim(2, 16, StubMind())
+    checker = Checker(sim)
+    aid = 5
+    for _ in range(3 * TICKS_PER_DAY):
+        t = sim.state["tick"]
+        acts = [{"kind": "possess", "agent": aid}] if t == 1 else []
+        if t > 1:
+            for _ in range(rng.choice([1, 1, 1, 2])):
+                action = rng.choice(DELIBERATE_ACTIONS)
+                act = {"kind": "act", "action": action}
+                me = sim.state["agents"][aid]
+                here = [o["id"] for o in sim.state["agents"] if o["place"] == me["place"] and o["id"] != aid]
+                if here and rng.random() < 0.6:
+                    act["target"] = rng.choice(here)  # someone it can reach, so rolls happen
+                elif rng.random() < 0.8:
+                    act["target"] = rng.randrange(-3, 22)
+                acts.append(act)
+        bad = checker.step(acts)
+        assert not bad, bad[:5]
+    sim.finish()
+    ev = sim.events
+    act_ids = {e.id: e for e in ev if e.kind == "act"}
+    went, rolled = 0, {}
+    refusals = {"cooldown", "not offered", "unknown target", "one act per tick", "asleep", "bedtime", "falling asleep"}
+    for e in ev:
+        if e.kind != "receipt" or not e.parents or e.parents[0] not in act_ids:
+            continue
+        a = act_ids[e.parents[0]]
+        if e.data["why"] == "not offered":
+            assert a.data["action"] not in e.data["offer"]
+        if e.data["ok"]:
+            went += 1
+        if a.data["action"] in RATED_ACTS and e.data["why"] not in refusals:  # reached the rules
+            rolled[e.tick // TICKS_PER_DAY] = rolled.get(e.tick // TICKS_PER_DAY, 0) + 1
+    whys = {e.data["why"] for e in ev if e.kind == "receipt" and e.parents and e.parents[0] in act_ids}
+    assert {"not offered", "one act per tick", "asleep", "cooldown"} <= whys, whys
+    assert went > 20 and max(rolled.values()) <= TICKS_PER_DAY // 12
+    assert replay([Event(**json.loads(e.to_json())) for e in ev]).state_hash() == sim.state_hash()
+
+
+class Forced(StubMind):
+    """Stub everywhere, except one deliberation at (agent, tick), which answers `out`."""
+
+    def __init__(self, aid, tick, out):
+        self.aid, self.tick, self.out = aid, tick, out
+
+    def decide(self, req):
+        if (req.agent_id, req.tick, req.kind) == (self.aid, self.tick, "deliberate"):
+            return MindReply(json.dumps(self.out), self.model, {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_an_offered_act_gets_the_receipts_a_minds_identical_deliberation_gets():
+    """Twin A: the player possesses the body at tick T and acts. Twin B: no player; the body's mind is
+    made to deliberate at T and gives the same answer. Same receipts, rolls and all."""
+    rng, compared, rolls = random.Random(3), 0, 0
+    for trial in range(150):
+        seed, aid = rng.randrange(50), rng.randrange(14)
+        T = rng.randrange(TICKS_PER_DAY // 2, TICKS_PER_DAY + 60)
+        probe = Sim(seed, 14, StubMind())
+        probe.run_until(T)
+        me = probe.state["agents"][aid]
+        here = [o["id"] for o in probe.state["agents"] if o["place"] == me["place"] and o["id"] != aid]
+        if here and rng.random() < 0.6:  # a rolled act on someone present, so contested rolls get compared
+            action, target = rng.choice(INSTANT_STEPS), rng.choice(here)
+        else:
+            action = rng.choice([x for x in DELIBERATE_ACTIONS if x != "wait"])
+            target = rng.randrange(14) if action in PERSON_STEPS else None
+        out = {"action": action, "target": target} if target is not None else {"action": action}
+        twins = []
+        for mind, acts in ((StubMind(), [{"kind": "possess", "agent": aid}, {"kind": "act", **out}]),
+                           (Forced(aid, T, out), [])):
+            w = Sim(seed, 14, mind)
+            w.run_until(T)
+            a = w.state["agents"][aid]  # the same occasion and no cooldown in both, so both may act now
+            a["cooldown_until"], a["occasion"] = 0, {"why": "hungry", "who": None, "event": None, "tick": T, "salience": 900}
+            a["inv"]["food"] = max(1, a["inv"]["food"])  # so the mind's occasion is this one, not its hunger
+            w.step(acts)
+            twins.append(w)
+        A, B = twins
+        if any(e.kind in ("sleep", "wake") and e.actor == aid and e.tick == T for e in A.events) or \
+                A.state["agents"][aid]["asleep"]:
+            continue
+        ra = [e.data for e in A.events if e.kind == "receipt" and e.actor == aid and e.tick == T]
+        rb = [e.data for e in B.events if e.kind == "receipt" and e.actor == aid and e.tick == T]
+        if not rb:  # the mind's deliberation didn't fire (daily call budget): nothing to compare
+            continue
+        withheld = next(e.data["withheld"] for e in B.events if e.kind == "mind_deliberate" and e.tick == T and e.actor == aid)
+        if action in withheld:
+            assert ra[0]["why"] == "not offered" and ra[0]["offer"] == [x for x in DELIBERATE_ACTIONS if x not in withheld]
+            continue
+        if action in PERSON_STEPS and ra and ra[0]["why"] == "unknown target":
+            continue  # the mind's schema would not have let it name this person; nothing to compare
+        assert ra == rb, (seed, aid, T, out)
+        compared += 1
+        rolls += any("roll" in r for r in ra)
+    assert compared >= 30 and rolls >= 5, (compared, rolls)
+
+
+# ---------------------------------------------------------------------- through the live runner
+def intent(iid, verb, args, seen):
+    return {"type": "intent", "id": iid, "verb": verb, "args": args, "seen_tick": seen}
+
+
+SCRIPT = [(20, "p", "possess", {"agent": 2}), (21, "a1", "act", {"action": "work"}),
+          (40, "a2", "act", {"action": "ask_food", "target": 4}), (40, "a3", "act", {"action": "rest"}),
+          (75, "a4", "act", {"action": "go_market"}), (90, "r", "release", {})]
+END = 120
+
+
+def batch(script=SCRIPT, end=END):
+    player = {}
+    for t, _, verb, args in script:
+        player.setdefault(t, []).append({"kind": verb, **args})
+    sim = Sim(4, 10, StubMind())
+    sim.run_until(end, player)
+    sim.finish()
+    return log_lines(sim)
+
+
+def drive(r, sent):
+    while r.sim.state["tick"] < END:
+        now = r.sim.state["tick"]
+        for t, iid, verb, args in SCRIPT:
+            if t == now and iid not in sent:
+                sent.add(iid)
+                assert r.submit(intent(iid, verb, args, now)) is None, iid
+        r.step()
+
+
+def test_live_body_equals_batch_and_survives_a_kill_anywhere(tmp_path):
+    out = str(tmp_path / "w")
+    r = live.LiveRunner(out, StubMind(), 4, 10)
+    drive(r, set())
+    r.finish()
+    want = batch()
+    assert [l.rstrip("\n") for l in open(os.path.join(out, "events.jsonl"))] == want
+    assert replay(read_jsonl(os.path.join(out, "events.jsonl")))
+    for trial, kill in enumerate([20, 21, 40, 41, 75, 90, 91]):  # kill right after each scheduling tick
+        d = str(tmp_path / f"k{trial}")
+        r = live.LiveRunner(d, StubMind(), 4, 10)
+        sent = set()
+        while r.sim.state["tick"] < kill:
+            now = r.sim.state["tick"]
+            for t, iid, verb, args in SCRIPT:
+                if t == now:
+                    sent.add(iid)
+                    r.submit(intent(iid, verb, args, now))
+            if now + 1 == kill and trial % 2:
+                break  # killed with the tick's intents scheduled but not run
+            r.step()
+        r = live.LiveRunner(d, StubMind())  # no close(): a crash
+        drive(r, sent)
+        r.finish()
+        assert [l.rstrip("\n") for l in open(os.path.join(d, "events.jsonl"))] == want, kill
+
+
+def test_the_runner_refuses_body_verbs_that_would_break_the_tick(tmp_path):
+    r = live.LiveRunner(str(tmp_path / "w"), StubMind(), 4, 10)
+    no = lambda i, v, a: r.submit(intent(i, v, a, 0))["reason"]
+    assert no("x1", "act", {"action": "work"}) == "no_body"
+    assert no("x2", "release", {}) == "no_body"
+    assert no("x3", "possess", {"agent": 10}) == "bad_args"
+    assert no("x4", "possess", {"agent": True}) == "bad_args"
+    assert no("x5", "act", {"action": "fly"}) == "bad_args"
+    assert r.submit(intent("ok", "possess", {"agent": 1}, 0)) is None
+    assert no("x6", "possess", {"agent": 2}) == "body_taken"
+    assert no("x7", "act", {"action": "steal", "target": -1}) == "bad_args"
+    assert r.submit(intent("ok2", "act", {"action": "steal", "target": 3}, 0)) is None
+    assert r.submit(intent("ok3", "release", {}, 0)) is None
+    assert no("x8", "act", {"action": "work"}) == "no_body"
+    _, events, acks = r.step()
+    assert [a["status"] for a in acks] == ["applied"] * 3
+    assert [e.kind for e in events if e.origin == "player"] == ["possess", "act", "release"]
+
+
+def test_scorecard_and_diagnostics_leave_out_a_possessed_villager():
+    from asiimov.diagnostics import diagnose
+    from asiimov.scorecard import extract
+    sim = Sim(5, 12, StubMind())
+    sim.run_until(2 * TICKS_PER_DAY, body_script(3))
+    events = [Event(**json.loads(l)) for l in log_lines(sim)]
+    assert diagnose(events)["possessed_dropped"] == [3]
+    assert 3 not in extract(events)["periods"] and 4 in extract(events)["periods"]
+    assert diagnose([Event(**json.loads(l)) for l in log_lines(Sim(5, 12, StubMind()))])["possessed_dropped"] == []

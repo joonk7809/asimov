@@ -24,6 +24,7 @@ from collections import Counter
 import json
 import re
 
+from .events import drop_possessed
 from .memory import is_bare_value
 from .sim import TICKS_PER_DAY, WORKPLACE, valid_blocks
 
@@ -133,6 +134,7 @@ def effort(events: list) -> dict:
 
 
 def diagnose(events: list) -> dict:
+    events, possessed = drop_possessed(events)  # a player's body is partly the player's (player-body spec)
     pop = events[0].data.get("population", {}) if events and events[0].kind == "genesis" else {}
     own = {i: frozenset(re.findall(r"[a-z]+", a["name"].lower())) for i, a in enumerate(pop.get("agents", ()))}
     everyone = frozenset().union(*own.values())
@@ -158,7 +160,8 @@ def diagnose(events: list) -> dict:
     return {"plans_after_first": plans, "plan_copy_rate": round(copies / plans, 3) if plans else None,
             "core_entries": entries, "value_word_share": round(bare / entries, 3) if entries else None,
             "person_share": round(person / entries, 3) if entries else None,
-            "place_share": round(place / entries, 3) if entries else None, **food(events), **effort(events)}
+            "place_share": round(place / entries, 3) if entries else None, "possessed_dropped": possessed,
+            **food(events), **effort(events)}
 
 
 def main():

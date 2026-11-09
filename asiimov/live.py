@@ -25,7 +25,7 @@ from collections import defaultdict
 
 from . import persist
 from .minds import NoisyMind, StubMind
-from .sim import ENGINE_VERSION, TICKS_PER_DAY
+from .sim import DELIBERATE_ACTIONS, ENGINE_VERSION, TICKS_PER_DAY
 from .worldmap import position
 
 PROTOCOL = 1
@@ -122,26 +122,60 @@ class LiveRunner:
 
     # ------------------------------------------------------------------ intents
     def verbs(self) -> dict:
-        return {"fire": {"family": [0, len(self.sim.state["families"]) - 1]}}
+        n = len(self.sim.state["agents"])
+        return {"fire": {"family": [0, len(self.sim.state["families"]) - 1]},
+                "possess": {"agent": [0, n - 1]}, "release": {},
+                "act": {"action": list(DELIBERATE_ACTIONS), "target": [0, n - 1]}}
+
+    def _held(self) -> bool:
+        """Whether a body is possessed once the actions already scheduled for this tick apply. Possession
+        changes only through player actions, which all pass through here, so this is exact."""
+        held = "player" in self.sim.state
+        for act in self.run.player.get(self.sim.state["tick"], []):
+            held = {"possess": True, "release": False}.get(act["kind"], held)
+        return held
 
     def _check(self, msg: dict, scope: str) -> tuple[dict | None, str | None]:
-        """The engine action for an intent, or why it is refused. Nothing here reads mutable world state:
-        what the engine checks when the action applies stays the engine's (L2)."""
+        """The engine action for an intent, or why it is refused. This checks shape and the one piece of
+        state the runner owns (who is possessed); whether the action works is the engine's call when it
+        applies (L2), with a receipt."""
         now = self.sim.state["tick"]
         seen = msg.get("seen_tick")
         if scope != "god":
             return None, "scope"
-        if not isinstance(msg.get("verb"), str) or msg["verb"] not in self.verbs():
+        verb = msg.get("verb")
+        if not isinstance(verb, str) or verb not in self.verbs():
             return None, "unknown_verb"
         args = msg.get("args")
-        if not isinstance(args, dict) or set(args) != {"family"} or not _is_int(args["family"]) \
-                or not 0 <= args["family"] < len(self.sim.state["families"]):
+        n = len(self.sim.state["agents"])
+        if not isinstance(args, dict):
+            return None, "bad_args"
+        if verb == "fire":
+            ok = set(args) == {"family"} and _is_int(args["family"]) and 0 <= args["family"] < len(self.sim.state["families"])
+            act = {"kind": "fire", "family": args.get("family")}
+        elif verb == "possess":
+            ok = set(args) == {"agent"} and _is_int(args["agent"]) and 0 <= args["agent"] < n
+            act = {"kind": "possess", "agent": args.get("agent")}
+        elif verb == "release":
+            ok, act = args == {}, {"kind": "release"}
+        else:
+            t = args.get("target")
+            ok = set(args) <= {"action", "target"} and isinstance(args.get("action"), str) \
+                and args["action"] in DELIBERATE_ACTIONS and (t is None or (_is_int(t) and 0 <= t < n))
+            act = {"kind": "act", "action": args.get("action")} if t is None else \
+                {"kind": "act", "action": args.get("action"), "target": t}
+        if not ok:
             return None, "bad_args"
         if not _is_int(seen) or not 0 <= seen <= now:
             return None, "bad_seen_tick"
         if now - seen > MAX_LAG:
             return None, "stale"
-        return {"kind": "fire", "family": args["family"]}, None
+        held = self._held()
+        if verb == "possess" and held:
+            return None, "body_taken"  # release first: one action, one player event (see step)
+        if verb in ("act", "release") and not held:
+            return None, "no_body"
+        return act, None
 
     def submit(self, msg: dict, client: str = "local", scope: str = "god") -> dict | None:
         """Take an intent. Returns its ack now if it is refused or already decided, or None if it will be

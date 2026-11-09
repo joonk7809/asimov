@@ -23,7 +23,7 @@ from collections import Counter, defaultdict
 from dataclasses import replace
 
 from .diagnostics import diagnose
-from .events import read_jsonl, write_jsonl
+from .events import drop_possessed, read_jsonl, write_jsonl
 from .metrics import icc1
 from .minds import ReplayDivergence
 from .memory import SCHEMA, anchors, prompt_hash, render_soul, tokens, unanchored  # noqa: F401 - anchors re-exported
@@ -266,7 +266,9 @@ def _texts(raw: str) -> list[str]:
 
 
 def extract(events: list) -> dict:
-    """Per-agent waking periods with behavior features, and hourly activity counts, from a log."""
+    """Per-agent waking periods with behavior features, and hourly activity counts, from a log. A villager
+    a player possessed is left out (events.drop_possessed)."""
+    events, _ = drop_possessed(events)
     pop = events[0].data["population"]
     n = len(pop["agents"])
     by_tick = defaultdict(list)

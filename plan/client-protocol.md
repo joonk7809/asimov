@@ -45,8 +45,15 @@ sent twice and none skipped.
 - `id`: the client's string, 1 to 64 characters, unique per world. Resending an id gets the recorded
   outcome again and never applies twice.
 - `seen_tick`: the view tick the client was looking at. It's checked, not used to schedule.
-- Verbs in protocol 1: `fire` with `{"family": int}` (the engine's only player verb, sim.py `_player`).
-  Track B adds inhabitant verbs (walk, talk, give, trade) as an engine bump.
+- Verbs in protocol 1 (god scope), each a player action in sim.py `_player`:
+  - `fire` with `{"family": int}`.
+  - `possess` with `{"agent": int}`. Refused with `body_taken` while a body is held (release first).
+  - `release` with `{}`. Refused with `no_body` if none is held.
+  - `act` with `{"action": one of DELIBERATE_ACTIONS, "target": int?}`, on the possessed body. Refused
+    with `no_body` if none is held. Whether the act works is the engine's call in that tick's commit
+    phase, and the outcome is a `receipt` event citing the `act` event (plan/player-body-spec.md). The
+    ack names the `act` event, not the receipt.
+  Protocol 2 adds the inhabitant scope, which sends these on the client's behalf.
 
 `control` (god scope only): `{"type": "control", "op": "pause" | "run" | "step" | "speed", "tps": 2.0}`.
 `step` runs one tick while paused; `speed` takes `tps` between 0.1 and 1000.
