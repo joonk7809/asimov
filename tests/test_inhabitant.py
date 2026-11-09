@@ -175,9 +175,12 @@ def test_an_inhabitant_is_sent_nothing_it_could_not_perceive(tmp_path):
     at its place. The hello is fuzzed. The log replays to the same end hash, so building views changed nothing."""
     out = str(tmp_path / "w")
     runner = live.LiveRunner(out, NoisyMind(), 2, 25, mind_kind="noisy")
-    aid, end = 4, 3 * TICKS_PER_DAY
+    end = 3 * TICKS_PER_DAY
+    for _ in range(200):  # its own mind lives first, so the backlog holds its pre-possession intents
+        runner.step()
+    aid = min(e.actor for e in runner.sim.events if e.kind == "intent_set")
     rng = random.Random(0)
-    stats = {"acts": 0, "receipts": 0, "present": 0, "offers": 0, "others": 0}
+    stats = {"acts": 0, "receipts": 0, "present": 0, "offers": 0, "others": 0, "own_intents": 0}
 
     def check(m, me_pos):
         bad = {k for k, _ in _keys(m)} & FORBIDDEN
@@ -195,6 +198,7 @@ def test_an_inhabitant_is_sent_nothing_it_could_not_perceive(tmp_path):
             assert (e["actor"] == aid or e["kind"] == "fire" or aid in [e["data"].get(k) for k in inhabitant.NAMES]
                     or e["actor"] in here), ("an event it could not witness", e)
             assert not (e["kind"].startswith("intent_") and {"goal", "steps"} & set(e["data"])), e
+            stats["own_intents"] += e["kind"] == "intent_set" and e["actor"] == aid
             if e["actor"] not in (aid, None):  # another villager's: only what it does in plain sight
                 assert e["kind"] in inhabitant.SEEN_NAMING and set(e["data"]) <= set(inhabitant.SEEN_NAMING[e["kind"]]), e
                 assert e["kind"] != "receipt" or e["data"].get("to") == aid, e
@@ -257,6 +261,6 @@ def test_an_inhabitant_is_sent_nothing_it_could_not_perceive(tmp_path):
 
     asyncio.run(main())
     runner.finish()
-    assert stats["acts"] > 20 and stats["receipts"] >= stats["acts"] - 2 and stats["present"] and stats["offers"] and stats["others"]
+    assert stats["acts"] > 20 and stats["receipts"] >= stats["acts"] - 2 and stats["present"] and stats["offers"] and stats["others"] and stats["own_intents"]
     events = read_jsonl(os.path.join(out, "events.jsonl"))  # noisy minds: replay the recorded replies
     assert replay(events).state_hash() == events[-1].data["hash"]
