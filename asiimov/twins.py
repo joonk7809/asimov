@@ -322,7 +322,7 @@ def read_t8(base, swap, noise, pairs, features, skip, boot=2000) -> dict:
             "cells": cells}
 
 
-def _run_or_load(base, live, d, arm, serve, workers, **kw):
+def _run_or_load(base, live, d, arm, serve, workers, summary_extra=None, **kw):
     path = os.path.join(d, "events.jsonl")
     if os.path.exists(path):
         return read_log(path)
@@ -335,6 +335,7 @@ def _run_or_load(base, live, d, arm, serve, workers, **kw):
         os.remove(partial)
     rep = summary(base, sim.events, kw.get("live_agents", ()), kw.get("live_from", 0))
     rep["served"] = dict(mind.counts)
+    rep.update(summary_extra or {})
     if hasattr(live, "stats"):
         rep["llm"] = live.stats()
     with open(os.path.join(d, "summary.json"), "w") as f:
@@ -355,9 +356,11 @@ def t8(base_path: str, live, out: str, arm: str | None, serve: bool, workers: in
     swapped = sorted(a for p in pairs for a in p)
     souls = swapped_souls(pop, pairs)
     os.makedirs(os.path.join(out, "swap-text"), exist_ok=True)
-    with open(os.path.join(out, "swap-text", "souls.json"), "w") as f:  # what replay_twin needs: not in the log
-        json.dump(souls, f, indent=1)
-    swap = _run_or_load(base, live, os.path.join(out, "swap-text"), arm, serve, workers, souls=souls)
+    blob = json.dumps(souls, indent=1).encode()
+    with open(os.path.join(out, "swap-text", "souls.json"), "wb") as f:  # what replay_twin needs: not in the log
+        f.write(blob)
+    swap = _run_or_load(base, live, os.path.join(out, "swap-text"), arm, serve, workers, souls=souls,
+                        summary_extra={"souls_sha256": hashlib.sha256(blob).hexdigest()})
     full = _run_or_load(base, live, os.path.join(out, "swap-full"), arm, serve, workers,
                         genesis=swapped_genesis(pop, pairs))
     noise = _run_or_load(base, live, os.path.join(out, f"noise-{T8_SALT}"), arm, serve, workers,

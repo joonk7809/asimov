@@ -184,11 +184,18 @@ def test_every_test_8_twin_replays_from_its_own_log_and_the_text_swap_needs_its_
     write_jsonl(base, str(path))
     t8(str(path), PromptMind(), str(tmp_path / "t8"), None, serve=True, workers=1)
     d = tmp_path / "t8"
-    souls = json.load(open(d / "swap-text" / "souls.json"))
+    sp = d / "swap-text" / "souls.json"
+    sha = json.load(open(d / "swap-text" / "summary.json"))["souls_sha256"]
     swap = read_log(str(d / "swap-text" / "events.jsonl"))
-    assert logs(replay_twin(swap, souls=souls).events) == logs(swap)
+    assert logs(replay_twin(swap, souls_path=str(sp), souls_sha256=sha).events) == logs(swap)
     with pytest.raises(ReplayDivergence):  # the swap isn't in the log: without its souls it can't replay
         replay_twin(swap)
+    souls = json.load(open(sp))
+    first = next(iter(souls))
+    souls[first] = souls[first].replace("You are ", "You were ")
+    sp.write_text(json.dumps(souls, indent=1))
+    with pytest.raises(ReplayDivergence, match="sha256"):  # an edited souls file is refused before replaying
+        replay_twin(swap, souls_path=str(sp), souls_sha256=sha)
     for name in ("swap-full", "noise-9"):
         ev = read_log(str(d / name / "events.jsonl"))
         assert logs(replay_twin(ev).events) == logs(ev)

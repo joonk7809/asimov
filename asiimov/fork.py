@@ -256,12 +256,21 @@ def run_twin(base, live, out: str | None = None, player: dict | None = None, liv
     return sim, mind
 
 
-def replay_twin(events, arm: str | None = None, souls: dict | None = None) -> Sim:
-    """Replay a twin's log without a model, checking every event, with the soul texts it was run with
-    (a souls= twin's genesis is the base's, so its swap lives in the twin's souls.json, not in the log)."""
+def replay_twin(events, arm: str | None = None, souls_path: str | None = None,
+                souls_sha256: str | None = None) -> Sim:
+    """Replay a twin's log without a model, checking every event. A souls= twin's genesis is the base's, so
+    its swap lives beside the log in a souls file, whose sha256 the twin's summary records: it replays only
+    with that file, and a file whose sha256 doesn't match is refused (Steering, 2026-11-09 10:47Z)."""
     from .minds import ReplayMind
+    souls = {}
+    if souls_path is not None:
+        with open(souls_path, "rb") as f:
+            blob = f.read()
+        if hashlib.sha256(blob).hexdigest() != souls_sha256:
+            raise ReplayDivergence(f"{souls_path} has sha256 {hashlib.sha256(blob).hexdigest()}, the twin recorded {souls_sha256}")
+        souls = json.loads(blob)
     sim = build_sim(events, ReplayMind([e for e in events if e.origin == "mind"]), arm)
-    for aid, text in (souls or {}).items():
+    for aid, text in souls.items():
         sim.state["agents"][int(aid)]["soul"] = text
     sim.expected = events
     sim.run_until(end_tick(events), base_player(events))
