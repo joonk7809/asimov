@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
       - name: Install the pinned Godot
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/godot.zip" "$GODOT_URL"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o "$RUNNER_TEMP/godot.zip" "$GODOT_URL"  # release host 504s now and then
           echo "$GODOT_SHA512  $RUNNER_TEMP/godot.zip" | sha512sum -c -
           unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
           sudo install -m 755 "$RUNNER_TEMP/godot/Godot_v4.3-stable_linux.x86_64" /usr/local/bin/godot

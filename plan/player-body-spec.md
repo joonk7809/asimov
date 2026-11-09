@@ -59,7 +59,9 @@ and replay holds by S2: player events are recorded inputs, like `fire`.
    **One act per body per tick** (`pending` holds one entry per agent). The first act in schedule order
    is taken, and later ones that tick get `"one act per tick"`. If the body is asleep, on its bedtime
    walk, or falling asleep at home that tick (the sleep branch, which files its reflection), the act
-   gets a failed receipt: `"asleep"`, `"bedtime"` or `"falling asleep"`. No queued act ends a tick
+   gets a failed receipt: `"asleep"`, `"bedtime"` or `"falling asleep"`. An act queued before a
+   `release` (or a `possess` that moves the body) in the same tick gets `"released"` at the release
+   and never resolves, so the freed mind is never asked about it (review of #39). No queued act ends a tick
    without a receipt (S8). Queued acts never carry over to the next
    tick: the client resends after reading the receipt. Because every player event (fire, possess, act,
    release) is still emitted at the start of the tick in schedule order, live.py's slot-to-event

@@ -52,6 +52,7 @@ ACTIVITY_PLACE = {"socialize": "plaza", "shop": "market", "explore": "woods"}  #
 PERSON_STEPS = ("seek", "avoid", "give_food", "give_coin", "ask_kin", "ask_food", "buy_from", "steal")
 STEP_DOS = ACTIVITIES + PERSON_STEPS
 INSTANT_STEPS = ("ask_kin", "ask_food", "buy_from", "steal")
+RATED_ACTS = INSTANT_STEPS + ("buy_food",)  # player acts that roll or buy: held to the deliberation cooldown
 REACH_STEPS = ("seek", "give_food", "give_coin")  # go where the target is, then act when both are there
 WAIT_STEPS = REACH_STEPS + ("shop",)  # steps that wait to arrive somewhere, and fail if their time runs out
 STEP_TICKS = {"avoid": 24}  # how long a step lasts (activities, avoid) or may take to get done (the rest)
@@ -126,7 +127,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "15"  # T25 anchored souls, on engine 14 ("t25-1" until merge)
+ENGINE_VERSION = "16"  # the player's body (plan/player-body-spec.md), on engine 15
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
 
@@ -205,6 +206,8 @@ class Sim:
         self.order = order
         self.workers = workers  # concurrent mind calls per tick; never changes the log
         self.pending: dict[int, tuple] = {}  # agent id -> (request, parents, prompt tokens, apply)
+        self.player_pending: dict[int, tuple] = {}  # agent id -> a player act to apply in _commit (no mind call)
+        self._acts: dict[int, list] = {}  # agent id -> this tick's queued player acts: (event, action, target)
         self.expected = expected
         self.events: list[Event] = []
         self.metrics = {"activity": defaultdict(lambda: defaultdict(int))}
@@ -213,7 +216,7 @@ class Sim:
     def snapshot(self) -> dict:
         """Everything needed to continue this world from the next tick, as JSON. Taken between ticks.
         Serialize it without sort_keys, so a rule that iterates a dict sees the same order after restore."""
-        assert not self.pending, "snapshots are taken between ticks"
+        assert not self.pending and not self.player_pending, "snapshots are taken between ticks"
         return {"engine": ENGINE_VERSION, "seed": self.seed, "order": self.order, "tick": self.state["tick"],
                 "n_events": len(self.events), "hash": self.state_hash(), "state": self.state,
                 "rng": self.rng.counters,
@@ -319,7 +322,12 @@ class Sim:
         r_ids = sorted(retry)
         retried = dict(zip(r_ids, dispatch(self.mind, [retry[i] for i in r_ids], self.workers)))
         pending, self.pending = self.pending, {}
-        for aid in self._order(aids):
+        players, self.player_pending = self.player_pending, {}
+        assert not set(players) & set(pending), "a possessed body never has a mind request and a player act"
+        for aid in self._order(aids + list(players)):
+            if aid in players:  # never dispatched to the mind, no mind event: applied from the recorded act
+                self._apply_act(self.state["agents"][aid], *players[aid])
+                continue
             req, parents, prompt_tokens, apply = pending[aid]
             reply = replies[aid]
             data = {"kind": req.kind}
@@ -491,6 +499,7 @@ class Sim:
         st = self.state
         tick = st["tick"]
         agents = st["agents"]
+        self._acts = {}
         for act in player_actions:
             self._player(act)
         for a in agents:
@@ -506,16 +515,22 @@ class Sim:
             if a["asleep"]:
                 if tick >= a["wake_tick"]:
                     self._wake(a, occupancy)
+                self._refuse_acts(a, "asleep")
                 continue
             if tick >= a["sleep_tick"] or a["needs"]["fatigue"] >= 1000:
                 if a["place"] == a["home"]:
                     self._sleep(a, occupancy)
+                    self._refuse_acts(a, "falling asleep")
                 else:
                     self._bedtime_walk(a)
+                    self._refuse_acts(a, "bedtime")
                 continue
             self._act(a)
             self._eat(a)
-            self._maybe_deliberate(a, occupancy)
+            if a["id"] in self._acts:
+                self._player_deliberate(a, occupancy)
+            elif not self._possessed(a):
+                self._maybe_deliberate(a, occupancy)
 
         self._commit()
         self._talk()
@@ -1223,8 +1238,68 @@ class Sim:
                 self._note(b["id"], f"talked with {a['name']} at the {place}")
 
     # ------------------------------------------------------------------ player
+    def _possessed(self, a: dict) -> bool:
+        return self.state.get("player", {}).get("agent") == a["id"]
+
+    def _refuse_acts(self, a: dict, why: str):
+        for eid, action, _ in self._acts.pop(a["id"], []):
+            self._receipt(a, eid, action, False, why)
+
+    def _player_deliberate(self, a: dict, occupancy: dict):
+        """The possessed body's in-the-moment decision, where a mind's deliberation would be filed. Its
+        view, situation and offer are a deliberation request's; it is applied in _commit, in _order."""
+        (eid, action, target), *rest = self._acts.pop(a["id"])
+        for e2, a2, _ in rest:
+            self._receipt(a, e2, a2, False, "one act per tick")
+        if action in RATED_ACTS and self.state["tick"] < a["cooldown_until"]:
+            self._receipt(a, eid, action, False, "cooldown")
+            return
+        view = self._view(a, occupancy)
+        if a["occasion"]:  # what a deliberation's situation would say; shown to the player as the occasion
+            view["occasion"] = {k: a["occasion"].get(k) for k in ("why", "who", "detail")}
+        view["offer"] = self._offer(a, view)
+        self._situation(a, view, "deliberate")  # fills view["people"]; may cut a crowd, as for a mind
+        offer = view["offer"] = self._offer(a, view)
+        if action in RATED_ACTS and action in offer:
+            a["cooldown_until"] = self.state["tick"] + 12
+        self.player_pending[a["id"]] = (eid, action, target, offer, view["people"])
+
+    def _apply_act(self, a: dict, eid: int, action: str, target, offer: list, people: list):
+        """A player act, with the checks a mind's reply schema would have made, then the mind's own path."""
+        if action not in offer:
+            self._receipt(a, eid, action, False, "not offered", extra={"offer": offer})
+        elif action in PERSON_STEPS and target not in people:
+            self._receipt(a, eid, action, False, "unknown target")
+        else:
+            self._resolve(a, {"action": action, "target": target if action in PERSON_STEPS else None}, eid)
+
     def _player(self, act: dict):
-        if act["kind"] == "fire":
+        kind = act["kind"]
+        if kind == "possess":
+            aid = act["agent"]
+            if not (_is_int(aid) and 0 <= aid < len(self.state["agents"])):
+                raise ValueError(f"possess: no agent {aid!r}")
+            if "player" in self.state:  # re-possessing moves the body
+                self._release()
+            eid = self._emit("possess", "player", aid, {"agent": aid})
+            self.state["player"] = {"agent": aid, "event": eid}
+            return eid
+        if kind == "release":
+            if "player" not in self.state:
+                raise ValueError("release: no body is possessed")
+            return self._release()
+        if kind == "act":
+            if "player" not in self.state:
+                raise ValueError("act: no body is possessed")
+            action, target = act["action"], act.get("target")
+            if action not in DELIBERATE_ACTIONS or not (target is None or _is_int(target)):
+                raise ValueError(f"act: bad action {action!r} or target {target!r}")
+            aid = self.state["player"]["agent"]
+            data = {"action": action} if target is None else {"action": action, "target": target}
+            eid = self._emit("act", "player", aid, data, [self.state["player"]["event"]])
+            self._acts.setdefault(aid, []).append((eid, action, target))
+            return eid
+        if kind == "fire":
             fam = self.state["families"][act["family"]]
             eid = self._emit("fire", "player", None, {"family": act["family"]})
             for m in fam["members"]:
@@ -1235,3 +1310,14 @@ class Sim:
                 self._occasion(a, "fire", 900, event=eid)
             return eid
         raise ValueError(f"unknown player action {act['kind']}")
+
+    def _release(self) -> int:
+        p = self.state.pop("player")
+        a = self.state["agents"][p["agent"]]
+        # An act queued this tick before the release (or before a possess moved the body) would resolve on a
+        # body the player no longer holds, and its receipt's occasion would ask the freed mind about the
+        # player's act. It is refused here instead and never resolves; the clear below drops its occasion.
+        for eid, action, _ in self._acts.pop(a["id"], []):
+            self._receipt(a, eid, action, False, "released")
+        a["occasion"] = None  # the player handled whatever it was; the mind isn't asked about it later
+        return self._emit("release", "player", a["id"], {"agent": a["id"]}, [p["event"]])
