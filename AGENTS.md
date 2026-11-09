@@ -41,3 +41,4 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
     python -m asiimov.propagation --agents 100 --seed 1 --fire all@1 --out runs/prop   # who acts differently 1, 3, 7 days after a fire (stub twins, $0)
     python -m asiimov.soak --agents 100 --days 24 --seed 1 --out runs/soak   # long run: invariants every tick, replay from disk
     python -m asiimov.viewer runs/demo/events.jsonl --out runs/demo/view.html   # read-only page: map, timelines, minds, causes (any engine)
+    python -m asiimov.live --out runs/live --agents 25 --tps 2   # live world over WebSocket for clients (plan/client-protocol.md); stub/noisy minds only
