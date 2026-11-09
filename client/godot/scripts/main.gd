@@ -1,6 +1,6 @@
 # The client: draws the map from genesis, villagers from events, a timeline with a scrubber, and sends fire.
 #   godot --path client/godot -- --url ws://127.0.0.1:8765/     live, against python -m asiimov.live
-#   ... --url URL --inhabit 3                                     live as villager 3: its view and its action menu
+#   ... --url URL --inhabit 3 [--token T]                         live as villager 3: its view and its action menu
 #   godot --path client/godot -- --log runs/demo/events.jsonl   a recorded log
 #   ... --log LOG --at TICK --screenshot out.png                  save one frame and quit (needs a display: xvfb-run;
 #                                                                 live, it waits about 3 s first)
@@ -37,6 +37,7 @@ func _ready() -> void:
 	else:
 		client = LiveClient.new()
 		model = client.model
+		client.token = args.get("token", "")
 		if args.has("inhabit"):
 			client.scope = "inhabitant"
 			client.agent = int(args["inhabit"])

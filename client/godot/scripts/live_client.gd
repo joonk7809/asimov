@@ -18,6 +18,7 @@ var ws := WebSocketPeer.new()
 var url := ""
 var scope := "god"
 var agent := -1         # inhabitant scope: the villager this client is
+var token := ""         # the server's --token, when it has one
 var me := {}            # inhabitant scope: welcome.world.me
 var places := {}        # inhabitant scope: the map's places
 var seen_events := []   # inhabitant scope: every event the server sent it, in order
@@ -47,6 +48,8 @@ func poll() -> void:
 	if state == WebSocketPeer.STATE_OPEN and not _hello_sent:
 		_hello_sent = true
 		var hello := {"type": "hello", "protocol": PROTOCOL, "scope": scope, "since": model.events.size()}
+		if token != "":
+			hello["token"] = token
 		if scope == "inhabitant":
 			hello["agent"] = agent
 			hello["since"] = 0

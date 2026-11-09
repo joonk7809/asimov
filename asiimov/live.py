@@ -9,13 +9,21 @@ the engine at the start of the next tick, so a live world is a batch world whose
 late. Wall-clock time, clients, controls and acks go to the sidecar runner.jsonl, never to events.jsonl
 or the state hash.
 
-Stub and noisy minds only: a live run against a served model needs its own charter, and never a pod that
-is serving a canonical run (plan/2d-env-eval.md).
+A live run against a served model (--mind llm) needs its own charter and its own pod, never one serving a
+canonical run (plan/2d-env-eval.md). Test 16b's session is one (plan/next-push-2026-11-09.md, track 3):
+
+    python -m asiimov.live --out runs/s16b --agents 25 --mind llm --llm-url ... --llm-model ... --llm-key ... \
+        --host 0.0.0.0 --token SECRET --tps 0.05
+
+--token makes every hello carry that token: on a public port, nobody else attaches or steers the world.
+Each tick's wall time and mind-call latencies go to the sidecar (`step`), next to each intent's received
+and applied times, so a session's reply latency is measured from runner.jsonl alone.
 """
 import argparse
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
 import struct
@@ -55,13 +63,14 @@ class LiveRunner:
     Not thread-safe: submit(), step() and view() must not overlap."""
 
     def __init__(self, out: str, mind, seed: int = 1, agents: int = 25, order: str = "id",
-                 snapshot_every: int = TICKS_PER_DAY, mind_kind: str | None = None):
+                 snapshot_every: int = TICKS_PER_DAY, mind_kind: str | None = None, workers: int = 1):
         self.out = out
+        self.mind = mind
         if os.path.exists(os.path.join(out, "events.jsonl")):
-            self.run = persist.resume(out, mind, snapshot_every=snapshot_every)
+            self.run = persist.resume(out, mind, workers, snapshot_every=snapshot_every)
             self.reopened = True
         else:
-            self.run = persist.start(out, seed, agents, mind, order, {}, snapshot_every=snapshot_every,
+            self.run = persist.start(out, seed, agents, mind, order, {}, workers, snapshot_every=snapshot_every,
                                      mind_kind=mind_kind)
             self.reopened = False
         self.sim = self.run.sim
@@ -277,9 +286,12 @@ class LiveRunner:
             self.orphan_at = None
             if self.inhabitant is None and self._held():
                 self._internal({"kind": "release"})  # reopened with a body held and nobody came back for it
-        n0 = len(sim.events)
+        n0, c0, t0 = len(sim.events), len(getattr(self.mind, "calls", ())), time.time()
         self.run.advance(tick + 1)
         events = sim.events[n0:]
+        lat = [c["latency_s"] for c in getattr(self.mind, "calls", [])[c0:]]
+        self._side("step", tick=tick, wall_s=round(time.time() - t0, 3), calls=len(lat),
+                   lat_max_s=max(lat, default=0), lat_sum_s=round(sum(lat), 3))
         due = sorted((rec["slot"], iid) for iid, rec in self.intents.items()
                      if rec["status"] == "pending" and rec["tick"] == tick)
         acks = []
@@ -485,8 +497,8 @@ class Hub:
     """Paces the runner and fans out to clients. Everything that touches the runner happens between ticks,
     in the tick loop; a tick itself runs in a worker thread so the server keeps reading while it does."""
 
-    def __init__(self, runner: LiveRunner, tps: float = 1.0, paused: bool = False):
-        self.runner, self.tps, self.paused = runner, tps, paused
+    def __init__(self, runner: LiveRunner, tps: float = 1.0, paused: bool = False, token: str | None = None):
+        self.runner, self.tps, self.paused, self.token = runner, tps, paused, token
         self.conns: set[Conn] = set()
         self.inbox: list[tuple[Conn, dict]] = []
         self.wake = asyncio.Event()
@@ -508,7 +520,8 @@ class Hub:
                 except (ValueError, RecursionError):
                     m = None
                 if conn.scope is None:
-                    err = _hello_error(m)
+                    err = _hello_error(m) or (self.token is not None and not (isinstance(m.get("token"), str) and
+                        hmac.compare_digest(m["token"].encode(), self.token.encode())) and "bad_token")
                     if err:
                         conn.close(err)
                         break
@@ -571,7 +584,7 @@ class Hub:
     def _control(self, conn: Conn, m: dict):
         op, tps = m.get("op"), m.get("tps")
         if conn.scope != "god" or op not in ("pause", "run", "step", "speed") or \
-                (op == "speed" and not (isinstance(tps, (int, float)) and not isinstance(tps, bool) and 0.1 <= tps <= 1000)):
+                (op == "speed" and not (isinstance(tps, (int, float)) and not isinstance(tps, bool) and 0.01 <= tps <= 1000)):
             conn.send(msg("error", reason="bad_control"))
             return
         if op == "pause":
@@ -590,15 +603,23 @@ class Hub:
 
     async def tick_loop(self):
         loop = asyncio.get_running_loop()
-        due = loop.time()
+        last = None  # when the last tick started; None steps at once (on start and on leaving pause)
         while not self.stopping:
             self._drain()
             if self.paused and not self.step_once:
                 self.wake.clear()
                 await self.wake.wait()
-                due = loop.time()
+                last = None
                 continue
-            self.step_once = False
+            wait = 0 if self.step_once or last is None else last + 1 / self.tps - loop.time()
+            if wait > 0:  # a message is drained and the wait resumes, at the tps it now has: only time steps
+                self.wake.clear()
+                try:
+                    await asyncio.wait_for(self.wake.wait(), wait)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            self.step_once, last = False, loop.time()
             tick, events, acks = await asyncio.to_thread(self.runner.step)
             dicts = event_dicts(events)
             text = json.dumps(msg("tick", tick=tick, events=dicts, view=self.runner.view()))
@@ -611,12 +632,6 @@ class Hub:
                 c = self.waiters.pop(ack["id"], None)
                 if c:
                     c.send(ack)
-            due = max(due + 1 / self.tps, loop.time())
-            self.wake.clear()
-            try:  # a control or hello cuts the wait short
-                await asyncio.wait_for(self.wake.wait(), due - loop.time())
-            except asyncio.TimeoutError:
-                pass
 
 
 def _hello_error(m) -> str | None:
@@ -636,9 +651,9 @@ def _hello_error(m) -> str | None:
 
 
 async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, tps: float = 1.0,
-                paused: bool = False, started=None):
+                paused: bool = False, started=None, token: str | None = None):
     """Run the hub until cancelled. `started(port, hub)` is called once the socket listens."""
-    hub = Hub(runner, tps, paused)
+    hub = Hub(runner, tps, paused, token)
     server = await asyncio.start_server(hub.handle, host, port, limit=1 << 16)
     if started:
         started(server.sockets[0].getsockname()[1], hub)
@@ -657,23 +672,37 @@ def main(argv=None):
     ap.add_argument("--out", default="runs/live", help="run directory; reopened if it holds a world")
     ap.add_argument("--agents", type=int, default=25)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--mind", choices=["stub", "noisy"], default=None, help="default stub; on reopen, the run's")
+    ap.add_argument("--mind", choices=["stub", "noisy", "llm"], default=None, help="default stub; on reopen, the run's")
+    ap.add_argument("--pod", help="pod id from scripts/runpod_pod.py (url, model and key)")
+    ap.add_argument("--llm-url")
+    ap.add_argument("--llm-model")
+    ap.add_argument("--llm-key")
+    ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument("--workers", type=int, default=None, help="concurrent mind calls (default 64 for llm, else 1)")
+    ap.add_argument("--token", default=None, help="every hello must carry this token (use it on a public port)")
     ap.add_argument("--tps", type=float, default=1.0, help="ticks per wall-clock second")
     ap.add_argument("--paused", action="store_true")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args(argv)
+    if args.token is None and args.host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit(f"--host {args.host} is not loopback: pass --token")
     kind = args.mind
     if kind is None:
         kind = (persist.config(args.out).get("mind") if os.path.exists(os.path.join(args.out, "run.json")) else None) or "stub"
-    if kind not in ("stub", "noisy"):
-        raise SystemExit(f"{args.out} was run with mind {kind!r}; the live runner serves stub and noisy minds only")
-    runner = LiveRunner(args.out, StubMind() if kind == "stub" else NoisyMind(), args.seed, args.agents,
-                        mind_kind=kind)
+    if kind not in ("stub", "noisy", "llm"):
+        raise SystemExit(f"{args.out} was run with mind {kind!r}")
+    if kind == "llm":
+        from .run import llm_from_args
+        mind = llm_from_args(args)[0]
+    else:
+        mind = StubMind() if kind == "stub" else NoisyMind()
+    runner = LiveRunner(args.out, mind, args.seed, args.agents, mind_kind=kind,
+                        workers=args.workers or (64 if kind == "llm" else 1))
     print(f"{'reopened' if runner.reopened else 'new world'} {args.out} at tick {runner.sim.state['tick']}, "
           f"engine {ENGINE_VERSION}, ws://{args.host}:{args.port}/", file=sys.stderr, flush=True)
     try:
-        asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused))
+        asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token))
     except KeyboardInterrupt:
         pass
     finally:
