@@ -38,8 +38,9 @@ and the villager's mind deliberates again. While an inhabitant is connected, god
 gets `inhabited` for `possess`, `release` and `act`.
 
 If the world reopens (after a crash or a stop) with an inhabitant's body still held, a hello for that
-same villager claims it with no new `possess`. If nobody does within 36 ticks of the reopened view tick,
-the runner records `release`. A body possessed from god scope is left alone, as it is when a god client
+same villager claims it with no new `possess`. If nobody does within 36 ticks, the runner records
+`release`. The 36 ticks count from the reopened view tick, or from the tick after the scheduled
+`possess` when a crash re-run left the view before it. A body possessed from god scope is left alone, as it is when a god client
 disconnects.
 
 An inhabitant sends only `act` (anything else gets `scope`). It gets:
@@ -47,9 +48,12 @@ An inhabitant sends only `act` (anything else gets `scope`). It gets:
   plus `view_tick`, `paused`, `tps`, `verbs` (`act` only) and its first `view`.
 - `events` backlog and `tick` messages carrying only events it would witness: its own, those naming it
   (`data.with`, `to`, `target` or `household`), public ones (`fire`), and, on the tick they happen,
-  those by people at its place. A backlog has no co-presence history, so it carries only the first
-  three. No mind event is ever sent (its own plan is in the view), and every event is sent without its
-  `mind` record or chance-stream fields.
+  those by people at its place. Of another villager's events it gets only what that villager does in
+  plain sight, by kind and field (`inhabitant.SEEN`: activity, arrive, wake, sleep, talk, meet, snub,
+  eat, sell), plus a receipt whose `to` names it. Never another's intent_*, plan_receipt or day_rhythm.
+  A backlog has no co-presence history, so it carries only its own, naming and public events. No mind
+  event is ever sent (its own plan is in the view), and every event is sent without its `mind` record or
+  chance-stream fields.
 - `tick.view`, built field by field from `inhabitant.VIEW_KEYS`: `tick, place, route, pos, activity,
   asleep, hunger, food, coin, plan` (activity, start_h, end_h), `recent, present` (id, name, role, kin,
   has_food, pos), `kin` (id, name, home), `market_food` (at the market only), `occasion` (why, who,

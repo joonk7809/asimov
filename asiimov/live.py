@@ -79,9 +79,9 @@ class LiveRunner:
         # An inhabitant's body still held on reopen (a crash, or a stop while it was connected) is released
         # ORPHAN_TICKS later unless an inhabitant says hello for it. A god-scope possession is left alone,
         # as it is on a god client's disconnect.
-        held, last = self._held_agent(), self._last_inhabit
+        (held, since), last = self._held_from(), self._last_inhabit
         orphan = held is not None and last is not None and last["kind"] == "inhabit" and last["agent"] == held
-        self.orphan_at = self.sim.state["tick"] + ORPHAN_TICKS if orphan else None
+        self.orphan_at = since + ORPHAN_TICKS if orphan else None
         self._side("open", reopened=self.reopened, view_tick=self.sim.state["tick"], n_events=len(self.sim.events))
 
     # ------------------------------------------------------------------ sidecar
@@ -139,12 +139,20 @@ class LiveRunner:
                 "act": {"action": list(DELIBERATE_ACTIONS), "target": [0, n - 1]}}
 
     def _held_agent(self) -> int | None:
-        """The body possessed once the actions already scheduled for this tick apply. Possession changes
-        only through player actions, which all pass through here, so this is exact."""
-        held = self.sim.state.get("player", {}).get("agent")
-        for act in self.run.player.get(self.sim.state["tick"], []):
-            held = {"possess": act.get("agent"), "release": None}.get(act["kind"], held)
-        return held
+        return self._held_from()[0]
+
+    def _held_from(self) -> tuple[int | None, int]:
+        """The body possessed once every action already scheduled applies, and the tick that state takes
+        effect. Scheduled actions can lie past the view: a crash reopen re-runs ticks whose actions run.json
+        already holds. Possession changes only through player actions, which all pass through here, so this
+        is exact."""
+        now = self.sim.state["tick"]
+        held, since = self.sim.state.get("player", {}).get("agent"), now
+        for t in sorted(t for t in self.run.player if t >= now):
+            for act in self.run.player[t]:
+                if act["kind"] in ("possess", "release"):
+                    held, since = (act["agent"] if act["kind"] == "possess" else None), t + 1
+        return held, since
 
     def _held(self) -> bool:
         return self._held_agent() is not None
@@ -320,7 +328,7 @@ class LiveRunner:
     def inhabitant_tick(self, tick: int, events: list[dict], aid: int) -> dict:
         """A tick as an inhabitant gets it: the events it witnessed and its own whitelisted view."""
         here = set(inhabitant.present_ids(self.sim, aid))
-        return msg("tick", tick=tick, events=[inhabitant.scrub(e) for e in events if inhabitant.witnessed(e, aid, here, tick)],
+        return msg("tick", tick=tick, events=[inhabitant.scrub(e, aid) for e in events if inhabitant.witnessed(e, aid, here, tick)],
                    view=inhabitant.view(self.sim, aid))
 
     def welcome(self, scope: str, paused: bool, tps: float) -> dict:
@@ -550,7 +558,7 @@ class Hub:
             return
         conn.send(self.runner.welcome(conn.scope, self.paused, self.tps))
         if conn.scope == "inhabitant":  # its own, the ones naming it and public ones; no co-presence history
-            mine = [inhabitant.scrub(e) for e in event_dicts(events[since:])
+            mine = [inhabitant.scrub(e, conn.agent) for e in event_dicts(events[since:])
                     if inhabitant.witnessed(e, conn.agent, set(), -1)]
             for i in range(0, len(mine), BACKLOG_CHUNK):
                 conn.send(msg("events", events=mine[i:i + BACKLOG_CHUNK]))

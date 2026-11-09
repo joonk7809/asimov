@@ -12,6 +12,12 @@ VIEW_KEYS = ("tick", "place", "route", "pos", "activity", "asleep", "hunger", "f
              "present", "kin", "market_food", "occasion", "offer", "cooldown_until")
 PUBLIC = frozenset({"fire"})            # events the whole village sees
 NAMES = ("with", "to", "target", "household")  # data fields that name the villager an event is about
+# Another villager's events it can see, and the fields of each: what it does in plain sight. Nothing that
+# is that villager's mind (intent_*, plan_receipt), its body clock (day_rhythm) or its memory (sleep's counts).
+SEEN = {"activity": ("activity", "place", "arrive", "from"), "arrive": ("place",), "wake": ("place",),
+        "sleep": (), "talk": ("with", "place", "gossip"), "meet": ("with", "place"), "snub": ("with",),
+        "eat": ("household",), "sell": ("food",), "fire": ("family",)}
+SEEN_NAMING = {**SEEN, "receipt": ("action", "ok", "why", "to")}  # also a receipt for an act aimed at it
 
 
 def _pos(sim, a) -> list[int]:
@@ -78,13 +84,19 @@ def witnessed(e: dict, aid: int, here: set, tick: int) -> bool:
     tick it happens, live) one by someone at its place. Never a mind event: its own plan is in the view."""
     if e["origin"] == "mind" or e["kind"] in ("genesis", "checkpoint", "end"):
         return False
-    d = e["data"]
-    return (e["actor"] == aid or e["kind"] in PUBLIC or any(d.get(k) == aid for k in NAMES)
-            or (e["tick"] == tick and e["actor"] in here))
+    if e["actor"] == aid or e["kind"] in PUBLIC:
+        return True
+    if e["kind"] in SEEN_NAMING and any(e["data"].get(k) == aid for k in NAMES):
+        return True
+    return e["kind"] in SEEN and e["tick"] == tick and e["actor"] in here
 
 
-def scrub(e: dict) -> dict:
-    """An event as an inhabitant gets it: no mind record (prompt hash, raw output), no chance-stream draws."""
-    data = {k: v for k, v in e["data"].items() if k not in ("stream", "index", "pick_stream")}
+def scrub(e: dict, aid: int) -> dict:
+    """An event as an inhabitant gets it: no mind record (prompt hash, raw output), no chance-stream draws,
+    and of another villager's event only the fields SEEN lists."""
+    if e["actor"] == aid:
+        data = {k: v for k, v in e["data"].items() if k not in ("stream", "index", "pick_stream", "jitter_min")}
+    else:
+        data = {k: e["data"][k] for k in SEEN_NAMING[e["kind"]] if k in e["data"]}
     return {"id": e["id"], "tick": e["tick"], "kind": e["kind"], "origin": e["origin"], "actor": e["actor"],
             "data": data, "parents": e["parents"]}

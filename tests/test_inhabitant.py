@@ -112,6 +112,26 @@ def test_a_body_left_held_by_a_crash_is_released_36_ticks_after_reopening(tmp_pa
     assert log(out) == batch_of(out)
 
 
+def test_a_crash_that_rolls_back_past_the_possess_still_releases_the_body(tmp_path):
+    """Review of #40: a reopen re-runs ticks whose possess run.json already holds, so the view can sit
+    before the possess. The body still counts as held, from the tick the possess applies."""
+    out = str(tmp_path / "w")
+    r = live.LiveRunner(out, StubMind(), 3, 8, snapshot_every=10 ** 6)
+    for t in range(7):
+        if t == 5:
+            assert r.inhabit(2, "c1") is None
+        r.step()
+    assert r.sim.state["player"]["agent"] == 2
+    r = live.LiveRunner(out, StubMind())  # crash: resume re-runs from genesis and drops the last tick
+    assert r.sim.state["tick"] < 6 and "player" not in r.sim.state
+    assert r.orphan_at == 6 + live.ORPHAN_TICKS and r.inhabit(3, "c2") == "body_taken"
+    while r.sim.state["tick"] < 60:
+        r.step()
+    r.finish()
+    assert [e.tick for e in read_jsonl(os.path.join(out, "events.jsonl")) if e.kind == "release"] == [6 + live.ORPHAN_TICKS]
+    assert log(out) == batch_of(out)
+
+
 def test_an_inhabitant_that_comes_back_claims_its_body_and_another_cannot(tmp_path):
     out = str(tmp_path / "w")
     r = live.LiveRunner(out, StubMind(), SEED, AGENTS)
@@ -174,7 +194,10 @@ def test_an_inhabitant_is_sent_nothing_it_could_not_perceive(tmp_path):
             assert e["kind"] not in ("genesis", "checkpoint") and e["origin"] != "mind"
             assert (e["actor"] == aid or e["kind"] == "fire" or aid in [e["data"].get(k) for k in inhabitant.NAMES]
                     or e["actor"] in here), ("an event it could not witness", e)
-            stats["others"] += e["actor"] not in (aid, None)
+            if e["actor"] not in (aid, None):  # another villager's: only what it does in plain sight
+                assert e["kind"] in inhabitant.SEEN_NAMING and set(e["data"]) <= set(inhabitant.SEEN_NAMING[e["kind"]]), e
+                assert e["kind"] != "receipt" or e["data"].get("to") == aid, e
+                stats["others"] += 1
 
     async def main():
         ready = asyncio.get_running_loop().create_future()
