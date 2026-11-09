@@ -176,7 +176,7 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "17": "981d6255337c66f57bb9ec1f1230e3aad8ee30ef31d03a3056a55f5e483075a0",  # an idle body's mind takes over; only the engine field differs from 16
           "tithe-1": "d0e6fa0c0ec9feaff5f97040248904c7bf0959d0c5dfa0a7031903db214281b5",  # B5 coin sink, on 17, before its number
           "18": "90ff72036ee3f1a7098a5205eb87322ae78079302f2e1252e81a5a65e7bef4a8",  # B5 coin sink; only the engine field differs from tithe-1
-          "pay-1": "61679536446c02b8118cc68a0b4b5692dbd4c6c7ac31a0d1d944bccc0fa05f8e"}  # B5 pay compression, on 18, before its number
+          "pay-1": "68989ccaaca8bef56d493eb158644e2e77a459d831091ca60ebfd87dc068e999"}  # B5 pay compression, on 18, before its number
 
 
 def test_log_changes_bump_the_engine_version():

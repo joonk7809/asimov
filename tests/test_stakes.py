@@ -71,19 +71,21 @@ def _rates(sim):
 
 
 def test_pay_pulls_each_working_adult_toward_its_trades_mean_and_keeps_that_mean():
-    on = Sim(3, 100, StubMind())
-    off = Sim(3, 100, StubMind(), genesis={**generate_population(3, 100), "stakes": {"tithe": DEFAULT_STAKES["tithe"]}})
-    r_on, r_off = _rates(on), _rates(off)
+    """Steering's capacity check (21:22Z): each trade's mean work speed equals the unpulled world's (tithe-1's),
+    within rounding to nearest, at every seed tried."""
     pull = DEFAULT_STAKES["pay"]["pull_pct"]
-    trades = {a["role"] for a in on.state["agents"] if a["id"] in r_on}
-    for t in trades:
-        ids = [a["id"] for a in on.state["agents"] if a["role"] == t]
-        mean = sum(r_off[i] for i in ids) // len(ids)
-        for i in ids:
-            assert r_on[i] == mean + (r_off[i] - mean) * (100 - pull) // 100
-            assert min(r_off[i], mean) <= r_on[i] <= max(r_off[i], mean)  # nobody passes the mean; order kept
-        assert abs(sum(r_on[i] for i in ids) / len(ids) - mean) < 1  # the trade's speed is unchanged, up to rounding
-    assert max(r_on.values()) / min(r_on.values()) < max(r_off.values()) / min(r_off.values())
+    for seed in range(1, 11):
+        on = Sim(seed, 100, StubMind())
+        off = Sim(seed, 100, StubMind(), genesis={**generate_population(seed, 100), "stakes": {"tithe": DEFAULT_STAKES["tithe"]}})
+        r_on, r_off = _rates(on), _rates(off)
+        for t in {a["role"] for a in on.state["agents"] if a["id"] in r_on}:
+            ids = [a["id"] for a in on.state["agents"] if a["role"] == t]
+            mean = sum(r_off[i] for i in ids) / len(ids)  # tithe-1's exact trade average
+            for i in ids:
+                assert abs(r_on[i] - (mean + (r_off[i] - mean) * (100 - pull) / 100)) <= 0.5
+                assert min(r_off[i], mean) - 0.5 <= r_on[i] <= max(r_off[i], mean) + 0.5  # nobody passes the mean
+            assert abs(sum(r_on[i] for i in ids) / len(ids) - mean) <= 0.5
+        assert max(r_on.values()) / min(r_on.values()) < max(r_off.values()) / min(r_off.values())
 
 
 def test_pay_off_is_the_body_speed_and_is_recorded_in_genesis():

@@ -843,20 +843,22 @@ class Sim:
 
     def _work_rate(self, a: dict) -> int:
         """Work progress per tick: the body's own speed, pulled toward its trade's mean under pay (B5). The pull is
-        to the trade's mean, not the village's, so each trade (and so food and coin made) keeps its output."""
+        to the trade's mean, not the village's, so each trade (and so food and coin made) keeps its capacity.
+        Rounded to nearest from the trade's exact sum, so the trade's mean is kept to within rounding, unbiased."""
         r = a["body"]["strength"] * a["body"]["stamina"] // 1000
         p = self.state.get("stakes", {}).get("pay")
         if not p or a["role"] in ("child", "elder"):
             return r
-        mean = self._mean_rate(a["role"])
-        return mean + (r - mean) * (100 - p["pull_pct"]) // 100
+        total, n = self._trade_speed(a["role"])
+        pull = p["pull_pct"]
+        return (pull * total + (100 - pull) * n * r + 50 * n) // (100 * n)
 
-    def _mean_rate(self, role: str) -> int:
-        """A trade's mean body speed: fixed by genesis (bodies and roles never change), so cached."""
-        cache = self.__dict__.setdefault("_mean_rate_cache", {})
+    def _trade_speed(self, role: str) -> tuple[int, int]:
+        """A trade's summed body speed and head count: fixed by genesis (bodies and roles never change), so cached."""
+        cache = self.__dict__.setdefault("_trade_speed_cache", {})
         if role not in cache:
             xs = [b["body"]["strength"] * b["body"]["stamina"] // 1000 for b in self.state["agents"] if b["role"] == role]
-            cache[role] = sum(xs) // max(1, len(xs))
+            cache[role] = (sum(xs), max(1, len(xs)))
         return cache[role]
 
     def _tithe(self):
