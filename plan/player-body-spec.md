@@ -39,6 +39,9 @@ and replay holds by S2: player events are recorded inputs, like `fire`.
    - computes `view = _view(a, occupancy)`, `_situation` (which fills `view["people"]`) and
      `offer = _offer(a, view)`, exactly as a deliberation request would;
    - registers it in `pending` with the player's output as its reply and the act event as its parent.
+     A player entry is never dispatched to the mind and emits no `mind_*` event, so bar 4 holds and
+     ReplayMind's order of recorded mind events is untouched. `_commit` applies it in its `_order` slot
+     straight from the recorded act.
 
    `_commit` then applies it in `_order` among the minds' replies. So its receipts, rolls and ordering
    against other villagers are those a mind's identical deliberation would get on that tick. At commit
@@ -53,9 +56,16 @@ and replay holds by S2: player events are recorded inputs, like `fire`.
    or start a reach step (work, socialize, home, rest, explore, go_market, seek, avoid, give_*, wait)
    aren't limited, since they roll nothing.
 
-   If the body is asleep, or walking home for bed, on the tick the act arrives, the act event is
-   emitted with a failed receipt, `"asleep"` or `"bedtime"`. Queued acts never carry over to the next
-   tick: the client resends after reading the receipt. The `goal`/`then` intent fields aren't exposed,
+   **One act per body per tick** (`pending` holds one entry per agent). The first act in schedule order
+   is taken, and later ones that tick get `"one act per tick"`. If the body is asleep, on its bedtime
+   walk, or falling asleep at home that tick (the sleep branch, which files its reflection), the act
+   gets a failed receipt: `"asleep"`, `"bedtime"` or `"falling asleep"`. No queued act ends a tick
+   without a receipt (S8). Queued acts never carry over to the next
+   tick: the client resends after reading the receipt. Because every player event (fire, possess, act,
+   release) is still emitted at the start of the tick in schedule order, live.py's slot-to-event
+   mapping (`step`, `_reconcile`) and the protocol's "a player action applies at the start of its
+   tick" both hold. The protocol line becomes "is recorded at the start of its tick". An act's
+   receipt follows later in the same tick, and the ack names the act event. The `goal`/`then` intent fields aren't exposed,
    because the player is the intent. Replay is unchanged: `replay()` passes the player events of each
    tick back to `step`, and `_player` queues the acts again.
 3. Guard: `_maybe_deliberate` skips the possessed villager. Its occasions (hungry, robbed, refused, fire and the rest of `OCCASIONS`) still
