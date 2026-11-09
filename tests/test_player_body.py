@@ -348,3 +348,31 @@ def test_the_hand_back_never_asks_the_mind_about_the_players_own_act():
                 assert not set(e.parents) & mine, (aid, e)
                 cases += 1
     assert cases >= 5  # idle deliberations that could have cited the acts
+
+
+def test_a_player_steps_late_failure_is_never_the_idle_minds_occasion_across_a_kill(tmp_path):
+    """Review of #42 (Steering, and k42b): an act that starts a step (seek, give_food) keeps the act as the
+    step's holder, and the step can fail ticks later, after the hand-back. Its receipt cites the act, so
+    the occasion is the player's by ancestry. A kill and resume between the order and the failure keeps it."""
+    from asiimov import persist
+    late = cases = 0
+    for aid in range(25):
+        player = {65: [{"kind": "possess", "agent": aid}],
+                  66: [{"kind": "act", "action": "seek", "target": (aid + 7) % 25}],
+                  70: [{"kind": "act", "action": "give_food", "target": (aid + 1) % 25}]}
+        out = str(tmp_path / f"w{aid}")
+        run = persist.start(out, 1, 25, StubMind(), "id", player, snapshot_every=24)
+        run.advance(71)  # after the orders, before the steps' late receipts and the hand-back
+        run = persist.resume(out, StubMind())  # a crash: no finish
+        run.advance(140)
+        run.finish()
+        ev = run.sim.events
+        acts = {e.id for e in ev if e.kind == "act"}
+        theirs = {e.id for e in ev if e.kind == "receipt" and e.parents and e.parents[0] in acts}
+        late += sum(1 for e in ev if e.id in theirs and not e.data["ok"] and e.tick > ev[e.parents[0]].tick)
+        for e in ev:
+            if e.kind == "mind_deliberate" and e.actor == aid and e.tick >= 70:
+                assert not set(e.parents) & (acts | theirs), (aid, e)
+                cases += 1
+        assert replay(ev).state_hash() == run.sim.state_hash()
+    assert late and cases >= 5, (late, cases)  # late failures happened, and idle minds were asked

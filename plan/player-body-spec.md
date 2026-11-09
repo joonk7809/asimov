@@ -75,8 +75,8 @@ and replay holds by S2: player events are recorded inputs, like `fire`.
    its own mind deliberates again, on its occasions as any villager's does, until the next order takes
    the body back (joon chose this on 2026-11-09, engine label idle-1). `state["player"]["order"]` holds
    the last order's tick. Like `release`, the hand-back never asks the mind about the player's own act:
-   an occasion filed by an act's receipt (a refusal or failure) is dropped when the guard lifts (review
-   of #42). Its occasions (hungry, robbed, refused, fire and the rest of `OCCASIONS`) still
+   an occasion filed by a receipt whose parent is a player `act` (a refusal or failure, on the act's tick
+   or later, when a step the act started fails) is dropped when the guard lifts (review of #42). Its occasions (hungry, robbed, refused, fire and the rest of `OCCASIONS`) still
    fire, and they're shown to the player as prompts to act (the inhabitant view's `occasion`).
 4. As in the recommended option, wake plans and night reflection still go to the villager's mind, so
    it keeps one coherent memory and a day plan. The habit/plan layer runs between orders, and an order
