@@ -9,7 +9,7 @@ from .worldmap import position
 
 # The per-tick view's keys, as the spec lists them. A new field needs a spec line, and bar 5 checks this.
 VIEW_KEYS = ("tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan", "recent",
-             "present", "kin", "market_food", "occasion", "offer", "cooldown_until")
+             "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent")
 PUBLIC = frozenset({"fire"})            # events the whole village sees
 NAMES = ("with", "to", "target", "household")  # data fields that name the villager an event is about
 # Another villager's events it can see, and the fields of each: what it does in plain sight. Nothing that
@@ -60,7 +60,12 @@ def view(sim, aid: int) -> dict:
            "present": [{"id": o, "name": agents[o]["name"], "role": agents[o]["role"], "kin": o in fam,
                         "has_food": agents[o]["inv"]["food"] > 0, "pos": _pos(sim, agents[o])} for o in here],
            "kin": [{"id": m, "name": agents[m]["name"], "home": agents[m]["home"]} for m in fam if m != aid],
-           "occasion": None, "offer": {}, "cooldown_until": a["cooldown_until"]}
+           "occasion": None, "offer": {}, "cooldown_until": a["cooldown_until"], "food_price": sim._price(),
+           "intent": None}
+    it = a["intent"]
+    if it:  # its own mind's words: what this body meant to do (Steering, 2026-11-10; never another's)
+        out["intent"] = {"goal": it["goal"], "i": it["i"],
+                         "steps": [{"do": st["do"], "target": st.get("target")} for st in it["steps"]]}
     if a["place"] == "market":
         out["market_food"] = st["market_food"]
     occ = a["occasion"]
@@ -94,9 +99,8 @@ def witnessed(e: dict, aid: int, here: set, tick: int) -> bool:
 def scrub(e: dict, aid: int) -> dict:
     """An event as an inhabitant gets it: no mind record (prompt hash, raw output), no chance-stream draws,
     and of another villager's event only the fields SEEN lists."""
-    if e["actor"] == aid:  # its own, but never its mind's words: an intent's goal and steps are the reply's
-        data = {k: v for k, v in e["data"].items() if k not in ("stream", "index", "pick_stream", "jitter_min")
-                and not (e["kind"].startswith("intent_") and k in ("goal", "steps"))}
+    if e["actor"] == aid:  # its own, with its own intent's goal and steps (what it meant to do)
+        data = {k: v for k, v in e["data"].items() if k not in ("stream", "index", "pick_stream", "jitter_min")}
     else:
         data = {k: e["data"][k] for k in SEEN_NAMING[e["kind"]] if k in e["data"]}
     return {"id": e["id"], "tick": e["tick"], "kind": e["kind"], "origin": e["origin"], "actor": e["actor"],

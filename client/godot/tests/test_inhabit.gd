@@ -9,7 +9,7 @@ extends SceneTree
 const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
 const VIEW_KEYS := ["tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan",
-		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until"]
+		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent"]
 
 var god := LiveClient.new()
 var me := LiveClient.new()
@@ -22,6 +22,19 @@ var done := false
 
 
 func _init() -> void:
+	# Which buttons are left off: only the ones the engine can only refuse (sim.INSTANT_STEPS elsewhere,
+	# ask_kin of non-family). Family elsewhere keeps the gifts, seek and avoid: a gift walks there.
+	var elsewhere := {}
+	var here_kin := {7: true}
+	var here_other := {8: false}
+	for c in [["give_food", 5, elsewhere, true], ["give_coin", 5, elsewhere, true], ["avoid", 5, elsewhere, true],
+			["seek", 5, elsewhere, true], ["ask_food", 5, elsewhere, false], ["buy_from", 5, elsewhere, false],
+			["steal", 5, elsewhere, false], ["ask_kin", 5, elsewhere, false], ["ask_kin", 7, here_kin, true],
+			["ask_kin", 8, here_other, false], ["ask_food", 8, here_other, true], ["work", -1, elsewhere, true]]:
+		if Words.shown({"action": c[0], "target": c[1]}, c[2]) != c[3]:
+			printerr("button %s for %d shown should be %s" % [c[0], c[1], c[3]])
+			quit(1)
+			return
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
 		want_ticks = int(a[2])

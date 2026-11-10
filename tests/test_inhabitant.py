@@ -199,7 +199,7 @@ def test_an_inhabitant_is_sent_nothing_it_could_not_perceive(tmp_path):
             assert e["kind"] not in ("genesis", "checkpoint") and e["origin"] != "mind"
             assert (e["actor"] == aid or e["kind"] == "fire" or aid in [e["data"].get(k) for k in inhabitant.NAMES]
                     or e["actor"] in here), ("an event it could not witness", e)
-            assert not (e["kind"].startswith("intent_") and {"goal", "steps"} & set(e["data"])), e
+            assert not (e["kind"].startswith("intent_") and e["actor"] != aid), e  # a mind's words are its own body's only
             stats["own_intents"] += e["kind"] == "intent_set" and e["actor"] == aid
             if e["actor"] not in (aid, None):  # another villager's: only what it does in plain sight
                 assert e["kind"] in inhabitant.SEEN_NAMING and set(e["data"]) <= set(inhabitant.SEEN_NAMING[e["kind"]]), e

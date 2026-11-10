@@ -31,7 +31,26 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"gave": "done", "stolen": "you got away with it", "caught": "you were caught",
 		"released": "you let go of the villager first", "stays home sick": "you stay home sick",
 		"works sick": "you work while sick"}
+const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food", "refused": "you said no",
+		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
+		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
+		"kin has nothing to spare": "you had nothing to spare", "target asleep": "you were asleep",
+		"target not here": "you weren't there any more", "target has no food": "you had no food"}
+const ASKED := {"ask_kin": "asked you for food", "ask_food": "asked you for food", "buy_from": "wanted to buy food from you",
+		"steal": "tried to steal from you", "give_food": "gave you food", "give_coin": "gave you a coin",
+		"seek": "came to see you"}
+const HERE_ONLY := ["ask_kin", "ask_food", "buy_from", "steal"]  # sim.INSTANT_STEPS: refused with the target elsewhere
 const RATED := ["ask_kin", "ask_food", "buy_from", "steal", "buy_food"]  # held to the cooldown (sim.RATED_ACTS)
+
+
+static func shown(item: Dictionary, present: Dictionary) -> bool:
+	## Whether a menu item gets a button. Asks and theft need the target here ("target not here"), and
+	## asking as kin needs family here ("not kin"): those can only be refused, so they're left off. Seek,
+	## avoid and the gifts work from anywhere (a gift walks to the target first). `present`: id -> kin.
+	var t := int(item["target"])
+	if t >= 0 and item["action"] in HERE_ONLY and not present.has(t):
+		return false
+	return item["action"] != "ask_kin" or present.get(t, false)
 
 
 static func clock(tick: int, per_day: int) -> String:
@@ -137,11 +156,14 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me_id:
 	if "%d" in said:
 		said = said % int(d.get("food", 0))
 	var doing: String = DOING.get(str(d.get("action", "")), str(d.get("action", "")).replace("_", " "))
-	if not mine:  # someone's act aimed at this villager
-		return "%s tried to %s from you: %s." % [a, doing, said] if not d.get("ok", false) else \
-				"%s: %s (%s)." % [a, doing, said]
+	if not mine:  # someone's act aimed at this villager; its mind decided the ask, and your villager's nature the answer
+		var line := "%s %s" % [a, ASKED.get(str(d.get("action", "")), "tried to " + doing + " with you")]
+		var answer: String = TO_YOU.get(why, "")
+		return line + (": " + answer + "." if answer != "" else ".")
 	if e.get("origin") == "rule" and why in ["heading to market", "started", "waited"] and d.get("ok", false):
 		return ""  # the activity line that follows says it
+	if d.get("to") != null and int(d["to"]) != me_id:
+		doing += " (" + _who(d["to"], me_id, names) + ")"
 	return ("Done: %s, %s." if d.get("ok", false) else "Didn't work: %s, because %s.") % [doing, said]
 
 
@@ -155,6 +177,12 @@ static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:
 		lines.append("%s at %s." % [NOW.get(str(v["activity"]), str(v["activity"])), place(v["place"], me)])
 	lines.append("Hunger %d/1000, %s." % [int(v["hunger"]), hunger_word(int(v["hunger"]))])
 	lines.append("You carry %d food and %d coin." % [int(v["food"]), int(v["coin"])])
+	var price := int(v.get("food_price", 0))
+	if price > 0:
+		lines.append("Food costs %d coin at the market; your coin buys %d." % [price, int(v["coin"]) / price])
+	var need := needs(v)
+	if need != "":
+		lines.append("[color=#f0c060]%s[/color]" % need)
 	if v.has("market_food"):
 		lines.append("The market has %d food." % int(v["market_food"]))
 	if v.get("occasion") != null:
@@ -162,14 +190,47 @@ static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:
 	return "\n".join(lines)
 
 
-static func plan(v: Dictionary, per_day: int) -> String:
+static func needs(v: Dictionary) -> String:
+	## What this body needs now, from its own numbers: food first, as its mind would see it.
+	var price := int(v.get("food_price", 0))
+	var h := int(v["hunger"])
+	if int(v["food"]) == 0 and h >= 550:
+		if price > 0 and int(v["coin"]) >= price:
+			return "You need food: buy some at the market, or ask someone."
+		return "You need food and can't pay for it: ask family or someone here, or work for coin."
+	if int(v["food"]) == 0:
+		return "You have no food left for later."
+	return ""
+
+
+static func intent(v: Dictionary, names: Dictionary) -> String:
+	## Its own mind's current intent: what this body meant to do, with the step it is on marked.
+	var it = v.get("intent")
+	if it == null:
+		return ""
+	var steps := []
+	for i in it["steps"].size():
+		var st: Dictionary = it["steps"][i]
+		var who: String = "" if st.get("target") == null else names.get(int(st["target"]), "someone")
+		var txt := str(VERB.get(str(st["do"]), st["do"]))
+		if str(st["do"]) in ACTION:
+			txt = action_label(str(st["do"]), who)
+			txt = txt[0].to_lower() + txt.substr(1)
+		steps.append("[b]%s[/b]" % txt if i == int(it["i"]) else txt)
+	return "You meant to %s: %s." % [str(it["goal"]).trim_suffix("."), " → ".join(steps)]
+
+
+static func plan(v: Dictionary, per_day: int, names := {}) -> String:
+	var meant := intent(v, names)
 	if v["plan"].is_empty():
-		return "No plan for today yet."
+		return (meant + "\n" if meant != "" else "") + "No plan for today yet."
 	var hour := float(int(v["tick"]) % per_day) * 24.0 / per_day
 	var out := []
 	for b in v["plan"]:
 		var line := "%02d–%02d  %s" % [int(b["start_h"]), int(b["end_h"]), VERB.get(str(b["activity"]), b["activity"])]
 		out.append("[b]> %s[/b]" % line if hour >= float(b["start_h"]) and hour < float(b["end_h"]) else "   " + line)
+	if meant != "":
+		out.push_front(meant)
 	return "\n".join(out)
 
 

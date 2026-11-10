@@ -142,6 +142,11 @@ func _build_inhabit_ui() -> void:
 	head.text = "What you can do"
 	head.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
 	side.add_child(head)
+	var asked := RichTextLabel.new()
+	asked.bbcode_enabled = true
+	asked.fit_content = true
+	side.add_child(asked)
+	ui["asked"] = asked
 	var wait := Label.new()
 	wait.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	side.add_child(wait)
@@ -166,6 +171,7 @@ func _build_inhabit_ui() -> void:
 
 var _menu_key := ""
 var _caught_up := false
+var asked_tick := -1000   # when someone last asked something of this villager
 
 
 func _learn_names(v: Dictionary) -> void:
@@ -201,6 +207,9 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 		var line := Words.describe(e, client.me, names)
 		if line != "":
 			lines.append("[color=#8a93a6]%s[/color]  %s" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line])
+		if e["kind"] == "receipt" and e.get("actor") != null and int(e["actor"]) != int(client.me["id"]) and line != "":
+			ui["asked"].text = "[color=#f0c060]%s %s[/color]" % [line, "You can answer them below." if here.has(int(e["actor"])) else ""]
+			asked_tick = int(e["tick"])
 		if e.get("actor") != null and here.has(int(e["actor"])):
 			match e["kind"]:
 				"activity":
@@ -213,6 +222,8 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 					doing[int(e["actor"])] = "asleep"
 	for line in lines:
 		ui["feed"].append_text(line + "\n")
+	if int(v["tick"]) - asked_tick > 6:  # an hour on, the ask is old news (it stays in the feed)
+		ui["asked"].text = ""
 	if not pending.is_empty() and int(v["tick"]) > int(pending["tick"]):
 		pending = {}  # its receipt is in this tick's lines
 	_refresh_inhabit()
@@ -233,7 +244,7 @@ func _refresh_inhabit() -> void:
 		return
 	var per_day := client.ticks_per_day()
 	ui["you"].text = Words.status(v, client.me, per_day)
-	ui["plan"].text = Words.plan(v, per_day)
+	ui["plan"].text = Words.plan(v, per_day, names)
 	ui["here"].text = Words.here(v, doing)
 	_rebuild_menu()
 
@@ -260,9 +271,7 @@ func _rebuild_menu() -> void:
 	var rows := {}  # one row of short buttons per person; the actions that name nobody come first
 	for it in items:
 		var t := int(it["target"])
-		# The offer names family who are elsewhere and lets anyone be asked as kin; the engine refuses those
-		# ("target not here", "not kin"), so the buttons that can only be refused are left off.
-		if t >= 0 and ((not present.has(t) and it["action"] != "seek") or (it["action"] == "ask_kin" and not present.get(t, false))):
+		if not Words.shown(it, present):
 			continue
 		var b := Button.new()
 		b.text = Words.action_label(it["action"], names.get(t, "#%d" % t)) if t < 0 else Words.SHORT.get(it["action"], it["action"])
