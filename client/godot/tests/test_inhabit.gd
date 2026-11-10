@@ -3,12 +3,13 @@
 # Bar 6 (plan/player-body-spec.md): one client inhabits villager AGENT, a god client steps the world. Every few
 # ticks the inhabitant presses a button from its menu, which comes from the server's offer, and the test
 # checks each applied act's receipt arrives in the inhabitant's own stream, citing the act event the ack
-# named. It also checks the view's keys against the spec's whitelist. Exits 1 on any failure or timeout.
+# named. It also checks the view's keys against the spec's whitelist, and that what it witnessed reads as words. Exits 1 on any failure or timeout.
 extends SceneTree
 
 const LiveClient := preload("res://scripts/live_client.gd")
+const Words := preload("res://scripts/inhabit_ui.gd")
 const VIEW_KEYS := ["tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan",
-		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until"]
+		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent"]
 
 var god := LiveClient.new()
 var me := LiveClient.new()
@@ -21,6 +22,19 @@ var done := false
 
 
 func _init() -> void:
+	# Which buttons are left off: only the ones the engine can only refuse (sim.INSTANT_STEPS elsewhere,
+	# ask_kin of non-family). Family elsewhere keeps the gifts, seek and avoid: a gift walks there.
+	var elsewhere := {}
+	var here_kin := {7: true}
+	var here_other := {8: false}
+	for c in [["give_food", 5, elsewhere, true], ["give_coin", 5, elsewhere, true], ["avoid", 5, elsewhere, true],
+			["seek", 5, elsewhere, true], ["ask_food", 5, elsewhere, false], ["buy_from", 5, elsewhere, false],
+			["steal", 5, elsewhere, false], ["ask_kin", 5, elsewhere, false], ["ask_kin", 7, here_kin, true],
+			["ask_kin", 8, here_other, false], ["ask_food", 8, here_other, true], ["work", -1, elsewhere, true]]:
+		if Words.shown({"action": c[0], "target": c[1]}, c[2]) != c[3]:
+			printerr("button %s for %d shown should be %s" % [c[0], c[1], c[3]])
+			quit(1)
+			return
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
 		want_ticks = int(a[2])
@@ -96,6 +110,18 @@ func _process(_delta: float) -> bool:
 			elif ack.get("status") == "rejected":
 				_fail("act %s was rejected: %s" % [id, ack])
 		if done:
+			return true
+		var names := {}  # every witnessed event reads as words, and every one of its own receipts says something
+		var worded := 0
+		for e in me.seen_events:
+			var line := Words.describe(e, me.me, names)
+			worded += int(line != "")
+			if e["kind"] == "receipt" and int(e["actor"]) == me.agent and line == "" and not e["data"]["ok"]:
+				_fail("a refused act has no words: %s" % e)
+		if done:
+			return true
+		if worded == 0:
+			_fail("no witnessed event read as words")
 			return true
 		if applied < 20 or receipted != applied or buttons == 0:  # an ack follows the tick that carries its receipt
 			_fail("%d acts sent, %d applied, %d with receipts, %d buttons shown" % [pressed.size(), applied, receipted, buttons])

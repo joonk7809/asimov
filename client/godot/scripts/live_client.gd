@@ -178,3 +178,9 @@ func display_tick() -> float:
 	if paused or view.is_empty():
 		return float(view_tick)
 	return view_tick + clampf((Time.get_ticks_msec() - tick_wall) / 1000.0 * tps, 0.0, 1.0)
+
+
+func ticks_per_day() -> int:
+	if scope == "inhabitant":
+		return int(welcome.get("world", {}).get("ticks_per_day", 144))
+	return model.ticks_per_day

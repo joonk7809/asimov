@@ -112,7 +112,9 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   `hunger`, `food`, `coin`, `plan` (blocks: activity, start_h, end_h), `recent` (its notes),
   `present` (each: id, name, role, kin, has_food, pos), `kin` (each: id, name, home), `market_food`
   (only at the market), `occasion` (why and who, as the deliberate situation words it), `offer`
-  (the actions `_offer` allows now, with the people each may name), and `cooldown_until`. Any field
+  (the actions `_offer` allows now, with the people each may name), `cooldown_until`, `food_price` (the
+  price in force, which every villager's prompt already states) and `intent` (its own villager's current
+  intent: goal, steps as do and target, and the step it is on; null when it has none). Any field
   added later needs a spec line. Bar 5 checks the keys against this list. Positions of other villagers appear only for those at its place (and its
   family's homes, which are known).
 - Events: only those it would witness. That means events with it as actor or target, events whose
@@ -121,7 +123,8 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   for its own villager only the plan blocks, never the raw reply.
   Of another villager's events, only what it does in plain sight (kinds and fields in
   `inhabitant.SEEN`). A talk's `gossip` between two people at its place is passed: overheard talk is
-  heard. Its own `intent_*` events (from before it was possessed) are sent without `goal` and `steps`.
+  heard. Its own `intent_*` events carry their `goal` and `steps`: the player sees what its own body meant
+  to do (Steering, 2026-11-10, after test 16b attempt 1). No other villager's mind words are sent.
 - Intents: `act` with the action and target, and `seen_tick`. Divine verbs are refused with `scope`.
 
 A god-scope session is unchanged and keeps `fire`. "Both" is one person holding two connections, an
