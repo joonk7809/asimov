@@ -13,17 +13,17 @@ from asiimov.minds import MindReply, StubMind
 from asiimov.replay import replay
 from asiimov.sim import ASK_WAIT_TICKS, TICKS_PER_DAY, Sim
 
-GOLDEN_21 = "a516d4439513be03a9b37b8077401fd2bc2838b84e2a22dd984c5c4a63f20e8e"  # tests/test_world.py, engine 21
+GOLDEN_22 = "f8e02d5476a6d4a53eebf1695f43dc57aee0935ac40bb99e744f8e80ee553b78"  # tests/test_world.py, engine 22
 
 
-def test_a_world_with_no_player_is_engine_21_but_for_the_version_field():
+def test_a_world_with_no_player_is_engine_22_but_for_the_version_field():
     from test_world import FIRE, run
     s = run(StubMind(), agents=20, days=2, seed=3, player=FIRE)
     lines = [e.to_json() for e in s.events]
     g = json.loads(lines[0])
-    g["data"]["engine"] = "21"
+    g["data"]["engine"] = "22"
     lines[0] = json.dumps(g, sort_keys=True, separators=(",", ":"))
-    assert hashlib.sha256("".join(l + "\n" for l in lines).encode()).hexdigest() == GOLDEN_21
+    assert hashlib.sha256("".join(l + "\n" for l in lines).encode()).hexdigest() == GOLDEN_22
 
 
 def scene(action="ask_food"):

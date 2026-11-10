@@ -183,7 +183,9 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "20": "6a3aa743936f75c44d8dc603cf6197823245ad38b8d5304b26aeb3bc8e769dee",  # B5 the year and the price; only the engine field differs from year-1
           "sick-1": "9355d331182baddd94bca146d71a755411b18d86c10295c514736c263d19bb4d",  # B5 sickness and its ask, on 20, before its number
           "21": "a516d4439513be03a9b37b8077401fd2bc2838b84e2a22dd984c5c4a63f20e8e",  # B5 sickness and its ask; only the engine field differs from sick-1
-          "player-ask-1": "0d31d8d687a23a13d68afec6a115d9323b0f74b00bd259ea63dceeb85cee34bb"}  # the player answers asks, on 21; no player: only the engine field differs
+          "alms-1": "e445c8c92f83f60eb7901cb07ba417dacc5a2c16e3224ce3f92549030a1f82b4",  # G1 fix: the chest covers a short buy, on 21, before its number
+          "22": "f8e02d5476a6d4a53eebf1695f43dc57aee0935ac40bb99e744f8e80ee553b78",  # G1 fix; only the engine field differs from alms-1
+          "player-ask-1": "0ff5dbc8bbbbc7fca23303b121c9766d616d93b8bd3ce0107115ed57d1ebab38"}  # the player answers asks, on 22; no player: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
