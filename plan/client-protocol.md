@@ -46,13 +46,14 @@ disconnects.
 An inhabitant sends only `act` (anything else gets `scope`). After an hour (6 ticks) with no `act`, its
 villager's own mind deliberates again; the next `act` takes the body back (plan/player-body-spec.md).
 It gets:
-- `welcome`: `world` is `{map, ticks_per_day, me: {id, name, role, family, home}, family: [{id, name, role}]}`,
+- `welcome`: `world` is `{map, ticks_per_day, me: {id, name, role, family, home}, family: [{id, name, role}], people: [{id, name, role}]}`,
   plus `view_tick`, `paused`, `tps`, `verbs` (`act` only) and its first `view`.
 - `events` backlog and `tick` messages carrying only events it would witness: its own, those naming it
   (`data.with`, `to`, `target` or `household`), public ones (`fire`), and, on the tick they happen,
   those by people at its place. Of another villager's events it gets only what that villager does in
   plain sight, by kind and field (`inhabitant.SEEN`: activity, arrive, wake, sleep, talk, meet, snub,
-  eat, sell), plus a receipt whose `to` names it. An ask, gift or visit aimed at it adds `data.says`, the
+  eat, sell), plus a receipt whose `to` names it (with `answered` when the player answered it), except one that failed as
+  "target not here" or "target asleep". An ask, gift or visit aimed at it adds `data.says`, the
   actor's own reason in its words (plan/player-body-spec.md, "reasons as words"). Never another's intent_*, plan_receipt or day_rhythm.
   A backlog has no co-presence history, so it carries only its own, naming and public events. No mind
   event is ever sent (its own plan is in the view), and every event is sent without its `mind` record or

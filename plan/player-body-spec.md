@@ -106,7 +106,9 @@ crashed, `state["player"]` is still held when the world reopens. If no inhabitan
 that body within 36 ticks (6 sim-hours) of reopening, the runner records a `release`.
 
 What an inhabitant gets, and nothing more (the server filters; the client is never trusted to hide):
-- `welcome`: the map, its own villager (name, role, family, home), its family's ids and names. Not the
+- `welcome`: the map, its own villager (name, role, family, home), its family's ids and names, and every
+  villager's id, name and role (`people`: a village knows its names; client pass before 16b's rated
+  session, 2026-11-10). Not the
   population's souls, traits or params, not even its own villager's numbers. The soul shows in behavior.
 - Per tick, a `view` written field by field, as a **whitelist**, never a copy of `Sim._view` (which
   carries `traits`): `tick`, `place`, `route` (from, to, depart, arrive), `pos`, `activity`, `asleep`,
@@ -119,7 +121,8 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   added later needs a spec line. Bar 5 checks the keys against this list. Positions of other villagers appear only for those at its place (and its
   family's homes, which are known).
 - Events: only those it would witness. That means events with it as actor or target, events whose
-  `data.to` or receipt names it, events at its place this tick by people present, and public events
+  `data.to` or receipt names it (but not another's receipt that failed as "target not here" or "target
+  asleep": that act never reached it, so it saw nothing), events at its place this tick by people present, and public events
   (`fire`, which the village sees). No mind output, prompt hash or raw text of any other villager, and
   for its own villager only the plan blocks, never the raw reply.
   Of another villager's events, only what it does in plain sight (kinds and fields in

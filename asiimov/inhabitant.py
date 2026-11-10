@@ -19,7 +19,8 @@ NAMES = ("with", "to", "target", "household")  # data fields that name the villa
 SEEN = {"activity": ("activity", "place", "arrive", "from"), "arrive": ("place",), "wake": ("place",),
         "sleep": (), "talk": ("with", "place", "gossip"), "meet": ("with", "place"), "snub": ("with",),
         "eat": ("household",), "sell": ("food",), "fire": ("family",), "ask": ("action", "to")}
-SEEN_NAMING = {**SEEN, "receipt": ("action", "ok", "why", "to")}  # also a receipt for an act aimed at it
+SEEN_NAMING = {**SEEN, "receipt": ("action", "ok", "why", "to", "answered")}  # also a receipt for an act aimed at it
+UNSEEN_WHY = ("target not here", "target asleep")  # another's act that never reached it: it saw nothing
 
 
 def _pos(sim, a) -> list[int]:
@@ -40,6 +41,7 @@ def welcome_world(sim, aid: int) -> dict:
     fam = sim.state["families"][a["family"]]
     return {"map": sim.map, "ticks_per_day": TICKS_PER_DAY,
             "me": {"id": aid, "name": a["name"], "role": a["role"], "family": a["family"], "home": a["home"]},
+            "people": [{"id": o["id"], "name": o["name"], "role": o["role"]} for o in agents],  # a village knows its names
             "family": [{"id": m, "name": agents[m]["name"], "role": agents[m]["role"]} for m in fam["members"] if m != aid]}
 
 
@@ -104,7 +106,7 @@ def witnessed(e: dict, aid: int, here: set, tick: int) -> bool:
     if e["actor"] == aid or e["kind"] in PUBLIC:
         return True
     if e["kind"] in SEEN_NAMING and any(e["data"].get(k) == aid for k in NAMES):
-        return True
+        return not (e["kind"] == "receipt" and e["data"].get("why") in UNSEEN_WHY)
     return e["kind"] in SEEN and e["tick"] == tick and e["actor"] in here
 
 

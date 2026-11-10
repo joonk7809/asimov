@@ -59,6 +59,16 @@ func _init() -> void:
 		printerr("a villager's words don't read right: %s | %s | %s" % [w2, g, plain])
 		quit(1)
 		return
+	# An ask nobody answered says the villager's habits answered it; one the player answered doesn't.
+	var rolled := Words.describe({"kind": "receipt", "actor": 4, "origin": "chance",
+			"data": {"action": "ask_kin", "ok": true, "why": "kin gave food", "to": 3}}, {"id": 3, "name": "Me"}, {4: "Ari"})
+	var pressed := Words.describe({"kind": "receipt", "actor": 4, "origin": "rule",
+			"data": {"action": "ask_kin", "ok": true, "why": "kin gave food", "to": 3, "answered": 1}}, {"id": 3, "name": "Me"}, {4: "Ari"})
+	if rolled != "Ari asked you for food: you didn't answer, so your habits did: you gave them food." \
+			or pressed != "Ari asked you for food: you gave them food.":
+		printerr("an answer doesn't read right: %s | %s" % [rolled, pressed])
+		quit(1)
+		return
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
 		want_ticks = int(a[2])
