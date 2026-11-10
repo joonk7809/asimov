@@ -188,3 +188,57 @@ def test_an_idle_body_answers_by_its_nature_at_once():
     assert not any(e.kind == "ask" for e in sim.events)
     assert any(e.kind == "receipt" and e.actor == a and e.data["action"] == "ask_food" and e.origin == "chance"
                for e in sim.events)
+
+
+class AsksThenBuys(StubMind):
+    """A deliberation that may ask villager 5 for food asks, then means to buy from it (review on #53)."""
+
+    def decide(self, req):
+        v = req.view
+        people = [p if isinstance(p, int) else p.get("id") for p in v.get("people") or []]
+        if req.kind == "deliberate" and 5 in people and "ask_food" in v.get("offer", []):
+            return MindReply(json.dumps({"action": "ask_food", "target": 5, "goal": "get food",
+                                         "then": [{"do": "buy_from", "target": 5}]}), self.model, {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_a_step_that_asks_the_body_again_waits_for_the_first_ask_rather_than_failing():
+    """The mind's act asks the body and the intent's first step asks it again the same tick. The step waits
+    for the first ask's answer and then asks; it never fails as "already asked"."""
+    sim = Sim(8, 14, AsksThenBuys())
+    for t in range(2 * TICKS_PER_DAY):
+        acts = [{"kind": "possess", "agent": 5}] if t == 10 else []
+        if "player" in sim.state and t % 3 == 0:
+            acts.append({"kind": "act", "action": "wait"})
+        sim.step(acts)
+    asks = [e for e in sim.events if e.kind == "ask"]
+    assert any(q.data["action"] == "buy_from" for q in asks), "no step ever asked after its act's ask"
+    assert not any(e.kind == "receipt" and e.data.get("why") == "already asked" for e in sim.events)
+    pairs = [(p, q) for p in asks for q in asks if p.data["action"] == "ask_food" and q.data["action"] == "buy_from"
+             and sim.events[q.parents[0]].parents[0] == p.parents[0]]  # the same reply's act, then its step
+    assert pairs
+    for p, q in pairs:
+        settled = next(e for e in sim.events if e.kind == "receipt" and p.id in e.parents)
+        assert settled.id < q.id  # the step asked only once the act's ask was answered
+
+
+def test_the_view_never_offers_an_answer_on_the_tick_the_ask_times_out():
+    """At view tick == until, step() settles the ask by the body's nature before any act applies, so the view
+    no longer lists it (review on #53); one tick earlier it is listed and an answer lands."""
+    sim, a, b, player = scene()
+    sim.step([])
+    q = sim.state["player"]["asks"][0]
+    while sim.state["tick"] < q["until"] - 1:
+        sim.step([])
+    v = inhabitant.view(sim, b)
+    assert [x["from"] for x in v["asks"]] == [a] and v["offer"]["agree"] == [a]
+    sim.step([{"kind": "act", "action": "agree", "target": a}])
+    r = receipt_for(sim, a, q["event"])
+    assert r.data["ok"] and r.data["answered"] == 1
+    sim2, a2, b2, _ = scene()
+    sim2.step([])
+    q2 = sim2.state["player"]["asks"][0]
+    while sim2.state["tick"] < q2["until"]:
+        sim2.step([])
+    assert sim2.state["player"]["asks"] == [q2]  # still held: this tick's step settles it before acts apply
+    assert inhabitant.view(sim2, b2)["asks"] == [] and "agree" not in inhabitant.view(sim2, b2)["offer"]

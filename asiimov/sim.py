@@ -812,6 +812,8 @@ class Sim:
         if do in INSTANT_STEPS:
             if holder.get("asked") is not None:
                 return  # its ask waits on the player's answer (player-ask-1); _settle_ask ends the step
+            if self._asking(a, t):  # an ask of its own act already waits on this body: the step starts after
+                return
             rid = self._person_act(a, do, t, holder["event"])
             if self.events[rid].kind == "ask":
                 holder["asked"] = rid
@@ -1728,6 +1730,11 @@ class Sim:
     def _awaits_answer(self, t: dict) -> bool:
         """Whether an ask aimed at `t` waits for the player's answer: t is the possessed body, not idle."""
         return self._possessed(t) and not self._idle(t)
+
+    def _asking(self, a: dict, t) -> bool:
+        """Whether `a` has an ask waiting on the player's answer and `t` is the body it waits on."""
+        p = self.state.get("player")
+        return p is not None and t == p["agent"] and any(q["asker"] == a["id"] for q in p.get("asks", []))
 
     def _hold_ask(self, a: dict, t: dict, action: str, eid: int) -> int:
         """An ask aimed at the player's body: logged as an `ask` the body witnesses, answered by the player

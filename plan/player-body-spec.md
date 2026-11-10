@@ -138,9 +138,12 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
 - Unanswered by `until`, or when the player acts otherwise first, or lets go, the body's own nature answers
   with the same roll as for anyone (origin chance). An away player never stalls the asker.
 - The asker's receipt cites the ask and the answer (the player's receipt). Its conditions are checked again
-  at the answer. The asker's step waits (`holder.asked`) and ends on that receipt.
+  at the answer. The asker's step waits (`holder.asked`) and ends on that receipt. An instant step aimed at
+  the body while the asker's own act's ask still waits on it doesn't start until that ask is answered
+  (`_asking`), so a reply "ask, then buy" never fails as "already asked" (review on #53).
 - The inhabitant view gains `asks` (each: from, name, action, until) and, while awake, offers `agree` and
-  `decline` naming the askers.
+  `decline` naming the askers. It lists only asks with `until > tick`: the step at `until` settles the ask
+  by the body's nature before any act applies, so the last answerable tick is `until - 1` (review on #53).
 - A world with no player is unchanged but for the engine field (tests/test_player_ask.py).
 
 A god-scope session is unchanged and keeps `fire`. "Both" is one person holding two connections, an

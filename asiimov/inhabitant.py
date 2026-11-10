@@ -63,7 +63,8 @@ def view(sim, aid: int) -> dict:
            "occasion": None, "offer": {}, "cooldown_until": a["cooldown_until"], "food_price": sim._price(),
            "intent": None,
            "asks": [{"from": q["asker"], "name": agents[q["asker"]]["name"], "action": q["action"], "until": q["until"]}
-                    for q in st.get("player", {}).get("asks", []) if st["player"]["agent"] == aid]}
+                    for q in st.get("player", {}).get("asks", [])
+                    if st["player"]["agent"] == aid and q["until"] > tick]}  # one at `until` times out first
     it = a["intent"]
     if it:  # its own mind's words: what this body meant to do (Steering, 2026-11-10; never another's)
         out["intent"] = {"goal": it["goal"], "i": it["i"],
