@@ -117,9 +117,11 @@ SAYS_DEPTH = 4     # parent links walked from the act to the actor's own mind ev
 
 
 def says(log, e: dict, aid: int) -> str | None:
-    """What the actor of an act aimed at `aid` said of it: the `reason` (else `goal`) its own mind wrote in
-    the reply that chose the act or the intent the step belongs to. Only the actor's own events are walked,
-    and only that one field of one reply is read; None when there is no mind reply (a rule or rolled act)."""
+    """What the actor of an act aimed at `aid` said of it, from its own mind reply. The reply's `reason` is
+    shown only when the reply's own action and target are this act: a reason is written for the reply's
+    first action, which may be aimed at someone else. An act that is a step of the reply's intent shows the
+    intent's `goal` only (review on #54). Only the actor's own events are walked (parents[0]), one field of
+    one reply is read, and None when there is no mind reply (a rule or rolled act)."""
     d = e["data"]
     if e["actor"] is None or e["actor"] == aid:
         return None
@@ -127,22 +129,21 @@ def says(log, e: dict, aid: int) -> str | None:
         or (e["kind"] == "receipt" and d.get("to") == aid and d.get("action") in SAYS_ACTS)
     if not aimed or (e["kind"] == "receipt" and any(log[i].kind == "ask" for i in e["parents"][1:])):
         return None  # a held ask's answer: its words were on the ask
-    ids, seen = list(e["parents"])[:1], set()
+    act = "seek" if e["kind"] == "meet" else d.get("action")
+    step, i = False, (e["parents"] or [None])[0]
     for _ in range(SAYS_DEPTH):
-        nxt = []
-        for i in ids:
-            p = log[i]
-            if i in seen or p.actor != e["actor"]:
-                continue
-            seen.add(i)
-            if p.origin == "mind":
-                out = _parse(p.mind or {})
-                for k in ("reason", "goal"):
-                    if out and isinstance(out.get(k), str) and out[k].strip():
-                        return " ".join(out[k].split())[:SAYS_MAX]
-                return None
-            nxt.extend(p.parents[:1])
-        ids = nxt
+        if i is None or not 0 <= i < len(log) or log[i].actor != e["actor"]:
+            return None
+        p = log[i]
+        if p.origin == "mind":
+            out = _parse(p.mind or {}) or {}
+            own = not step and out.get("action") == act and out.get("target") == aid
+            for k in (("reason", "goal") if own else ("goal",)):
+                if isinstance(out.get(k), str) and out[k].strip():
+                    return " ".join(out[k].split())[:SAYS_MAX]
+            return None
+        step = step or p.kind.startswith("intent_")
+        i = (p.parents or [None])[0]
     return None
 
 

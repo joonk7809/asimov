@@ -296,11 +296,43 @@ def test_the_asker_s_reason_is_shown_on_the_ask_and_only_on_acts_aimed_at_the_bo
 
 def test_no_words_for_a_theft_or_a_rule_act_or_another_s_ask():
     from asiimov.events import Event as E
-    log = [E(0, 0, "mind_deliberate", "mind", 3, {}, [], {"raw_output": json.dumps({"reason": "hungry"})}),
+    ask = {"action": "ask_food", "target": 5, "reason": "hungry", "goal": "eat today"}
+    log = [E(0, 0, "mind_deliberate", "mind", 3, {}, [], {"raw_output": json.dumps(ask)}),
            E(1, 0, "receipt", "chance", 3, {"action": "steal", "to": 5}, [0]),
            E(2, 0, "ask", "rule", 3, {"action": "ask_food", "to": 6}, [0]),
            E(3, 0, "ask", "rule", 3, {"action": "ask_food", "to": 5}, [0]),
            E(4, 0, "receipt", "rule", 4, {"action": "give_food", "to": 5}, [0]),  # another's mind: never read
-           E(5, 0, "meet", "rule", 3, {"with": 5}, [0])]
+           E(5, 0, "meet", "rule", 3, {"with": 5}, [0]),          # the reply was an ask, not this visit: its goal
+           E(6, 0, "receipt", "rule", 3, {"action": "buy_from", "to": 5}, [0])]  # nor this buy
     got = [inhabitant.says(log, json.loads(e.to_json()), 5) for e in log]
-    assert got == [None, None, None, "hungry", None, "hungry"]
+    assert got == [None, None, None, "hungry", None, "eat today", "eat today"]
+
+
+class AvoidsThenGives(StubMind):
+    """Review on #54: a reply whose reason is for its first action, aimed at a third villager, and whose
+    intent then gives food to the player's body."""
+
+    def decide(self, req):
+        v = req.view
+        people = [p if isinstance(p, int) else p.get("id") for p in v.get("people") or []]
+        other = [p for p in people if p != 5]
+        if req.kind == "deliberate" and 5 in people and other and "avoid" in v.get("offer", []):
+            return MindReply(json.dumps({"action": "avoid", "target": other[0], "reason": "SECRET: I'll rob him tonight",
+                                         "goal": "feed my friend", "then": [{"do": "give_food", "target": 5}]}),
+                             self.model, {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_a_step_aimed_at_the_body_shows_its_intent_s_goal_never_the_first_action_s_reason():
+    sim = Sim(8, 14, AvoidsThenGives())
+    for t in range(2 * TICKS_PER_DAY):
+        acts = [{"kind": "possess", "agent": 5}] if t == 10 else []
+        if "player" in sim.state and t % 3 == 0:
+            acts.append({"kind": "act", "action": "wait"})
+        sim.step(acts)
+    from asiimov.live import event_dicts
+    sent = [inhabitant.scrub(e, 5, sim.events) for e in event_dicts(sim.events) if inhabitant.witnessed(e, 5, set(), -1)]
+    gifts = [e for e in sent if e["kind"] == "receipt" and e["data"].get("action") == "give_food" and e["actor"] != 5]
+    assert gifts, "no gift reached the body"
+    assert all(e["data"].get("says") == "feed my friend" for e in gifts), gifts
+    assert not any("SECRET" in json.dumps(e) for e in sent)
