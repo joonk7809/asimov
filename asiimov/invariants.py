@@ -165,15 +165,16 @@ class Checker:
         want_food = produced - eaten - self._burned - spoiled
         tithed = sum(e.data["coin"] for e in new if e.kind == "tithe")
         spent = sum(e.data["coin"] for e in new if e.kind == "chest_spent")
-        want_coin = coin_made + self._sell * sold - self._price * bought - tithed
+        alms = sum(e.data["coin"] for e in new if e.kind == "alms")  # chest to villager (B5 alms-1)
+        want_coin = coin_made + self._sell * sold - self._price * bought - tithed + alms
         out = []
         if food1 - food0 != want_food:
             out.append(f"food ledger: {food1 - food0} vs {want_food}")
         if coin1 - coin0 != want_coin:
             out.append(f"coin ledger: {coin1 - coin0} vs {want_coin}")
         chest = sim.state.get("chest", 0)
-        if chest - self._chest != tithed - spent or chest < 0:
-            out.append(f"chest ledger: {chest - self._chest} vs {tithed - spent}")
+        if chest - self._chest != tithed - spent - alms or chest < 0:
+            out.append(f"chest ledger: {chest - self._chest} vs {tithed - spent - alms}")
         out += state_violations(sim)
         out += log_violations(sim.events, n0)
         out += presence_violations(sim.events, n0, self.where)

@@ -4,7 +4,7 @@ from asiimov.invariants import Checker
 from asiimov.minds import ReplayMind, StubMind
 from asiimov.params import generate_population
 from asiimov.replay import replay
-from asiimov.sim import DEFAULT_STAKES, FARM_YIELD, FOOD_PRICE, STALL_PARENTS, TICKS_PER_DAY, Sim
+from asiimov.sim import DEFAULT_STAKES, FARM_YIELD, FOOD_PRICE, IMPORTANT_WORDS, STALL_PARENTS, TICKS_PER_DAY, Sim
 
 FIRE = {TICKS_PER_DAY + 60: [{"kind": "fire", "family": 2}]}
 
@@ -426,3 +426,51 @@ def test_viewing_a_sick_villager_leaves_the_world_unchanged():
     for o in sim.state["agents"]:
         inhabitant.view(sim, o["id"])
     assert sim.state_hash() == before
+
+
+# ------------------------------------------------------------------ alms-1 (G1 fix)
+def _short_at_market(sim, chest):
+    a = _awake_adult(sim, "farmer")
+    a["place"], a["inv"]["coin"], a["inv"]["food"] = "market", 1, 0
+    sim.state["market_food"], sim.state["chest"] = 30, chest
+    return a
+
+
+def test_a_short_buy_with_food_on_the_stall_gets_the_shortfall_from_the_chest_above_its_reserve():
+    sim = _sick_world()
+    reserve, price = DEFAULT_STAKES["tithe"]["reserve"], sim._price()
+    a = _short_at_market(sim, reserve + 50)
+    n0 = len(sim.events)
+    assert sim._buy(a, 0) == (True, "bought")
+    alms, rec = sim.events[n0], sim.events[-1]
+    assert alms.kind == "alms" and alms.actor == a["id"] and alms.data["coin"] == price - 1 and alms.parents == [0]
+    assert sim.state["chest"] == reserve + 50 - (price - 1)
+    assert rec.data["ok"] and rec.data["food"] >= 1 and alms.id in rec.parents  # the buy cites what paid for it
+
+
+def test_no_alms_below_the_reserve_or_past_the_days_limit_or_from_an_empty_stall():
+    sim = _sick_world()
+    reserve, price = DEFAULT_STAKES["tithe"]["reserve"], sim._price()
+    a = _short_at_market(sim, reserve + price - 2)  # one coin short of the shortfall above the reserve
+    assert sim._buy(a, 0) == (False, "no coin")
+    sim.state["chest"] = 10 * reserve
+    a["inv"]["food"], n0 = 9, len(sim.events)  # carrying the day's meals: a buy would take nothing, so no alms
+    assert sim._buy(a, 0) == (False, "no coin") and all(e.kind != "alms" for e in sim.events[n0:])
+    for _ in range(DEFAULT_STAKES["alms"]["per_day"]):
+        a["inv"]["coin"] = a["inv"]["food"] = 0
+        assert sim._buy(a, 0)[0]
+    a["inv"]["coin"] = a["inv"]["food"] = 0
+    assert sim._buy(a, 0) == (False, "no coin")
+    sim.state["alms"].clear()  # a new day's allowance, and an empty stall
+    sim.state["market_food"], n0 = 0, len(sim.events)
+    assert sim._buy(a, 0) == (False, "no stock") and all(e.kind != "alms" for e in sim.events[n0:])
+
+
+def test_alms_keep_the_coin_and_chest_ledgers_and_their_note_is_no_important_word():
+    # a lean year, so short buys happen on the stub; the Checker's ledgers count chest-to-villager coin
+    lean = {**DEFAULT_STAKES, "pay": {"pull_pct": 0}, "tithe": {**DEFAULT_STAKES["tithe"], "rate_pct": 40}}
+    sim = Sim(3, 100, StubMind(), genesis={**generate_population(3, 100), "stakes": lean})
+    assert checked(sim, 6) == []
+    eps = [e for a in sim.state["agents"] for e in a["episodes"] if "village chest for food" in e["text"]]
+    assert [e for e in sim.events if e.kind == "alms"] and eps
+    assert all(w not in e["text"] for e in eps for w in IMPORTANT_WORDS)
