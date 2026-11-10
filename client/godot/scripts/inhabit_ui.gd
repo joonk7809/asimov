@@ -39,7 +39,7 @@ const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food",
 		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
 		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
 		"kin has nothing to spare": "you had nothing to spare", "target asleep": "you were asleep",
-		"target not here": "you weren't there any more", "target has no food": "you had no food"}
+		"target not here": "you weren't there any more", "no coin": "they couldn't pay", "target has no food": "you had no food"}
 const ANSWERS := ["gave", "sold", "refused", "kin gave food", "kin refused"]  # an ask's yes or no
 const ASKED := {"ask_kin": "asked you for food", "ask_food": "asked you for food", "buy_from": "wanted to buy food from you",
 		"steal": "tried to steal from you", "give_food": "gave you food", "give_coin": "gave you a coin",

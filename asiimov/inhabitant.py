@@ -20,7 +20,9 @@ SEEN = {"activity": ("activity", "place", "arrive", "from"), "arrive": ("place",
         "sleep": (), "talk": ("with", "place", "gossip"), "meet": ("with", "place"), "snub": ("with",),
         "eat": ("household",), "sell": ("food",), "fire": ("family",), "ask": ("action", "to")}
 SEEN_NAMING = {**SEEN, "receipt": ("action", "ok", "why", "to", "answered")}  # also a receipt for an act aimed at it
-UNSEEN_WHY = ("target not here", "target asleep")  # another's act that never reached it: it saw nothing
+# Another's act aimed at it that failed before reaching it: it saw nothing (and "no coin" would show another's
+# purse). Kept when it settles a held ask (parents beyond the act: the ask), which the villager did see.
+UNSEEN_WHY = ("target not here", "target asleep", "no coin")
 
 
 def _pos(sim, a) -> list[int]:
@@ -106,7 +108,7 @@ def witnessed(e: dict, aid: int, here: set, tick: int) -> bool:
     if e["actor"] == aid or e["kind"] in PUBLIC:
         return True
     if e["kind"] in SEEN_NAMING and any(e["data"].get(k) == aid for k in NAMES):
-        return not (e["kind"] == "receipt" and e["data"].get("why") in UNSEEN_WHY)
+        return not (e["kind"] == "receipt" and e["data"].get("why") in UNSEEN_WHY and len(e["parents"]) < 2)
     return e["kind"] in SEEN and e["tick"] == tick and e["actor"] in here
 
 

@@ -122,7 +122,8 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   family's homes, which are known).
 - Events: only those it would witness. That means events with it as actor or target, events whose
   `data.to` or receipt names it (but not another's receipt that failed as "target not here" or "target
-  asleep": that act never reached it, so it saw nothing), events at its place this tick by people present, and public events
+  asleep", nor "no coin", which would show another's purse: that act never reached it, so it saw nothing;
+  kept when it settles a held ask it saw), events at its place this tick by people present, and public events
   (`fire`, which the village sees). No mind output, prompt hash or raw text of any other villager, and
   for its own villager only the plan blocks, never the raw reply.
   Of another villager's events, only what it does in plain sight (kinds and fields in

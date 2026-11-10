@@ -276,8 +276,10 @@ def test_an_act_that_never_reached_the_villager_is_not_witnessed_and_the_village
     or asleep is something it never saw; and a villager knows everyone's name and role, nothing more."""
     e = {"kind": "receipt", "origin": "rule", "actor": 2, "tick": 5,
          "data": {"action": "ask_food", "ok": False, "to": 7}, "parents": []}
-    for why, seen in (("target not here", False), ("target asleep", False), ("refused", True), ("gave", True)):
+    for why, seen in (("target not here", False), ("target asleep", False), ("no coin", False), ("refused", True), ("gave", True)):
         assert inhabitant.witnessed({**e, "data": {**e["data"], "why": why}}, 7, set(), -1) is seen, why
+        held = {**e, "data": {**e["data"], "why": why}, "parents": [1, 2]}  # settles an ask it saw: always closed
+        assert inhabitant.witnessed(held, 7, set(), -1), why
     sim = Sim(3, 12, StubMind())
     people = inhabitant.welcome_world(sim, 4)["people"]
     assert [p["id"] for p in people] == list(range(12))
