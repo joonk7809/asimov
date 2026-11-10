@@ -46,6 +46,19 @@ func _init() -> void:
 		printerr("an ask doesn't read right: %s | %s" % [waiting, said])
 		quit(1)
 		return
+	# Reasons as words (Steering, 2026-11-10): an act aimed at you carries what its villager said, quoted
+	# under the line and above the yes and no; a bracket in a mind's words is text, never markup.
+	var why := "I need food and my family [b]should[/b] support me"
+	var w2 := Words.asks({"tick": 100, "asks": [{"from": 4, "name": "Ari", "action": "ask_kin", "until": 104, "says": why}]}, {}, 20.0)
+	var g := Words.describe({"kind": "receipt", "actor": 4, "origin": "rule",
+			"data": {"action": "give_food", "ok": true, "why": "gave", "to": 3, "says": "return the favour"}},
+			{"id": 3, "name": "Me"}, {4: "Ari"})
+	var plain := Words.describe({"kind": "meet", "actor": 4, "origin": "rule", "data": {"with": 3}}, {"id": 3, "name": "Me"}, {4: "Ari"})
+	if not ("[i]\"I need food and my family [lb]b]should[lb]/b] support me\"[/i]\nSay yes or no" in w2) \
+			or not g.ends_with("\n    [i]\"return the favour\"[/i]") or "\"" in plain:
+		printerr("a villager's words don't read right: %s | %s | %s" % [w2, g, plain])
+		quit(1)
+		return
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
 		want_ticks = int(a[2])

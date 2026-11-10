@@ -125,7 +125,15 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   Of another villager's events, only what it does in plain sight (kinds and fields in
   `inhabitant.SEEN`). A talk's `gossip` between two people at its place is passed: overheard talk is
   heard. Its own `intent_*` events carry their `goal` and `steps`: the player sees what its own body meant
-  to do (Steering, 2026-11-10, after test 16b attempt 1). No other villager's mind words are sent.
+  to do (Steering, 2026-11-10, after test 16b attempt 1). No other villager's mind words are sent, but
+  for one: reasons as words (joon's pick on Steering's card, 2026-11-10). Another villager's act aimed at
+  it (an `ask`, a `meet`, or a receipt of `ask_kin`, `ask_food`, `buy_from`, `give_food` or `give_coin` whose
+  `to` names it) carries `says`: the `reason` (else `goal`) field, alone, of that villager's own mind reply
+  that chose the act or its intent (`inhabitant.says`, at most 200 characters; walked only through that
+  villager's own events). Not a theft, an avoid or a snub, which aren't said to anyone's face; not the
+  answer receipt of a held ask, whose words were on the ask; nothing for a rolled refusal of its own ask,
+  which no mind decided. Each `asks` entry in the view carries the same `says`. View only: no model call,
+  and the engine and log are unchanged.
 - Intents: `act` with the action and target, and `seen_tick`. Divine verbs are refused with `scope`.
 
 ## Asks aimed at the player's body (player-ask-1, Steering 2026-11-10, after test 16b attempt 1)

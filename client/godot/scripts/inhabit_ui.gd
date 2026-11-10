@@ -94,7 +94,19 @@ static func action_label(action: String, target_name: String) -> String:
 
 
 static func describe(e: Dictionary, me: Dictionary, names: Dictionary) -> String:
-	## One line for an event the villager witnessed, or "" for bookkeeping it needn't read.
+	## One line for an event the villager witnessed, or "" for bookkeeping it needn't read. Another's act aimed
+	## at this villager adds what that villager said of it, its own mind's words (the server's `says`).
+	var line := _line(e, me, names)
+	return line + said(e.get("data", {})) if line != "" else ""
+
+
+static func said(d: Dictionary) -> String:
+	## The quoted line a villager says with its act aimed at you, or "".
+	var w = d.get("says")
+	return "\n    [i]\"%s\"[/i]" % str(w).replace("[", "[lb]") if w is String and w != "" else ""
+
+
+static func _line(e: Dictionary, me: Dictionary, names: Dictionary) -> String:
 	var me_id := int(me.get("id", -1))
 	var d: Dictionary = e.get("data", {})
 	var mine: bool = e.get("actor") != null and int(e["actor"]) == me_id
@@ -248,8 +260,8 @@ static func asks(v: Dictionary, names: Dictionary, secs_per_tick: float) -> Stri
 	var out := []
 	for q in v.get("asks", []):
 		var left := int(q["until"]) - int(v["tick"])
-		out.append("[color=#f0c060][b]%s %s.[/b] Say yes or no within %d tick%s (about %ds), or your nature answers.[/color]"
-				% [q["name"], ASKED.get(str(q["action"]), "asked you something"), left, "" if left == 1 else "s",
+		out.append("[color=#f0c060][b]%s %s.[/b]%s\nSay yes or no within %d tick%s (about %ds), or your nature answers.[/color]"
+				% [q["name"], ASKED.get(str(q["action"]), "asked you something"), said(q), left, "" if left == 1 else "s",
 				int(left * secs_per_tick)])
 	return "\n".join(out)
 

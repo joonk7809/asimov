@@ -4,6 +4,8 @@ The server filters and the client is never trusted to hide anything. Everything 
 from a whitelist, never as a copy of engine state (Sim._view carries traits), and it only reads the world:
 the live runner calls it between ticks, and test_inhabitant checks the log still equals batch.
 """
+import json
+
 from .sim import ANSWER_ACTS, OCCASION_TICKS, PERSON_STEPS, TICKS_PER_DAY
 from .worldmap import position
 
@@ -62,7 +64,8 @@ def view(sim, aid: int) -> dict:
            "kin": [{"id": m, "name": agents[m]["name"], "home": agents[m]["home"]} for m in fam if m != aid],
            "occasion": None, "offer": {}, "cooldown_until": a["cooldown_until"], "food_price": sim._price(),
            "intent": None,
-           "asks": [{"from": q["asker"], "name": agents[q["asker"]]["name"], "action": q["action"], "until": q["until"]}
+           "asks": [{"from": q["asker"], "name": agents[q["asker"]]["name"], "action": q["action"], "until": q["until"],
+                     "says": says(sim.events, _ev(sim.events[q["event"]]), aid)}
                     for q in st.get("player", {}).get("asks", [])
                     if st["player"]["agent"] == aid and q["until"] > tick]}  # one at `until` times out first
     it = a["intent"]
@@ -89,6 +92,10 @@ def view(sim, aid: int) -> dict:
     return out
 
 
+def _ev(e) -> dict:
+    return {"actor": e.actor, "kind": e.kind, "data": e.data, "parents": e.parents}
+
+
 def witnessed(e: dict, aid: int, here: set, tick: int) -> bool:
     """Whether the villager would witness this event: its own, one that names it, a public one, or (on the
     tick it happens, live) one by someone at its place. Never a mind event: its own plan is in the view."""
@@ -101,12 +108,63 @@ def witnessed(e: dict, aid: int, here: set, tick: int) -> bool:
     return e["kind"] in SEEN and e["tick"] == tick and e["actor"] in here
 
 
-def scrub(e: dict, aid: int) -> dict:
+# Acts aimed at the villager whose actor's own words it is told (Steering, 2026-11-10, joon's "show their
+# reasons as words"): an ask, a gift, a sale asked for, a visit. Not a theft, an avoid or a snub: those aren't
+# said to anyone's face. Refusals of the villager's own asks are the other's nature (a roll), with no words.
+SAYS_ACTS = ("ask_kin", "ask_food", "buy_from", "give_food", "give_coin")
+SAYS_MAX = 200     # characters of a reason shown
+SAYS_DEPTH = 4     # parent links walked from the act to the actor's own mind event (act or step: 1 or 2)
+
+
+def says(log, e: dict, aid: int) -> str | None:
+    """What the actor of an act aimed at `aid` said of it, from its own mind reply. The reply's `reason` is
+    shown only when the reply's own action and target are this act: a reason is written for the reply's
+    first action, which may be aimed at someone else. An act that is a step of the reply's intent shows the
+    intent's `goal` only (review on #54). Only the actor's own events are walked (parents[0]), one field of
+    one reply is read, and None when there is no mind reply (a rule or rolled act)."""
+    d = e["data"]
+    if e["actor"] is None or e["actor"] == aid:
+        return None
+    aimed = (e["kind"] == "ask" and d.get("to") == aid) or (e["kind"] == "meet" and d.get("with") == aid) \
+        or (e["kind"] == "receipt" and d.get("to") == aid and d.get("action") in SAYS_ACTS)
+    if not aimed or (e["kind"] == "receipt" and any(log[i].kind == "ask" for i in e["parents"][1:])):
+        return None  # a held ask's answer: its words were on the ask
+    act = "seek" if e["kind"] == "meet" else d.get("action")
+    step, i = False, (e["parents"] or [None])[0]
+    for _ in range(SAYS_DEPTH):
+        if i is None or not 0 <= i < len(log) or log[i].actor != e["actor"]:
+            return None
+        p = log[i]
+        if p.origin == "mind":
+            out = _parse(p.mind or {}) or {}
+            own = not step and out.get("action") == act and out.get("target") == aid
+            for k in (("reason", "goal") if own else ("goal",)):
+                if isinstance(out.get(k), str) and out[k].strip():
+                    return " ".join(out[k].split())[:SAYS_MAX]
+            return None
+        step = step or p.kind.startswith("intent_")
+        i = (p.parents or [None])[0]
+    return None
+
+
+def _parse(mind: dict) -> dict | None:
+    try:
+        out = json.loads(mind.get("raw_output") or "")
+    except (ValueError, RecursionError):
+        return None
+    return out if isinstance(out, dict) else None
+
+
+def scrub(e: dict, aid: int, log=None) -> dict:
     """An event as an inhabitant gets it: no mind record (prompt hash, raw output), no chance-stream draws,
-    and of another villager's event only the fields SEEN lists."""
+    and of another villager's event only the fields SEEN lists, plus (given the log) `says`: the actor's own
+    words for an act aimed at this villager."""
     if e["actor"] == aid:  # its own, with its own intent's goal and steps (what it meant to do)
         data = {k: v for k, v in e["data"].items() if k not in ("stream", "index", "pick_stream", "jitter_min")}
     else:
         data = {k: e["data"][k] for k in SEEN_NAMING[e["kind"]] if k in e["data"]}
+        said = says(log, e, aid) if log is not None else None
+        if said:
+            data["says"] = said
     return {"id": e["id"], "tick": e["tick"], "kind": e["kind"], "origin": e["origin"], "actor": e["actor"],
             "data": data, "parents": e["parents"]}
