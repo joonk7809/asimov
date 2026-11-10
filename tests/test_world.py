@@ -182,7 +182,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "year-1": "330a666ed148282a5b9cfb4a54df0a8ea5a0d7d1f3810be05f9b880393689059",  # B5 the year and the price, on 19, before its number
           "20": "6a3aa743936f75c44d8dc603cf6197823245ad38b8d5304b26aeb3bc8e769dee",  # B5 the year and the price; only the engine field differs from year-1
           "sick-1": "9355d331182baddd94bca146d71a755411b18d86c10295c514736c263d19bb4d",  # B5 sickness and its ask, on 20, before its number
-          "21": "a516d4439513be03a9b37b8077401fd2bc2838b84e2a22dd984c5c4a63f20e8e"}  # B5 sickness and its ask; only the engine field differs from sick-1
+          "21": "a516d4439513be03a9b37b8077401fd2bc2838b84e2a22dd984c5c4a63f20e8e",  # B5 sickness and its ask; only the engine field differs from sick-1
+          "alms-1": "e445c8c92f83f60eb7901cb07ba417dacc5a2c16e3224ce3f92549030a1f82b4"}  # G1 fix: the chest covers a short buy, on 21, before its number
 
 
 def test_log_changes_bump_the_engine_version():

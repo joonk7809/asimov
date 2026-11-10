@@ -138,7 +138,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "21"  # B5 sickness and its ask (plan/b5-build-spec.md), on engine 20 (label sick-1)
+ENGINE_VERSION = "alms-1"  # B5 G1 fix: the chest covers a short buy (plan/g1-g3-runs-spec.md), on engine 21; its label until merge
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -168,6 +168,14 @@ DEFAULT_STAKES = {
     # 1-6, outbreaks reach 59/10/50/60/11 (median 50, none above 70; seed 4 draws no case).
     "sick": {"chance_pm": 300, "days": 3, "catch_talk_pm": 5, "catch_work_pm": 3, "catch_home_pm": 20,
              "cases": []},
+    # alms-1 (G1 fix, plan/g1-g3-runs-spec.md): a villager at the market short of the price, with food on the
+    # stall, gets the shortfall from the village chest, at most per_day times a day and only from what the chest
+    # holds above its reserve (the coin that would leave the economy at the day's end). On the G1 8B log every
+    # earner supply failure (99 agent-days, 0.052) was "no coin" with stock on the stall, short by 1-4 coin
+    # (231 in all, 1.3% of the 17,421 the chest spent); the chest above its reserve would have covered 96 of 99
+    # first failures. per_day 3 (a day's meals) also covers the 16 days with a second or third short buy: about 3
+    # days would be left (0.002), for about 294 coin; per_day 1 would leave 19 (0.010).
+    "alms": {"per_day": 3},
 }
 STALL_PARENTS = 8  # a price step or failed buy cites at most this many of the latest stall buys (or sells)
 IMPORTANT_WORDS = {"stole": 8, "robbed": 9, "caught": 8, "fire": 9, "refused": 5, "gave": 4, "bought": 2}
@@ -221,6 +229,8 @@ class Sim:
             self.state.update({"stakes": json.loads(json.dumps(pop["stakes"])), "chest": 0})
         if "sick" in self.state.get("stakes", {}):  # who is sick until when, who is immune, the source events (B5)
             self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}}
+        if "alms" in self.state.get("stakes", {}):  # the day each villager last had alms (B5 alms-1)
+            self.state["alms"] = {}
         if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
             self.state["stall"] = {"price": None, "step": None, "buys": [], "sells": [], "orders": {}}
         for p in pop["agents"]:
@@ -1278,6 +1288,7 @@ class Sim:
             del orders[str(a["id"])]  # its own trip uses it up; a possessed body's never fills it
         if order is not None and (order["event"] != eid or self._possessed(a)):
             order = None  # any other buy (a plan's, a deliberation's, a player's) is an ordinary one
+        alms = self._alms(a, price, eid) if order is None else None
         if self.state["market_food"] <= 0 or a["inv"]["coin"] < price:
             why = "no stock" if self.state["market_food"] <= 0 else "no coin"  # both: the stock is what failed
             if why == "no stock":
@@ -1309,10 +1320,26 @@ class Sim:
         if n:
             self._note(a["id"], "bought food at the market")
         rid = self._receipt(a, eid, "buy_food", True, "bought" if n else "had enough", extra={"food": n},
-                            parents=self._price_cause() if n else ())
+                            parents=(self._price_cause() if n else []) + ([alms] if alms is not None else []))
         if n:
             self._stall_moved("buys", rid)
         return True, "bought"
+
+    def _alms(self, a: dict, price: int, eid: int) -> int | None:
+        """A market buy short of the price, with food on the stall: the chest gives the shortfall from what it holds
+        above its reserve, per_day times a day at most (B5 alms-1). Returns the alms event, which the buy cites."""
+        cfg, short = self.state.get("stakes", {}).get("alms"), price - a["inv"]["coin"]
+        if not cfg or "tithe" not in self.state["stakes"] or short <= 0 or self.state["market_food"] <= 0:
+            return None
+        day, got = self.state["tick"] // TICKS_PER_DAY, self.state["alms"].get(str(a["id"]))
+        n = got[1] if got and got[0] == day else 0
+        if n >= cfg["per_day"] or self.state["chest"] - self.state["stakes"]["tithe"]["reserve"] < short:
+            return None
+        self.state["alms"][str(a["id"])] = [day, n + 1]
+        self.state["chest"] -= short
+        a["inv"]["coin"] += short
+        self._note(a["id"], f"got {short} coin from the village chest for food")  # no IMPORTANT_WORDS key (L27)
+        return self._emit("alms", "rule", a["id"], {"coin": short, "chest": self.state["chest"]}, [eid])
 
     def _target_error(self, a: dict, target) -> str | None:
         if target is None:
