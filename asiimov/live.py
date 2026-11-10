@@ -340,7 +340,7 @@ class LiveRunner:
     def inhabitant_tick(self, tick: int, events: list[dict], aid: int) -> dict:
         """A tick as an inhabitant gets it: the events it witnessed and its own whitelisted view."""
         here = set(inhabitant.present_ids(self.sim, aid))
-        return msg("tick", tick=tick, events=[inhabitant.scrub(e, aid) for e in events if inhabitant.witnessed(e, aid, here, tick)],
+        return msg("tick", tick=tick, events=[inhabitant.scrub(e, aid, self.sim.events) for e in events if inhabitant.witnessed(e, aid, here, tick)],
                    view=inhabitant.view(self.sim, aid))
 
     def welcome(self, scope: str, paused: bool, tps: float) -> dict:
@@ -571,7 +571,7 @@ class Hub:
             return
         conn.send(self.runner.welcome(conn.scope, self.paused, self.tps))
         if conn.scope == "inhabitant":  # its own, the ones naming it and public ones; no co-presence history
-            mine = [inhabitant.scrub(e, conn.agent) for e in event_dicts(events[since:])
+            mine = [inhabitant.scrub(e, conn.agent, events) for e in event_dicts(events[since:])
                     if inhabitant.witnessed(e, conn.agent, set(), -1)]
             for i in range(0, len(mine), BACKLOG_CHUNK):
                 conn.send(msg("events", events=mine[i:i + BACKLOG_CHUNK]))

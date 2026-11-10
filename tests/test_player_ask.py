@@ -155,7 +155,7 @@ def test_asks_answered_by_a_player_replay_exactly():
         if asks:
             k += 1
             v = inhabitant.view(sim, 5)  # what the player sees: the ask, its deadline, and both answers offered
-            assert v["asks"] == [{"from": q["asker"], "name": sim.state["agents"][q["asker"]]["name"],
+            assert [{k: x[k] for k in ("from", "name", "action", "until")} for x in v["asks"]] == [{"from": q["asker"], "name": sim.state["agents"][q["asker"]]["name"],
                                   "action": q["action"], "until": q["until"]} for q in asks]
             if not v["asleep"]:
                 assert v["offer"]["agree"] == v["offer"]["decline"] == [q["asker"] for q in asks]
@@ -242,3 +242,65 @@ def test_the_view_never_offers_an_answer_on_the_tick_the_ask_times_out():
         sim2.step([])
     assert sim2.state["player"]["asks"] == [q2]  # still held: this tick's step settles it before acts apply
     assert inhabitant.view(sim2, b2)["asks"] == [] and "agree" not in inhabitant.view(sim2, b2)["offer"]
+
+
+REASON = "I need food and my family should support me"
+
+
+class AsksWithReason(StubMind):
+    """AsksTheBody, with the reply's reason in its own words (Steering's example)."""
+
+    def decide(self, req):
+        v = req.view
+        people = [p if isinstance(p, int) else p.get("id") for p in v.get("people") or []]
+        if req.kind == "deliberate" and 5 in people:
+            for action in ("ask_kin", "ask_food", "buy_from"):
+                if action in v.get("offer", []):
+                    return MindReply(json.dumps({"action": action, "target": 5, "reason": REASON}),
+                                     self.model, {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_the_asker_s_reason_is_shown_on_the_ask_and_only_on_acts_aimed_at_the_body():
+    """Reasons as words (Steering, 2026-11-10): the pending ask and its events carry the asker's own reason;
+    no event the body is sent carries `says` unless it is another's ask, gift or visit aimed at it, and the
+    words are always that actor's own mind's reason or goal."""
+    sim, shown = Sim(8, 14, AsksWithReason()), 0
+    for t in range(2 * TICKS_PER_DAY):
+        acts = [{"kind": "possess", "agent": 5}] if t == 10 else []
+        asks = sim.state.get("player", {}).get("asks", [])
+        if asks:
+            v = inhabitant.view(sim, 5)
+            for x in v["asks"]:
+                assert x["says"] == REASON
+                shown += 1
+            acts.append({"kind": "act", "action": "agree", "target": asks[0]["asker"]})
+        elif "player" in sim.state and t % 3 == 0:
+            acts.append({"kind": "act", "action": "wait"})
+        sim.step(acts)
+    assert shown
+    from asiimov.live import event_dicts
+    sent = [inhabitant.scrub(e, 5, sim.events) for e in event_dicts(sim.events) if inhabitant.witnessed(e, 5, set(), -1)]
+    said = [e for e in sent if "says" in e["data"]]
+    assert any(e["kind"] == "ask" and e["data"]["says"] == REASON for e in said)
+    for e in said:
+        d = e["data"]
+        assert e["actor"] != 5 and (d.get("to") == 5 or d.get("with") == 5), e
+        assert e["kind"] in ("ask", "meet") or d["action"] in inhabitant.SAYS_ACTS, e
+        minds = [x for x in sim.events if x.origin == "mind" and x.actor == e["actor"]]
+        assert any(d["says"] in (json.loads(m.mind["raw_output"]).get("reason"), json.loads(m.mind["raw_output"]).get("goal"))
+                   for m in minds), e
+    assert not any("says" in inhabitant.scrub(e, 5)["data"] for e in event_dicts(sim.events)
+                   if inhabitant.witnessed(e, 5, set(), -1))  # no log, no words
+
+
+def test_no_words_for_a_theft_or_a_rule_act_or_another_s_ask():
+    from asiimov.events import Event as E
+    log = [E(0, 0, "mind_deliberate", "mind", 3, {}, [], {"raw_output": json.dumps({"reason": "hungry"})}),
+           E(1, 0, "receipt", "chance", 3, {"action": "steal", "to": 5}, [0]),
+           E(2, 0, "ask", "rule", 3, {"action": "ask_food", "to": 6}, [0]),
+           E(3, 0, "ask", "rule", 3, {"action": "ask_food", "to": 5}, [0]),
+           E(4, 0, "receipt", "rule", 4, {"action": "give_food", "to": 5}, [0]),  # another's mind: never read
+           E(5, 0, "meet", "rule", 3, {"with": 5}, [0])]
+    got = [inhabitant.says(log, json.loads(e.to_json()), 5) for e in log]
+    assert got == [None, None, None, "hungry", None, "hungry"]
