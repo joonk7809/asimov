@@ -52,7 +52,8 @@ It gets:
   (`data.with`, `to`, `target` or `household`), public ones (`fire`), and, on the tick they happen,
   those by people at its place. Of another villager's events it gets only what that villager does in
   plain sight, by kind and field (`inhabitant.SEEN`: activity, arrive, wake, sleep, talk, meet, snub,
-  eat, sell), plus a receipt whose `to` names it. Never another's intent_*, plan_receipt or day_rhythm.
+  eat, sell), plus a receipt whose `to` names it. An ask, gift or visit aimed at it adds `data.says`, the
+  actor's own reason in its words (plan/player-body-spec.md, "reasons as words"). Never another's intent_*, plan_receipt or day_rhythm.
   A backlog has no co-presence history, so it carries only its own, naming and public events. No mind
   event is ever sent (its own plan is in the view), and every event is sent without its `mind` record or
   chance-stream fields.
