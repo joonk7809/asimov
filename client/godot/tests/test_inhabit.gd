@@ -3,10 +3,11 @@
 # Bar 6 (plan/player-body-spec.md): one client inhabits villager AGENT, a god client steps the world. Every few
 # ticks the inhabitant presses a button from its menu, which comes from the server's offer, and the test
 # checks each applied act's receipt arrives in the inhabitant's own stream, citing the act event the ack
-# named. It also checks the view's keys against the spec's whitelist. Exits 1 on any failure or timeout.
+# named. It also checks the view's keys against the spec's whitelist, and that what it witnessed reads as words. Exits 1 on any failure or timeout.
 extends SceneTree
 
 const LiveClient := preload("res://scripts/live_client.gd")
+const Words := preload("res://scripts/inhabit_ui.gd")
 const VIEW_KEYS := ["tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan",
 		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until"]
 
@@ -96,6 +97,18 @@ func _process(_delta: float) -> bool:
 			elif ack.get("status") == "rejected":
 				_fail("act %s was rejected: %s" % [id, ack])
 		if done:
+			return true
+		var names := {}  # every witnessed event reads as words, and every one of its own receipts says something
+		var worded := 0
+		for e in me.seen_events:
+			var line := Words.describe(e, me.me, names)
+			worded += int(line != "")
+			if e["kind"] == "receipt" and int(e["actor"]) == me.agent and line == "" and not e["data"]["ok"]:
+				_fail("a refused act has no words: %s" % e)
+		if done:
+			return true
+		if worded == 0:
+			_fail("no witnessed event read as words")
 			return true
 		if applied < 20 or receipted != applied or buttons == 0:  # an ack follows the tick that carries its receipt
 			_fail("%d acts sent, %d applied, %d with receipts, %d buttons shown" % [pressed.size(), applied, receipted, buttons])
