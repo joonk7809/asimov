@@ -1288,7 +1288,8 @@ class Sim:
             del orders[str(a["id"])]  # its own trip uses it up; a possessed body's never fills it
         if order is not None and (order["event"] != eid or self._possessed(a)):
             order = None  # any other buy (a plan's, a deliberation's, a player's) is an ordinary one
-        alms = self._alms(a, price, eid) if order is None else None
+        want = self._buy_want(a) if order is None else 0
+        alms = self._alms(a, price, eid) if want > 0 else None  # only for a buy that would take food (review on #51)
         if self.state["market_food"] <= 0 or a["inv"]["coin"] < price:
             why = "no stock" if self.state["market_food"] <= 0 else "no coin"  # both: the stock is what failed
             if why == "no stock":
@@ -1307,12 +1308,6 @@ class Sim:
             if n:
                 self._stall_moved("buys", rid)
             return True, "bought"
-        want = max(0, self._meals_left_today(a) - a["inv"]["food"])
-        if a["role"] not in ("child", "elder"):
-            for m in self.state["families"][a["family"]]["members"]:
-                d = self.state["agents"][m]
-                if m != a["id"] and d["role"] in ("child", "elder") and d["sleep_tick"] is not None:
-                    want += max(0, self._meals_left_today(d) - d["inv"]["food"])
         n = min(want, a["inv"]["coin"] // price, self.state["market_food"])
         self.state["market_food"] -= n
         a["inv"]["coin"] -= n * price
@@ -1324,6 +1319,17 @@ class Sim:
         if n:
             self._stall_moved("buys", rid)
         return True, "bought"
+
+    def _buy_want(self, a: dict) -> int:
+        """The meals an ordinary buy wants: the agent's left today that it doesn't carry, and a working adult's
+        also what the family's children and elders still lack."""
+        want = max(0, self._meals_left_today(a) - a["inv"]["food"])
+        if a["role"] not in ("child", "elder"):
+            for m in self.state["families"][a["family"]]["members"]:
+                d = self.state["agents"][m]
+                if m != a["id"] and d["role"] in ("child", "elder") and d["sleep_tick"] is not None:
+                    want += max(0, self._meals_left_today(d) - d["inv"]["food"])
+        return want
 
     def _alms(self, a: dict, price: int, eid: int) -> int | None:
         """A market buy short of the price, with food on the stall: the chest gives the shortfall from what it holds

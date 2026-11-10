@@ -454,10 +454,12 @@ def test_no_alms_below_the_reserve_or_past_the_days_limit_or_from_an_empty_stall
     a = _short_at_market(sim, reserve + price - 2)  # one coin short of the shortfall above the reserve
     assert sim._buy(a, 0) == (False, "no coin")
     sim.state["chest"] = 10 * reserve
+    a["inv"]["food"], n0 = 9, len(sim.events)  # carrying the day's meals: a buy would take nothing, so no alms
+    assert sim._buy(a, 0) == (False, "no coin") and all(e.kind != "alms" for e in sim.events[n0:])
     for _ in range(DEFAULT_STAKES["alms"]["per_day"]):
-        a["inv"]["coin"] = 0
+        a["inv"]["coin"] = a["inv"]["food"] = 0
         assert sim._buy(a, 0)[0]
-    a["inv"]["coin"] = 0
+    a["inv"]["coin"] = a["inv"]["food"] = 0
     assert sim._buy(a, 0) == (False, "no coin")
     sim.state["alms"].clear()  # a new day's allowance, and an empty stall
     sim.state["market_food"], n0 = 0, len(sim.events)
