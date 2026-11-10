@@ -52,6 +52,8 @@ ACTIVITY_PLACE = {"socialize": "plaza", "shop": "market", "explore": "woods"}  #
 PERSON_STEPS = ("seek", "avoid", "give_food", "give_coin", "ask_kin", "ask_food", "buy_from", "steal")
 STEP_DOS = ACTIVITIES + PERSON_STEPS
 INSTANT_STEPS = ("ask_kin", "ask_food", "buy_from", "steal")
+ANSWER_ACTS = ("agree", "decline")  # the player's answer to an ask aimed at its body (player-ask-1)
+ASK_WAIT_TICKS = 6  # an unanswered ask is answered by the body's own nature after this many ticks (an hour)
 RATED_ACTS = INSTANT_STEPS + ("buy_food",)  # player acts that roll or buy: held to the deliberation cooldown
 REACH_STEPS = ("seek", "give_food", "give_coin")  # go where the target is, then act when both are there
 WAIT_STEPS = REACH_STEPS + ("shop",)  # steps that wait to arrive somewhere, and fail if their time runs out
@@ -111,6 +113,7 @@ ACTION_CLAUSES = {
     "wait": "wait does nothing for now",
 }
 assert set(ACTION_CLAUSES) == set(DELIBERATE_ACTIONS)
+PLAYER_ACTIONS = DELIBERATE_ACTIONS + ANSWER_ACTS  # what a player's act may name
 
 
 def action_clauses(price: int) -> dict:
@@ -138,7 +141,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "21"  # B5 sickness and its ask (plan/b5-build-spec.md), on engine 20 (label sick-1)
+ENGINE_VERSION = "player-ask-1"  # an ask aimed at the player's body waits for the player's answer, on engine 21
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -559,6 +562,9 @@ class Sim:
         self._acts = {}
         for act in player_actions:
             self._player(act)
+        for q in list(self.state.get("player", {}).get("asks", [])):
+            if tick >= q["until"]:  # unanswered for an hour: the body's own nature answers, as for anyone
+                self._settle_ask(q, None)
         if tick and tick % TICKS_PER_DAY == 0:
             self._tithe()
         if "sick" in st:
@@ -804,7 +810,12 @@ class Sim:
         if do == "shop" and a["place"] == "market":
             return self._end_step(a, author, *self._buy(a, holder["event"]))
         if do in INSTANT_STEPS:
+            if holder.get("asked") is not None:
+                return  # its ask waits on the player's answer (player-ask-1); _settle_ask ends the step
             rid = self._person_act(a, do, t, holder["event"])
+            if self.events[rid].kind == "ask":
+                holder["asked"] = rid
+                return
             return self._end_step(a, author, self.events[rid].data["ok"], self.events[rid].data["why"])
         if do in REACH_STEPS:
             b = self.state["agents"][t]
@@ -1399,22 +1410,30 @@ class Sim:
             return self._receipt(a, eid, action, False, "target asleep", extra={"to": t["id"]})
         if t["inv"]["food"] <= 1:
             return self._receipt(a, eid, action, False, "kin has nothing to spare")
-        stream, idx, roll = self._ask_roll(f"kin:{t['id']}:{a['id']}")
-        limit = self._kin_limit(t, a)
-        if roll < limit:
+        if self._awaits_answer(t):
+            return self._hold_ask(a, t, action, eid)
+        return self._kin_answer(a, t, action, eid)
+
+    def _kin_answer(self, a: dict, t: dict, action: str, eid: int, yes: int | None = None, parents=()) -> int:
+        """ask_kin's outcome: a seeded roll on the target's nature, or (player-ask-1) the player's answer."""
+        if yes is None:
+            stream, idx, roll = self._ask_roll(f"kin:{t['id']}:{a['id']}")
+            limit = self._kin_limit(t, a)
+            extra, origin, yes = {"stream": stream, "index": idx, "roll": roll, "limit": limit}, "chance", roll < limit
+        else:
+            extra, origin = {"answered": 1}, "rule"
+        if yes:
             t["inv"]["food"] -= 1
             a["inv"]["food"] += 1
             self._note(a["id"], f"{t['name']} gave me food")
             self._note(t["id"], f"gave food to {a['name']}")
             r = self._met(a, t["id"])
             r["affinity"] = min(1000, r["affinity"] + 50)
-            return self._receipt(a, eid, action, True, "kin gave food", "chance",
-                                 {"stream": stream, "index": idx, "roll": roll, "limit": limit, "to": t["id"]})
+            return self._receipt(a, eid, action, True, "kin gave food", origin, {**extra, "to": t["id"]}, parents=parents)
         self._note(a["id"], f"{t['name']} refused to share food")
         r = self._met(a, t["id"])
         r["affinity"] = max(-1000, r["affinity"] - 50)
-        rid = self._receipt(a, eid, action, False, "kin refused", "chance",
-                            {"stream": stream, "index": idx, "roll": roll, "limit": limit, "to": t["id"]})
+        rid = self._receipt(a, eid, action, False, "kin refused", origin, {**extra, "to": t["id"]}, parents=parents)
         self._occasion(a, "refused", 450 + (1000 - a["traits"]["agreeableness"]) // 4, t["id"], rid)
         return rid
 
@@ -1448,17 +1467,29 @@ class Sim:
             return self._receipt(a, eid, action, False, "no coin", extra=to)
         if t["inv"]["food"] <= 1:  # they keep one for themselves
             return self._receipt(a, eid, action, False, "nothing to spare", extra=to)
+        if self._awaits_answer(t):
+            return self._hold_ask(a, t, action, eid)
+        return self._share_answer(a, t, action, eid)
+
+    def _share_answer(self, a: dict, t: dict, action: str, eid: int, yes: int | None = None, parents=()) -> int:
+        """ask_food or buy_from's outcome: a seeded roll on the target's nature, or (player-ask-1) the
+        player's answer."""
+        price, to = self._price(), {"to": t["id"]}
         kin = t["id"] in self.state["families"][a["family"]]["members"]
-        stream, idx, roll = self._ask_roll(f"share:{t['id']}:{a['id']}")
-        if action == "ask_food" and kin:  # the same odds as ask_kin for the same ask (steering, T19)
-            limit = self._kin_limit(t, a)
+        if yes is None:
+            stream, idx, roll = self._ask_roll(f"share:{t['id']}:{a['id']}")
+            if action == "ask_food" and kin:  # the same odds as ask_kin for the same ask (steering, T19)
+                limit = self._kin_limit(t, a)
+            else:
+                limit = _clamp(SHARE_BASE[action] + t["traits"]["agreeableness"] // 4
+                               + self._rel(t, a["id"])["affinity"] // 4 + (SHARE_KIN if kin else 0), 0, SHARE_MAX)
+            extra, origin, yes = {"stream": stream, "index": idx, "roll": roll, "limit": limit, "kin": kin, **to}, \
+                "chance", roll < limit
         else:
-            limit = _clamp(SHARE_BASE[action] + t["traits"]["agreeableness"] // 4
-                           + self._rel(t, a["id"])["affinity"] // 4 + (SHARE_KIN if kin else 0), 0, SHARE_MAX)
-        extra = {"stream": stream, "index": idx, "roll": roll, "limit": limit, "kin": kin, **to}
+            extra, origin = {"answered": 1, "kin": kin, **to}, "rule"
         r = self._met(a, t["id"])
         self._met(t, a["id"])
-        if roll < limit:
+        if yes:
             t["inv"]["food"] -= 1
             a["inv"]["food"] += 1
             if action == "buy_from":
@@ -1470,11 +1501,11 @@ class Sim:
                 self._note(a["id"], f"{t['name']} gave me 1 food when I asked")
                 self._note(t["id"], f"gave 1 food to {a['name']}, who asked")
             r["affinity"] = min(1000, r["affinity"] + 50)
-            return self._receipt(a, eid, action, True, "sold" if action == "buy_from" else "gave", "chance", extra,
-                                 parents=self._price_cause() if action == "buy_from" else ())
+            return self._receipt(a, eid, action, True, "sold" if action == "buy_from" else "gave", origin, extra,
+                                 parents=tuple(parents) + tuple(self._price_cause() if action == "buy_from" else ()))
         self._note(a["id"], f"{t['name']} refused to {'sell me' if action == 'buy_from' else 'give me'} food")
         r["affinity"] = max(-1000, r["affinity"] - 50)
-        rid = self._receipt(a, eid, action, False, "refused", "chance", extra)
+        rid = self._receipt(a, eid, action, False, "refused", origin, extra, parents=parents)
         self._occasion(a, "refused", 450 + (1000 - a["traits"]["agreeableness"]) // 4, t["id"], rid)
         return rid
 
@@ -1626,6 +1657,11 @@ class Sim:
         (eid, action, target), *rest = self._acts.pop(a["id"])
         for e2, a2, _ in rest:
             self._receipt(a, e2, a2, False, "one act per tick")
+        if action in ANSWER_ACTS:  # held to no offer: an ask it can answer is checked in _answer
+            self.player_pending[a["id"]] = (eid, action, target, list(ANSWER_ACTS), [target])
+            return
+        for q in list(self.state["player"].get("asks", [])):  # it moved on without answering: its nature does
+            self._settle_ask(q, None, [eid])
         if action in RATED_ACTS and self.state["tick"] < a["cooldown_until"]:
             self._receipt(a, eid, action, False, "cooldown")
             return
@@ -1641,6 +1677,8 @@ class Sim:
 
     def _apply_act(self, a: dict, eid: int, action: str, target, offer: list, people: list):
         """A player act, with the checks a mind's reply schema would have made, then the mind's own path."""
+        if action in ANSWER_ACTS:
+            return self._answer(a, eid, action, target)
         if action not in offer:
             self._receipt(a, eid, action, False, "not offered", extra={"offer": offer})
         elif action in PERSON_STEPS and target not in people:
@@ -1667,7 +1705,7 @@ class Sim:
             if "player" not in self.state:
                 raise ValueError("act: no body is possessed")
             action, target = act["action"], act.get("target")
-            if action not in DELIBERATE_ACTIONS or not (target is None or _is_int(target)):
+            if action not in PLAYER_ACTIONS or not (target is None or _is_int(target)):
                 raise ValueError(f"act: bad action {action!r} or target {target!r}")
             aid = self.state["player"]["agent"]
             data = {"action": action} if target is None else {"action": action, "target": target}
@@ -1687,7 +1725,63 @@ class Sim:
             return eid
         raise ValueError(f"unknown player action {act['kind']}")
 
+    def _awaits_answer(self, t: dict) -> bool:
+        """Whether an ask aimed at `t` waits for the player's answer: t is the possessed body, not idle."""
+        return self._possessed(t) and not self._idle(t)
+
+    def _hold_ask(self, a: dict, t: dict, action: str, eid: int) -> int:
+        """An ask aimed at the player's body: logged as an `ask` the body witnesses, answered by the player
+        (agree or decline) within ASK_WAIT_TICKS, or by its next other act or a release, when the body's own
+        nature answers by the usual roll. The asker's step waits; its receipt cites the answer."""
+        asks = self.state["player"].setdefault("asks", [])
+        if any(q["asker"] == a["id"] for q in asks):
+            return self._receipt(a, eid, action, False, "already asked", extra={"to": t["id"]})
+        qid = self._emit("ask", "rule", a["id"], {"action": action, "to": t["id"]}, [eid])
+        asks.append({"asker": a["id"], "action": action, "event": qid, "src": eid,
+                     "until": self.state["tick"] + ASK_WAIT_TICKS})
+        return qid
+
+    def _settle_ask(self, q: dict, yes: int | None, parents=()) -> int:
+        """The asker's outcome, from the player's answer (yes 1 or 0) or the body's own roll (None). The ask's
+        conditions are checked again, live: either may have moved, slept or run out since."""
+        p = self.state["player"]
+        p["asks"].remove(q)
+        if not p["asks"]:
+            del p["asks"]
+        x, t, action = self.state["agents"][q["asker"]], self.state["agents"][p["agent"]], q["action"]
+        cite, to = [q["event"]] + list(parents), {"to": t["id"]}
+        if not self._together(x, t):
+            rid = self._receipt(x, q["src"], action, False, "target not here", extra=to, parents=cite)
+        elif t["asleep"]:
+            rid = self._receipt(x, q["src"], action, False, "target asleep", extra=to, parents=cite)
+        elif action == "buy_from" and x["inv"]["coin"] < self._price():
+            rid = self._receipt(x, q["src"], action, False, "no coin", extra=to, parents=cite)
+        elif t["inv"]["food"] <= 1:
+            rid = self._receipt(x, q["src"], action, False,
+                                "kin has nothing to spare" if action == "ask_kin" else "nothing to spare",
+                                extra=None if action == "ask_kin" else to, parents=cite)
+        elif action == "ask_kin":
+            rid = self._kin_answer(x, t, action, q["src"], yes, cite)
+        else:
+            rid = self._share_answer(x, t, action, q["src"], yes, cite)
+        author, _, holder = self._running(x)
+        if holder is not None and holder.get("asked") == q["event"]:  # the step that asked is still running
+            del holder["asked"]
+            self._end_step(x, author, self.events[rid].data["ok"], self.events[rid].data["why"])
+        return rid
+
+    def _answer(self, a: dict, eid: int, action: str, target) -> int:
+        """The player answers an ask aimed at its body: agree gives (or sells), decline refuses."""
+        q = next((q for q in self.state["player"].get("asks", []) if q["asker"] == target), None)
+        if q is None:
+            return self._receipt(a, eid, action, False, "no ask")
+        rid = self._receipt(a, eid, action, True, "said yes" if action == "agree" else "said no", extra={"to": target})
+        self._settle_ask(q, 1 if action == "agree" else 0, [rid])
+        return rid
+
     def _release(self) -> int:
+        for q in list(self.state["player"].get("asks", [])):  # nobody holds the body to answer: its nature does
+            self._settle_ask(q, None)
         p = self.state.pop("player")
         a = self.state["agents"][p["agent"]]
         # An act queued this tick before the release (or before a possess moved the body) would resolve on a

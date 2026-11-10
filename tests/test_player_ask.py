@@ -1,0 +1,190 @@
+"""An ask aimed at the player's body waits for the player's answer (player-ask-1, Steering 2026-11-10).
+
+ask_kin, ask_food and buy_from aimed at the possessed body, while it isn't idle, are logged as an `ask` the
+body witnesses. The player answers with `agree` or `decline` (target: the asker) within ASK_WAIT_TICKS. If
+it doesn't, or acts otherwise first, or lets go, the body's own nature answers with the usual roll. The
+asker's step waits, and its receipt cites the ask and the answer. A world with no player is unchanged."""
+import hashlib
+import json
+
+from asiimov import inhabitant
+from asiimov.events import Event
+from asiimov.minds import MindReply, StubMind
+from asiimov.replay import replay
+from asiimov.sim import ASK_WAIT_TICKS, TICKS_PER_DAY, Sim
+
+GOLDEN_21 = "a516d4439513be03a9b37b8077401fd2bc2838b84e2a22dd984c5c4a63f20e8e"  # tests/test_world.py, engine 21
+
+
+def test_a_world_with_no_player_is_engine_21_but_for_the_version_field():
+    from test_world import FIRE, run
+    s = run(StubMind(), agents=20, days=2, seed=3, player=FIRE)
+    lines = [e.to_json() for e in s.events]
+    g = json.loads(lines[0])
+    g["data"]["engine"] = "21"
+    lines[0] = json.dumps(g, sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256("".join(l + "\n" for l in lines).encode()).hexdigest() == GOLDEN_21
+
+
+def scene(action="ask_food"):
+    """A world at a tick where villager A and the possessed body B are together, awake and fed, with A's
+    intent about to ask B. Returns (sim, A, B, the player acts so far by tick)."""
+    for seed in range(40):
+        sim = Sim(seed, 14, StubMind())
+        sim.run_until(TICKS_PER_DAY // 2)
+        ag = sim.state["agents"]
+        for b in ag:
+            if b["asleep"] or b["place"] is None:
+                continue
+            fam = sim.state["families"][b["family"]]["members"]
+            for a in ag:
+                if a is b or a["asleep"] or a["place"] != b["place"] or (action == "ask_kin") != (a["id"] in fam):
+                    continue
+                player = {}
+                sim.step([{"kind": "possess", "agent": b["id"]}])
+                player[sim.state["tick"] - 1] = [{"kind": "possess", "agent": b["id"]}]
+                if not (sim._together(a, b) and not a["asleep"] and not b["asleep"]):
+                    break
+                b["inv"]["food"], a["inv"]["coin"] = 5, 50
+                pos = next(e.id for e in sim.events if e.kind == "possess")
+                a["override"] = None
+                a["intent"] = {"goal": "get food", "steps": [{"do": action, "target": b["id"]}], "i": 0,
+                               "event": pos, "tick": sim.state["tick"], "left": 6}
+                return sim, a["id"], b["id"], player
+    raise AssertionError("no scene")
+
+
+def run_with(sim, player, acts_by_offset):
+    t0 = sim.state["tick"]
+    for k in range(ASK_WAIT_TICKS + 3):
+        acts = acts_by_offset.get(k, [])
+        if acts:
+            player[sim.state["tick"]] = acts
+        sim.step(acts)
+    return t0
+
+
+def receipt_for(sim, asker, ask_id):
+    return next(e for e in sim.events if e.kind == "receipt" and e.actor == asker and ask_id in e.parents)
+
+
+def test_the_player_says_yes_and_the_asker_gets_food_citing_the_answer():
+    sim, a, b, player = scene()
+    sim.step([])  # A's step asks; the ask waits
+    ask = next(e for e in sim.events if e.kind == "ask" and e.actor == a)
+    assert ask.data == {"action": "ask_food", "to": b}
+    assert not any(e.kind == "receipt" and e.actor == a and e.tick == ask.tick for e in sim.events)
+    assert sim.state["player"]["asks"][0]["asker"] == a
+    sim.step([])  # still waiting: nobody rolled for the body
+    assert not any(e.kind == "receipt" and ask.id in e.parents for e in sim.events)
+    act = [{"kind": "act", "action": "agree", "target": a}]
+    player[sim.state["tick"]] = act
+    sim.step(act)
+    r = receipt_for(sim, a, ask.id)
+    mine = next(e for e in sim.events if e.kind == "receipt" and e.actor == b and e.data["action"] == "agree")
+    assert r.data["ok"] and r.data["why"] == "gave" and r.data["answered"] == 1 and "roll" not in r.data
+    assert mine.id in r.parents and mine.data["why"] == "said yes"
+    na, nb = sim.state["agents"][a]["name"], sim.state["agents"][b]["name"]
+    assert any(f"gave 1 food to {na}, who asked" in n for n in sim.state["agents"][b]["recent"])
+    assert any(f"{nb} gave me 1 food when I asked" in n for n in sim.state["agents"][a]["recent"])
+    assert "asks" not in sim.state["player"]
+    assert any(e.kind == "intent_done" and e.actor == a for e in sim.events)  # the waiting step ended
+
+
+def test_the_player_says_no_and_the_asker_is_refused():
+    sim, a, b, player = scene("ask_kin")
+    sim.step([])
+    ask = next(e for e in sim.events if e.kind == "ask" and e.actor == a)
+    sim.step([{"kind": "act", "action": "decline", "target": a}])
+    r = receipt_for(sim, a, ask.id)
+    assert not r.data["ok"] and r.data["why"] == "kin refused" and r.origin == "rule"
+    assert any(e.kind == "intent_failed" and e.actor == a for e in sim.events)  # its one-step intent failed, as ever
+
+
+def test_unanswered_the_bodys_own_nature_answers_after_an_hour_and_the_asker_never_stalls():
+    sim, a, b, player = scene()
+    sim.step([])
+    ask = next(e for e in sim.events if e.kind == "ask" and e.actor == a)
+    for _ in range(ASK_WAIT_TICKS - 1):
+        sim.step([])
+        assert not any(e.kind == "receipt" and ask.id in e.parents for e in sim.events)
+    sim.step([])
+    r = receipt_for(sim, a, ask.id)
+    assert r.tick == ask.tick + ASK_WAIT_TICKS and r.origin == "chance" and "roll" in r.data
+
+
+def test_acting_otherwise_or_letting_go_lets_the_bodys_nature_answer_at_once():
+    for acts in ([{"kind": "act", "action": "rest"}], [{"kind": "release"}]):
+        sim, a, b, player = scene("buy_from")
+        sim.step([])
+        ask = next(e for e in sim.events if e.kind == "ask" and e.actor == a)
+        t = sim.state["tick"]
+        sim.step(acts)
+        r = receipt_for(sim, a, ask.id)
+        assert r.tick == t and r.origin == "chance", acts
+
+
+def test_an_answer_with_no_ask_is_refused():
+    sim, a, b, player = scene()
+    other = next(o["id"] for o in sim.state["agents"] if o["id"] not in (a, b))
+    sim.step([{"kind": "act", "action": "agree", "target": other}])
+    r = next(e for e in sim.events if e.kind == "receipt" and e.actor == b and e.data["action"] == "agree")
+    assert not r.data["ok"] and r.data["why"] == "no ask"
+
+
+class AsksTheBody(StubMind):
+    """Stub everywhere, but a deliberation that may ask villager 5 for food (or as kin) does."""
+
+    def decide(self, req):
+        v = req.view
+        people = [p if isinstance(p, int) else p.get("id") for p in v.get("people") or []]
+        if req.kind == "deliberate" and 5 in people:
+            for action in ("ask_kin", "ask_food", "buy_from"):
+                if action in v.get("offer", []):
+                    return MindReply(json.dumps({"action": action, "target": 5}), self.model, {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_asks_answered_by_a_player_replay_exactly():
+    """Minds ask the body during their deliberations; the player answers each on the next tick, yes then
+    no. Every ask gets exactly one receipt, which cites the player's answer, and the log replays exactly."""
+    sim, k = Sim(8, 14, AsksTheBody()), 0
+    for t in range(3 * TICKS_PER_DAY):
+        acts = [{"kind": "possess", "agent": 5}] if t == 10 else []
+        asks = sim.state.get("player", {}).get("asks", [])
+        if asks:
+            k += 1
+            v = inhabitant.view(sim, 5)  # what the player sees: the ask, its deadline, and both answers offered
+            assert v["asks"] == [{"from": q["asker"], "name": sim.state["agents"][q["asker"]]["name"],
+                                  "action": q["action"], "until": q["until"]} for q in asks]
+            if not v["asleep"]:
+                assert v["offer"]["agree"] == v["offer"]["decline"] == [q["asker"] for q in asks]
+            acts.append({"kind": "act", "action": "agree" if k % 2 else "decline", "target": asks[0]["asker"]})
+        elif "player" in sim.state and t % 3 == 0:
+            acts.append({"kind": "act", "action": "wait"})
+        sim.step(acts)
+    sim.finish()
+    asks = [e for e in sim.events if e.kind == "ask"]
+    answers = {e.id for e in sim.events if e.kind == "receipt" and e.actor == 5 and e.data["action"] in ("agree", "decline")}
+    assert len(asks) >= 3
+    for q in asks:
+        rs = [e for e in sim.events if e.kind == "receipt" and q.id in e.parents]
+        assert len(rs) == 1 and rs[0].actor == q.actor and set(rs[0].parents) & answers, (q, rs)
+    events = [Event(**json.loads(e.to_json())) for e in sim.events]
+    assert replay(events).state_hash() == sim.state_hash()
+
+
+def test_an_idle_body_answers_by_its_nature_at_once():
+    from asiimov.sim import IDLE_TICKS
+    sim, a, b, player = scene()
+    holder, sim.state["agents"][a]["intent"] = sim.state["agents"][a]["intent"], None  # ask once the body is idle
+    for _ in range(IDLE_TICKS):
+        sim.step([])
+    A, B = sim.state["agents"][a], sim.state["agents"][b]
+    B["inv"]["food"], A["place"], A["route"] = 5, B["place"], None  # together again, wherever the hour took them
+    assert not A["asleep"] and not B["asleep"] and sim._idle(B)
+    sim.state["agents"][a]["intent"] = {**holder, "tick": sim.state["tick"]}
+    sim.step([])
+    assert not any(e.kind == "ask" for e in sim.events)
+    assert any(e.kind == "receipt" and e.actor == a and e.data["action"] == "ask_food" and e.origin == "chance"
+               for e in sim.events)

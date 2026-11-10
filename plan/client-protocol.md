@@ -89,7 +89,7 @@ sent twice and none skipped.
   - `fire` with `{"family": int}`.
   - `possess` with `{"agent": int}`. Refused with `body_taken` while a body is held (release first).
   - `release` with `{}`. Refused with `no_body` if none is held.
-  - `act` with `{"action": one of DELIBERATE_ACTIONS, "target": int?}`, on the possessed body. Refused
+  - `act` with `{"action": one of PLAYER_ACTIONS (DELIBERATE_ACTIONS plus `agree` and `decline`, which answer an ask aimed at the body; target: the asker), "target": int?}`, on the possessed body. Refused
     with `no_body` if none is held. Whether the act works is the engine's call in that tick's commit
     phase, and the outcome is a `receipt` event citing the `act` event (plan/player-body-spec.md). The
     ack names the `act` event, not the receipt. An act followed in the same tick by `release`, or by a

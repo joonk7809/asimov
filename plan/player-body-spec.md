@@ -92,8 +92,9 @@ dropped reported. B5/B6's test-11 arm
 doesn't apply: this adds no mind choices.
 
 D2's rule, that a reply lands on the tick it's asked, holds. Everything another villager asks of the
-player's body (ask_kin, ask_food, buy_from, steal against it) is resolved by rule rolls today, so it
-never waits on the player. Free speech, when B6 adds it, is the one place a mind would wait for the
+player's body (ask_kin, ask_food, buy_from, steal against it) was resolved by rule rolls, so it never
+waited on the player. From player-ask-1 the three asks wait up to 6 ticks for the player's answer (below);
+the asker's tick never blocks, its step just waits, and steal still rolls. Free speech, when B6 adds it, is the one place a mind would wait for the
 player: the player's reply lands on the next tick as a player event, never blocking a tick. That's an
 explicit exception for the player's body only, and it needs Steering's sign-off when B6 specs it.
 
@@ -112,7 +113,7 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   `hunger`, `food`, `coin`, `plan` (blocks: activity, start_h, end_h), `recent` (its notes),
   `present` (each: id, name, role, kin, has_food, pos), `kin` (each: id, name, home), `market_food`
   (only at the market), `occasion` (why and who, as the deliberate situation words it), `offer`
-  (the actions `_offer` allows now, with the people each may name), `cooldown_until`, `food_price` (the
+  (the actions `_offer` allows now, with the people each may name), `cooldown_until`, `asks` (player-ask-1, below), `food_price` (the
   price in force, which every villager's prompt already states) and `intent` (its own villager's current
   intent: goal, steps as do and target, and the step it is on; null when it has none). Any field
   added later needs a spec line. Bar 5 checks the keys against this list. Positions of other villagers appear only for those at its place (and its
@@ -126,6 +127,21 @@ What an inhabitant gets, and nothing more (the server filters; the client is nev
   heard. Its own `intent_*` events carry their `goal` and `steps`: the player sees what its own body meant
   to do (Steering, 2026-11-10, after test 16b attempt 1). No other villager's mind words are sent.
 - Intents: `act` with the action and target, and `seen_tick`. Divine verbs are refused with `scope`.
+
+## Asks aimed at the player's body (player-ask-1, Steering 2026-11-10, after test 16b attempt 1)
+- An `ask_kin`, `ask_food` or `buy_from` aimed at the possessed body while it isn't idle, that passes the
+  usual checks (together, awake, food to spare, coin), isn't rolled. It's logged as an `ask` event (actor:
+  the asker; data: action, to; parent: the asker's act or step event), which the body witnesses, and waits
+  in `state.player.asks` with `until = tick + ASK_WAIT_TICKS` (6).
+- The player answers with an `act` of `agree` or `decline`, target the asker (`sim.ANSWER_ACTS`, held to no
+  offer; an answer with no ask from that villager gets "no ask"). Its own receipt says "said yes" or "said no".
+- Unanswered by `until`, or when the player acts otherwise first, or lets go, the body's own nature answers
+  with the same roll as for anyone (origin chance). An away player never stalls the asker.
+- The asker's receipt cites the ask and the answer (the player's receipt). Its conditions are checked again
+  at the answer. The asker's step waits (`holder.asked`) and ends on that receipt.
+- The inhabitant view gains `asks` (each: from, name, action, until) and, while awake, offers `agree` and
+  `decline` naming the askers.
+- A world with no player is unchanged but for the engine field (tests/test_player_ask.py).
 
 A god-scope session is unchanged and keeps `fire`. "Both" is one person holding two connections, an
 inhabitant and a god, allowed only when the world's run.json says `"divine": true`. The god connection
