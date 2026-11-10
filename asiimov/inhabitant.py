@@ -4,19 +4,19 @@ The server filters and the client is never trusted to hide anything. Everything 
 from a whitelist, never as a copy of engine state (Sim._view carries traits), and it only reads the world:
 the live runner calls it between ticks, and test_inhabitant checks the log still equals batch.
 """
-from .sim import OCCASION_TICKS, PERSON_STEPS, TICKS_PER_DAY
+from .sim import ANSWER_ACTS, OCCASION_TICKS, PERSON_STEPS, TICKS_PER_DAY
 from .worldmap import position
 
 # The per-tick view's keys, as the spec lists them. A new field needs a spec line, and bar 5 checks this.
 VIEW_KEYS = ("tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan", "recent",
-             "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent")
+             "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent", "asks")
 PUBLIC = frozenset({"fire"})            # events the whole village sees
 NAMES = ("with", "to", "target", "household")  # data fields that name the villager an event is about
 # Another villager's events it can see, and the fields of each: what it does in plain sight. Nothing that
 # is that villager's mind (intent_*, plan_receipt), its body clock (day_rhythm) or its memory (sleep's counts).
 SEEN = {"activity": ("activity", "place", "arrive", "from"), "arrive": ("place",), "wake": ("place",),
         "sleep": (), "talk": ("with", "place", "gossip"), "meet": ("with", "place"), "snub": ("with",),
-        "eat": ("household",), "sell": ("food",), "fire": ("family",)}
+        "eat": ("household",), "sell": ("food",), "fire": ("family",), "ask": ("action", "to")}
 SEEN_NAMING = {**SEEN, "receipt": ("action", "ok", "why", "to")}  # also a receipt for an act aimed at it
 
 
@@ -61,7 +61,10 @@ def view(sim, aid: int) -> dict:
                         "has_food": agents[o]["inv"]["food"] > 0, "pos": _pos(sim, agents[o])} for o in here],
            "kin": [{"id": m, "name": agents[m]["name"], "home": agents[m]["home"]} for m in fam if m != aid],
            "occasion": None, "offer": {}, "cooldown_until": a["cooldown_until"], "food_price": sim._price(),
-           "intent": None}
+           "intent": None,
+           "asks": [{"from": q["asker"], "name": agents[q["asker"]]["name"], "action": q["action"], "until": q["until"]}
+                    for q in st.get("player", {}).get("asks", [])
+                    if st["player"]["agent"] == aid and q["until"] > tick]}  # one at `until` times out first
     it = a["intent"]
     if it:  # its own mind's words: what this body meant to do (Steering, 2026-11-10; never another's)
         out["intent"] = {"goal": it["goal"], "i": it["i"],
@@ -80,6 +83,8 @@ def view(sim, aid: int) -> dict:
         v["offer"] = sim._offer(a, v)
         sim._situation(a, v, "deliberate")  # fills v["people"]; may cut a crowd, as for a mind
         out["offer"] = {x: (v["people"] if x in PERSON_STEPS else []) for x in sim._offer(a, v)}
+        if out["asks"]:  # player-ask-1: answering an ask aimed at it, named by the asker
+            out["offer"].update({x: [q["from"] for q in out["asks"]] for x in ANSWER_ACTS})
     assert set(out) <= set(VIEW_KEYS), "a view field outside the spec's list"
     return out
 

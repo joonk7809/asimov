@@ -9,7 +9,7 @@ extends SceneTree
 const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
 const VIEW_KEYS := ["tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan",
-		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent"]
+		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent", "asks"]
 
 var god := LiveClient.new()
 var me := LiveClient.new()
@@ -35,6 +35,17 @@ func _init() -> void:
 			printerr("button %s for %d shown should be %s" % [c[0], c[1], c[3]])
 			quit(1)
 			return
+	# An ask waiting on the villager's answer (player-ask-1) reads as one, with the time left, and the
+	# answer buttons are shown wherever the asker is.
+	var waiting := Words.asks({"tick": 100, "asks": [{"from": 4, "name": "Ari", "action": "ask_food", "until": 104}]}, {}, 20.0)
+	var said := Words.describe({"kind": "ask", "actor": 4, "origin": "rule", "data": {"action": "buy_from", "to": 3}},
+			{"id": 3, "name": "Me"}, {4: "Ari"})
+	if not ("Ari asked you for food" in waiting and "4 ticks" in waiting and "80s" in waiting) \
+			or said != "Ari wanted to buy food from you. Say yes or no." \
+			or not Words.shown({"action": "agree", "target": 4}, {}) or not Words.shown({"action": "decline", "target": 4}, {}):
+		printerr("an ask doesn't read right: %s | %s" % [waiting, said])
+		quit(1)
+		return
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
 		want_ticks = int(a[2])

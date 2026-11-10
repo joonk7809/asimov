@@ -207,7 +207,8 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 		var line := Words.describe(e, client.me, names)
 		if line != "":
 			lines.append("[color=#8a93a6]%s[/color]  %s" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line])
-		if e["kind"] == "receipt" and e.get("actor") != null and int(e["actor"]) != int(client.me["id"]) and line != "":
+		if e["kind"] == "receipt" and e.get("actor") != null and int(e["actor"]) != int(client.me["id"]) and line != "" \
+				and str(e["data"].get("action")) in Words.HERE_ONLY:  # an ask or theft aimed at it, not a gift
 			ui["asked"].text = "[color=#f0c060]%s %s[/color]" % [line, "You can answer them below." if here.has(int(e["actor"])) else ""]
 			asked_tick = int(e["tick"])
 		if e.get("actor") != null and here.has(int(e["actor"])):
@@ -246,6 +247,9 @@ func _refresh_inhabit() -> void:
 	ui["you"].text = Words.status(v, client.me, per_day)
 	ui["plan"].text = Words.plan(v, per_day, names)
 	ui["here"].text = Words.here(v, doing)
+	var waiting := Words.asks(v, names, 1.0 / maxf(client.tps, 0.001))
+	if waiting != "":
+		ui["asked"].text = waiting
 	_rebuild_menu()
 
 
@@ -254,7 +258,7 @@ func _rebuild_menu() -> void:
 	var v: Dictionary = client.view
 	var items := LiveClient.menu(v)
 	var cooling := int(v["tick"]) < int(v["cooldown_until"])
-	var key := JSON.stringify([items, pending.get("id"), cooling])
+	var key := JSON.stringify([items, pending.get("id"), cooling, v.get("asks", [])])
 	if key == _menu_key:
 		return
 	_menu_key = key
@@ -269,6 +273,11 @@ func _rebuild_menu() -> void:
 	for p in v["present"]:
 		present[int(p["id"])] = p["kin"]
 	var rows := {}  # one row of short buttons per person; the actions that name nobody come first
+	var askers := {}
+	for q in v.get("asks", []):
+		askers[int(q["from"])] = true
+	items = items.filter(func(x): return askers.has(int(x["target"]))) + \
+			items.filter(func(x): return not askers.has(int(x["target"])))  # who's waiting on you comes first
 	for it in items:
 		var t := int(it["target"])
 		if not Words.shown(it, present):

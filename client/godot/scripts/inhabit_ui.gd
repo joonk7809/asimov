@@ -9,15 +9,17 @@ const ACTION := {"buy_food": "Buy food at the market", "go_market": "Go to the m
 		"ask_food": "Ask %s for food", "buy_from": "Buy food from %s", "steal": "Steal food from %s",
 		"give_food": "Give food to %s", "give_coin": "Give a coin to %s", "seek": "Go and find %s",
 		"avoid": "Keep away from %s", "work": "Go to work", "socialize": "Go and see people", "home": "Go home",
-		"rest": "Rest", "explore": "Explore", "wait": "Wait"}
+		"rest": "Rest", "explore": "Explore", "wait": "Wait", "agree": "Say yes to %s", "decline": "Say no to %s"}
 const NOW := {"work": "Working", "shop": "Shopping", "socialize": "Seeing people", "home": "Staying",
 		"rest": "Resting", "explore": "Exploring", "visit": "Visiting"}
 const SHORT := {"ask_kin": "ask family for food", "ask_food": "ask for food", "buy_from": "buy food", "steal": "steal food",
-		"give_food": "give food", "give_coin": "give a coin", "seek": "go to them", "avoid": "keep away"}
+		"give_food": "give food", "give_coin": "give a coin", "seek": "go to them", "avoid": "keep away",
+		"agree": "say yes", "decline": "say no"}
 const DOING := {"buy_food": "buy food", "go_market": "go to the market", "ask_kin": "ask family for food",
 		"ask_food": "ask for food", "buy_from": "buy food", "steal": "steal", "give_food": "give food",
 		"give_coin": "give a coin", "seek": "find someone", "avoid": "keep away", "work": "go to work",
-		"socialize": "see people", "home": "go home", "rest": "rest", "explore": "explore", "wait": "wait"}
+		"socialize": "see people", "home": "go home", "rest": "rest", "explore": "explore", "wait": "wait",
+		"agree": "say yes", "decline": "say no"}
 const WHY := {"heading to market": "you head to the market", "started": "you start", "waited": "you wait",
 		"bought": "you buy %d food", "had enough": "you have enough food, so you buy none",
 		"not at market": "you aren't at the market", "not kin": "they aren't family",
@@ -30,7 +32,9 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"nothing to spare": "they have nothing to spare", "refused": "they refused", "sold": "they sold it to you",
 		"gave": "done", "stolen": "you got away with it", "caught": "you were caught",
 		"released": "you let go of the villager first", "stays home sick": "you stay home sick",
-		"works sick": "you work while sick"}
+		"works sick": "you work while sick", "said yes": "they get what they asked for",
+		"said no": "they're told no", "no ask": "they hadn't asked you anything",
+		"already asked": "they're still waiting for an answer"}
 const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food", "refused": "you said no",
 		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
 		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
@@ -143,6 +147,11 @@ static func describe(e: Dictionary, me: Dictionary, names: Dictionary) -> String
 			return "%s turn%s away from %s." % [a, "" if mine else "s", _who(d.get("with"), me_id, names)]
 		"fire":
 			return "Fire! A family's food stores burn."
+		"ask":
+			var what: String = ASKED.get(str(d.get("action", "")), "asked you something")
+			if d.get("to") != null and int(d["to"]) == me_id:
+				return "%s %s. Say yes or no." % [a, what]
+			return "%s %s." % [a, what.replace("you", _who(d.get("to"), me_id, names))]
 		"plan_receipt":
 			return "You plan your day." if d.get("ok", false) else ""
 		"receipt":
@@ -231,6 +240,17 @@ static func plan(v: Dictionary, per_day: int, names := {}) -> String:
 		out.append("[b]> %s[/b]" % line if hour >= float(b["start_h"]) and hour < float(b["end_h"]) else "   " + line)
 	if meant != "":
 		out.push_front(meant)
+	return "\n".join(out)
+
+
+static func asks(v: Dictionary, names: Dictionary, secs_per_tick: float) -> String:
+	## Asks waiting on this villager's answer (player-ask-1), with how long is left before its nature answers.
+	var out := []
+	for q in v.get("asks", []):
+		var left := int(q["until"]) - int(v["tick"])
+		out.append("[color=#f0c060][b]%s %s.[/b] Say yes or no within %d tick%s (about %ds), or your nature answers.[/color]"
+				% [q["name"], ASKED.get(str(q["action"]), "asked you something"), left, "" if left == 1 else "s",
+				int(left * secs_per_tick)])
 	return "\n".join(out)
 
 
