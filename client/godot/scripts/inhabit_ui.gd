@@ -4,14 +4,14 @@
 extends RefCounted
 
 const VERB := {"work": "work", "shop": "shop", "socialize": "see people", "home": "go home", "rest": "rest",
-		"explore": "explore", "sleep": "sleep"}
+		"explore": "explore", "visit": "visit someone", "sleep": "sleep"}
 const ACTION := {"buy_food": "Buy food at the market", "go_market": "Go to the market", "ask_kin": "Ask %s (family) for food",
 		"ask_food": "Ask %s for food", "buy_from": "Buy food from %s", "steal": "Steal food from %s",
 		"give_food": "Give food to %s", "give_coin": "Give a coin to %s", "seek": "Go and find %s",
 		"avoid": "Keep away from %s", "work": "Go to work", "socialize": "Go and see people", "home": "Go home",
 		"rest": "Rest", "explore": "Explore", "wait": "Wait"}
 const NOW := {"work": "Working", "shop": "Shopping", "socialize": "Seeing people", "home": "Staying",
-		"rest": "Resting", "explore": "Exploring"}
+		"rest": "Resting", "explore": "Exploring", "visit": "Visiting"}
 const SHORT := {"ask_kin": "ask family for food", "ask_food": "ask for food", "buy_from": "buy food", "steal": "steal food",
 		"give_food": "give food", "give_coin": "give a coin", "seek": "go to them", "avoid": "keep away"}
 const DOING := {"buy_food": "buy food", "go_market": "go to the market", "ask_kin": "ask family for food",
