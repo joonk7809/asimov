@@ -12,7 +12,8 @@ import re
 import pytest
 
 import asiimov.sim as sim_mod
-from asiimov.fork import ForkLeak, ForkMind, divergence, live_calls, live_seed, run_twin, summary
+from asiimov.fork import (SICK_HOUR_TICK, ForkLeak, ForkMind, divergence, genesis_change_tick, live_calls, live_seed,
+                          replay_twin, run_twin, summary, with_sick_cases)
 from asiimov.minds import MindReply, NoisyMind, StubMind
 from asiimov.replay import replay
 from asiimov.scorecard import run_arm
@@ -202,6 +203,52 @@ def test_an_edited_genesis_is_a_change_from_tick_zero():
     twin, mind = run_twin(base.events, PromptMind(), genesis=pop)
     assert mind.counts["miss"] > 0
     assert {2, 9} <= set(divergence(base.events, twin.events))
+
+
+def _sick_case(base):
+    """A day-1 06:00 forced case on an adult the base never makes sick."""
+    t = TICKS_PER_DAY + SICK_HOUR_TICK
+    ever = {e.actor for e in base.events if e.kind == "sick"}
+    pop = base.events[0].data["population"]
+    who = next(a["id"] for a in pop["agents"] if a["role"] not in ("child", "elder") and a["id"] not in ever)
+    return t, who, with_sick_cases(pop, [[t, who]])
+
+
+def test_a_sick_case_twin_is_the_full_rerun_and_changes_nothing_before_its_tick():
+    base = world(PromptMind())
+    t, who, pop = _sick_case(base)
+    truth = Sim(5, 40, PromptMind(), genesis=pop)
+    truth.run(4)
+    truth.finish()
+    twin, mind = run_twin(base.events, PromptMind(), genesis=pop)
+    assert logs(twin.events) == logs(truth.events)
+    assert any(e.kind == "sick" and e.actor == who and e.tick == t for e in twin.events)
+    cone = divergence(base.events, twin.events)
+    assert who in cone and min(cone.values()) >= t
+    assert mind.counts["base"] > 0
+    assert len(replay_twin(twin.events).events) == len(twin.events)
+
+
+def test_a_live_call_before_the_case_is_a_leak():
+    # Only the case's tick may change anything, so a record missing a reply before it is a broken twin.
+    base = world(PromptMind(), days=2)
+    t, _, pop = _sick_case(base)
+    gap = next(e for e in base.events if e.origin == "mind" and 0 < e.tick < t)
+    live = Recording(PromptMind())
+    with pytest.raises(ForkLeak):
+        run_twin([e for e in base.events if e is not gap], live, genesis=pop)
+    assert live.asked == []
+
+
+def test_only_a_cases_edit_moves_the_change_past_tick_zero():
+    base = world(PromptMind(), agents=12, days=1).events[0].data["population"]
+    assert genesis_change_tick(base, base) is None
+    assert genesis_change_tick(base, with_sick_cases(base, [[200, 3], [180, 4]])) == 180
+    swapped = with_sick_cases(base, [[200, 3]])
+    swapped["agents"][0]["traits"] = dict(swapped["agents"][1]["traits"])
+    assert genesis_change_tick(base, swapped) == 0
+    with pytest.raises(ValueError):
+        with_sick_cases(base, [[200, 99]])
 
 
 def test_two_records_for_one_agent_tick_are_refused():

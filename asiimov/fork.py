@@ -23,8 +23,10 @@ python -m asiimov.fork --base runs/demo/events.jsonl --out runs/twin-fire2 --fir
 python -m asiimov.fork --base runs/demo/events.jsonl --out runs/noise-a --live 12,40 --salt 1 --pod POD_ID
 python -m asiimov.fork --resume --out runs/twin-fire2 --pod POD_ID
 python -m asiimov.fork --base runs/stub/events.jsonl --out runs/stub-fire2 --fire 2@1 --mind stub
+python -m asiimov.fork --base runs/base/events.jsonl --arm full --out runs/sick-12 --sick 12@1 --pod POD_ID
 """
 import argparse
+import copy
 import gzip
 import hashlib
 import json
@@ -184,6 +186,40 @@ def base_player(events) -> dict[int, list]:
     return player
 
 
+SICK_HOUR_TICK = 36  # 06:00, when the engine draws the day's chance case (Sim._sickness)
+
+
+def with_sick_cases(pop: dict, cases) -> dict:
+    """A copy of a genesis population with forced sickness cases ([tick, agent]) added to stakes.sick.cases."""
+    sick = pop.get("stakes", {}).get("sick")
+    if sick is None:
+        raise ValueError("the base world has no sickness stake (engine 21+, stakes.sick)")
+    out = copy.deepcopy(pop)
+    n = len(pop["agents"])
+    for t, who in cases:
+        if not 0 <= who < n:
+            raise ValueError(f"no agent {who} in a world of {n}")
+        if [t, who] not in out["stakes"]["sick"]["cases"]:
+            out["stakes"]["sick"]["cases"].append([t, who])
+    out["stakes"]["sick"]["cases"].sort()
+    return out
+
+
+def genesis_change_tick(base_pop: dict, pop: dict) -> int | None:
+    """The first tick an edited genesis can change the world: None if unedited, the earliest added or removed
+    case's tick if stakes.sick.cases is the only edit (a case acts at its own tick, nothing reads it before),
+    else 0."""
+    if pop == base_pop:
+        return None
+    a, b = copy.deepcopy(base_pop), copy.deepcopy(pop)
+    ca = a.get("stakes", {}).get("sick", {}).pop("cases", None)
+    cb = b.get("stakes", {}).get("sick", {}).pop("cases", None)
+    if a != b or ca is None or cb is None:
+        return 0
+    moved = [t for t, w in ca if [t, w] not in cb] + [t for t, w in cb if [t, w] not in ca]
+    return min(moved) if moved else 0
+
+
 def build_sim(base, mind, arm: str | None = None, genesis: dict | None = None, workers: int = 1) -> Sim:
     """A world like the base log's, from its genesis (or an edited copy), driven by `mind`.
     Scorecard arm logs need their arm: its prompts differ from the plain world's."""
@@ -227,9 +263,9 @@ def run_twin(base, live, out: str | None = None, player: dict | None = None, liv
         merged[t].remove(act)
     for t, acts in player.items():
         merged[t] = merged[t] + acts
-    edited = genesis is not None and genesis != base[0].data["population"]
+    edit_tick = None if genesis is None else genesis_change_tick(base[0].data["population"], genesis)
     changes = ([t for t in player if player[t]] + [t for t, _ in drop] + ([live_from] if live_agents else [])
-               + ([0] if edited or souls else []))
+               + ([edit_tick] if edit_tick is not None else []) + ([0] if souls else []))
     calm = min(changes, default=end_tick(base))
     models = {e.mind["model"] for e in base if e.origin == "mind"}
     if not serve and models - {getattr(live, "model", None)}:
@@ -301,6 +337,8 @@ def main():
     ap.add_argument("--resume", action="store_true", help="continue a crashed twin in --out with its own config")
     ap.add_argument("--arm", help="the scorecard arm the base log was run as (e.g. fiction)")
     ap.add_argument("--fire", action="append", default=[], help="add a fire as FAMILY@DAY (repeatable)")
+    ap.add_argument("--sick", action="append", default=[],
+                    help="add a forced sickness case as AGENT@DAY, at that day's 06:00 (repeatable)")
     ap.add_argument("--live", default="", help="comma-separated agent ids forced live")
     ap.add_argument("--live-from-day", type=int, default=0)
     ap.add_argument("--salt", type=int, default=0, help="sampling salt; give each noise twin its own")
@@ -331,6 +369,8 @@ def main():
             base_sha = hashlib.sha256(f.read()).hexdigest()
         cfg = {"base": os.path.abspath(args.base), "base_sha256": base_sha, "arm": args.arm,
                "player": [[t, a] for t in sorted(player) for a in player[t]],
+               "sick": sorted([int(d) * TICKS_PER_DAY + SICK_HOUR_TICK, int(a)]
+                              for a, d in (spec.split("@") for spec in args.sick)),
                "live": [int(x) for x in args.live.split(",") if x.strip()],
                "live_from": args.live_from_day * TICKS_PER_DAY, "salt": args.salt,
                "until": args.days * TICKS_PER_DAY if args.days else None, "mind": args.mind or "llm"}
@@ -356,8 +396,9 @@ def main():
     player = defaultdict(list)
     for t, act in cfg["player"]:
         player[t].append(act)
+    genesis = with_sick_cases(base[0].data["population"], cfg["sick"]) if cfg.get("sick") else None
     sim, mind = run_twin(base, live, args.out, player, cfg["live"], cfg["live_from"], cfg["salt"], cfg["arm"],
-                         until=cfg["until"], workers=args.workers or (64 if args.mind == "llm" else 1), prior=prior,
+                         genesis=genesis, until=cfg["until"], workers=args.workers or (64 if args.mind == "llm" else 1), prior=prior,
                          serve=args.mind != "stub")
     write_jsonl(sim.events, os.path.join(args.out, "events.jsonl"))
     if os.path.exists(partial):
