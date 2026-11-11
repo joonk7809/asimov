@@ -32,7 +32,7 @@ import time
 from collections import defaultdict
 
 from . import inhabitant, persist
-from .minds import NoisyMind, StubMind
+from .minds import NoisyMind, ScriptMind, StubMind
 from .sim import ENGINE_VERSION, PLAYER_ACTIONS, TICKS_PER_DAY
 from .worldmap import position
 
@@ -672,7 +672,8 @@ def main(argv=None):
     ap.add_argument("--out", default="runs/live", help="run directory; reopened if it holds a world")
     ap.add_argument("--agents", type=int, default=25)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--mind", choices=["stub", "noisy", "llm"], default=None, help="default stub; on reopen, the run's")
+    ap.add_argument("--mind", choices=["stub", "noisy", "script", "llm"], default=None,
+                    help="default stub; script: the stub saying fixed sentences (test 16's blind pair); on reopen, the run's")
     ap.add_argument("--pod", help="pod id from scripts/runpod_pod.py (url, model and key)")
     ap.add_argument("--llm-url")
     ap.add_argument("--llm-model")
@@ -690,13 +691,13 @@ def main(argv=None):
     kind = args.mind
     if kind is None:
         kind = (persist.config(args.out).get("mind") if os.path.exists(os.path.join(args.out, "run.json")) else None) or "stub"
-    if kind not in ("stub", "noisy", "llm"):
+    if kind not in ("stub", "noisy", "script", "llm"):
         raise SystemExit(f"{args.out} was run with mind {kind!r}")
     if kind == "llm":
         from .run import llm_from_args
         mind = llm_from_args(args)[0]
     else:
-        mind = StubMind() if kind == "stub" else NoisyMind()
+        mind = {"stub": StubMind, "noisy": NoisyMind, "script": ScriptMind}[kind]()
     runner = LiveRunner(args.out, mind, args.seed, args.agents, mind_kind=kind,
                         workers=args.workers or (64 if kind == "llm" else 1))
     print(f"{'reopened' if runner.reopened else 'new world'} {args.out} at tick {runner.sim.state['tick']}, "
