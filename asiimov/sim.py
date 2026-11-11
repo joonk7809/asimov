@@ -467,7 +467,7 @@ class Sim:
                 gift = (f"{self._gift_coin()} coin" if self._neighbor_gift(a) == "coin" else "1 food")
                 rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
                          + ". ".join(NEIGHBOR_CLAUSES[o].format(who=x["name"], gift=gift, chance=max(
-                             1, round(self.state["stakes"]["neighbor"]["catch_visit_pm"] / 10))) for o in view["offer"])
+                             1, (self.state["stakes"]["neighbor"]["catch_visit_pm"] + 5) // 10)) for o in view["offer"])
                          + ". Leave goal empty and then [].")
             elif (view.get("occasion") or {}).get("why") == "sick":  # the piloted tail (B5 sick-1)
                 rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
