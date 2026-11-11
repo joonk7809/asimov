@@ -171,7 +171,6 @@ func _build_inhabit_ui() -> void:
 
 var _menu_key := ""
 var _caught_up := false
-var asked_tick := -1000   # when someone last asked something of this villager
 
 
 func _learn_names(v: Dictionary) -> void:
@@ -182,10 +181,28 @@ func _learn_names(v: Dictionary) -> void:
 func _on_inhabit_welcome(m: Dictionary) -> void:
 	ui["status"].text = ""
 	names[int(m["world"]["me"]["id"])] = m["world"]["me"]["name"]
-	for f in m["world"]["family"]:
+	for f in m["world"]["family"] + m["world"].get("people", []):
 		names[int(f["id"])] = f["name"]
 	_learn_names(m["view"])
 	_refresh_inhabit()
+	get_tree().create_timer(1.0).timeout.connect(_catch_up)  # the backlog follows the welcome in chunks
+
+
+func _catch_up() -> void:
+	## Today's earlier events from the welcome's backlog, once, so a paused or slow world isn't a blank feed.
+	if _caught_up or client.view.is_empty():
+		return
+	_caught_up = true
+	var v: Dictionary = client.view
+	var day0 := int(v["tick"]) - int(v["tick"]) % client.ticks_per_day()
+	_feed(client.seen_events.filter(func(e): return int(e["tick"]) >= day0))
+
+
+func _feed(evs: Array) -> void:
+	for e in evs:
+		var line := Words.describe(e, client.me, names)
+		if line != "":
+			ui["feed"].append_text("[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line])
 
 
 func _on_inhabit_tick(m: Dictionary) -> void:
@@ -197,20 +214,13 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 	for id in doing.keys():
 		if not here.has(id):
 			doing.erase(id)
-	var lines := []
 	var evs: Array = m["events"]
-	if not _caught_up:  # the first tick: also today's earlier events from the welcome's backlog
+	if not _caught_up:  # the first tick before the catch-up timer: today's backlog, this tick's included
 		_caught_up = true
 		var day0 := int(v["tick"]) - int(v["tick"]) % client.ticks_per_day()
 		evs = client.seen_events.filter(func(e): return int(e["tick"]) >= day0)
+	_feed(evs)
 	for e in evs:
-		var line := Words.describe(e, client.me, names)
-		if line != "":
-			lines.append("[color=#8a93a6]%s[/color]  %s" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line])
-		if e["kind"] == "receipt" and e.get("actor") != null and int(e["actor"]) != int(client.me["id"]) and line != "" \
-				and str(e["data"].get("action")) in Words.HERE_ONLY:  # an ask or theft aimed at it, not a gift
-			ui["asked"].text = "[color=#f0c060]%s %s[/color]" % [line, "You can answer them below." if here.has(int(e["actor"])) else ""]
-			asked_tick = int(e["tick"])
 		if e.get("actor") != null and here.has(int(e["actor"])):
 			match e["kind"]:
 				"activity":
@@ -221,10 +231,6 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 					doing[int(e["actor"])] = "eating"
 				"sleep":
 					doing[int(e["actor"])] = "asleep"
-	for line in lines:
-		ui["feed"].append_text(line + "\n")
-	if int(v["tick"]) - asked_tick > 6:  # an hour on, the ask is old news (it stays in the feed)
-		ui["asked"].text = ""
 	if not pending.is_empty() and int(v["tick"]) > int(pending["tick"]):
 		pending = {}  # its receipt is in this tick's lines
 	_refresh_inhabit()
@@ -247,9 +253,7 @@ func _refresh_inhabit() -> void:
 	ui["you"].text = Words.status(v, client.me, per_day)
 	ui["plan"].text = Words.plan(v, per_day, names)
 	ui["here"].text = Words.here(v, doing)
-	var waiting := Words.asks(v, names, 1.0 / maxf(client.tps, 0.001))
-	if waiting != "":
-		ui["asked"].text = waiting
+	ui["asked"].text = Words.asks(v, names, 1.0 / maxf(client.tps, 0.001))  # what waits on your answer, if anything
 	_rebuild_menu()
 
 
@@ -294,6 +298,18 @@ func _rebuild_menu() -> void:
 		if t < 0:
 			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			box.add_child(b)
+			continue
+		if it["action"] in ["agree", "decline"]:  # the answer to an ask: its own row, first, in the ask's colour
+			if not rows.has("answer%d" % t):
+				var who := Label.new()
+				who.text = "Answer %s:" % names.get(t, "#%d" % t)
+				who.add_theme_color_override("font_color", Color(0.94, 0.75, 0.38))
+				rows["answer%d" % t] = HFlowContainer.new()
+				rows["answer%d" % t].add_child(who)
+				box.add_child(rows["answer%d" % t])
+				box.move_child(rows["answer%d" % t], 0)
+			b.add_theme_color_override("font_color", Color(0.94, 0.75, 0.38))
+			rows["answer%d" % t].add_child(b)
 			continue
 		if not rows.has(t):
 			var who := Label.new()

@@ -269,3 +269,18 @@ def test_an_inhabitant_is_sent_nothing_it_could_not_perceive(tmp_path):
     assert stats["acts"] > 20 and stats["receipts"] >= stats["acts"] - 2 and stats["present"] and stats["offers"] and stats["others"] and stats["own_intents"]
     events = read_jsonl(os.path.join(out, "events.jsonl"))  # noisy minds: replay the recorded replies
     assert replay(events).state_hash() == events[-1].data["hash"]
+
+
+def test_an_act_that_never_reached_the_villager_is_not_witnessed_and_the_village_s_names_are_known():
+    """Client pass before 16b's rated session: a receipt aimed at the villager that failed because it was away
+    or asleep is something it never saw; and a villager knows everyone's name and role, nothing more."""
+    e = {"kind": "receipt", "origin": "rule", "actor": 2, "tick": 5,
+         "data": {"action": "ask_food", "ok": False, "to": 7}, "parents": []}
+    for why, seen in (("target not here", False), ("target asleep", False), ("no coin", False), ("refused", True), ("gave", True)):
+        assert inhabitant.witnessed({**e, "data": {**e["data"], "why": why}}, 7, set(), -1) is seen, why
+        held = {**e, "data": {**e["data"], "why": why}, "parents": [1, 2]}  # settles an ask it saw: always closed
+        assert inhabitant.witnessed(held, 7, set(), -1), why
+    sim = Sim(3, 12, StubMind())
+    people = inhabitant.welcome_world(sim, 4)["people"]
+    assert [p["id"] for p in people] == list(range(12))
+    assert all(set(p) == {"id", "name", "role"} for p in people)

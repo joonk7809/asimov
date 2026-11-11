@@ -39,7 +39,8 @@ const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food",
 		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
 		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
 		"kin has nothing to spare": "you had nothing to spare", "target asleep": "you were asleep",
-		"target not here": "you weren't there any more", "target has no food": "you had no food"}
+		"target not here": "you weren't there any more", "no coin": "they couldn't pay", "target has no food": "you had no food"}
+const ANSWERS := ["gave", "sold", "refused", "kin gave food", "kin refused"]  # an ask's yes or no
 const ASKED := {"ask_kin": "asked you for food", "ask_food": "asked you for food", "buy_from": "wanted to buy food from you",
 		"steal": "tried to steal from you", "give_food": "gave you food", "give_coin": "gave you a coin",
 		"seek": "came to see you"}
@@ -180,6 +181,8 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me_id:
 	if not mine:  # someone's act aimed at this villager; its mind decided the ask, and your villager's nature the answer
 		var line := "%s %s" % [a, ASKED.get(str(d.get("action", "")), "tried to " + doing + " with you")]
 		var answer: String = TO_YOU.get(why, "")
+		if why in ANSWERS and not d.has("answered"):  # nobody pressed yes or no: the villager's habits answered
+			answer = "you didn't answer, so your habits did: " + answer
 		return line + (": " + answer + "." if answer != "" else ".")
 	if e.get("origin") == "rule" and why in ["heading to market", "started", "waited"] and d.get("ok", false):
 		return ""  # the activity line that follows says it
@@ -260,7 +263,7 @@ static func asks(v: Dictionary, names: Dictionary, secs_per_tick: float) -> Stri
 	var out := []
 	for q in v.get("asks", []):
 		var left := int(q["until"]) - int(v["tick"])
-		out.append("[color=#f0c060][b]%s %s.[/b]%s\nSay yes or no within %d tick%s (about %ds), or your nature answers.[/color]"
+		out.append("[color=#f0c060][b]%s %s.[/b]%s\nSay yes or no within %d tick%s (about %ds), or your habits answer for you.[/color]"
 				% [q["name"], ASKED.get(str(q["action"]), "asked you something"), said(q), left, "" if left == 1 else "s",
 				int(left * secs_per_tick)])
 	return "\n".join(out)
