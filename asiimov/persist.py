@@ -99,7 +99,7 @@ def config(out: str) -> dict:
 
 def start(out: str, seed: int, agents: int, mind, order: str = "id", player: dict | None = None,
           workers: int = 1, snapshot_every: int = TICKS_PER_DAY, days: int | None = None,
-          mind_kind: str | None = None) -> Run:
+          mind_kind: str | None = None, genesis: dict | None = None, pasts: int | None = None) -> Run:
     """Start a new world in `out`. Refuses a directory that already holds a log."""
     player = player or {}
     if os.path.exists(os.path.join(out, "events.jsonl")):
@@ -107,9 +107,10 @@ def start(out: str, seed: int, agents: int, mind, order: str = "id", player: dic
     os.makedirs(out, exist_ok=True)
     cfg = {"seed": seed, "agents": agents, "order": order,
            "player": [[t, act] for t in sorted(player) for act in player[t]],
-           "days": days, "mind": mind_kind, "model": getattr(mind, "model", None)}
+           "days": days, "mind": mind_kind, "model": getattr(mind, "model", None),
+           **({"pasts": pasts} if pasts is not None else {})}
     _atomic_write(os.path.join(out, "run.json"), json.dumps(cfg, indent=1))
-    run = Run(out, Sim(seed, agents, mind, order=order, workers=workers), player, 0, 0, snapshot_every, days)
+    run = Run(out, Sim(seed, agents, mind, order=order, workers=workers, genesis=genesis), player, 0, 0, snapshot_every, days)
     run._append()
     run._snapshot()  # tick 0, so a run that dies on its first day still resumes
     return run

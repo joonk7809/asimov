@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--mind", choices=["stub", "noisy", "llm"], default=None, help="default stub; on --resume, the run's")
     ap.add_argument("--fire", type=str, default=None, help="player fire as FAMILY@DAY, e.g. 3@1")
     ap.add_argument("--out", default="runs/demo")
+    ap.add_argument("--pasts", type=int, default=None, help="life-history pilot (research): seed pasts with this salt")
     ap.add_argument("--resume", action="store_true", help="continue the run in --out (crashed or finished)")
     ap.add_argument("--pod", help="pod id from scripts/runpod_pod.py (url, model and key)")
     ap.add_argument("--llm-url")
@@ -70,8 +71,13 @@ def main():
         if args.fire:
             fam, day = (int(x) for x in args.fire.split("@"))
             player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
+        genesis = None
+        if args.pasts is not None:
+            from .lifehistory import seed_pasts
+            from .params import generate_population
+            genesis = seed_pasts(generate_population(args.seed, args.agents), args.pasts)
         run = persist.start(args.out, args.seed, args.agents, mind, args.order, player, workers,
-                            days=args.days or 3, mind_kind=args.mind)
+                            days=args.days or 3, mind_kind=args.mind, genesis=genesis, pasts=args.pasts)
     if run.days is None:
         raise SystemExit(f"{args.out}/run.json records no planned length; pass --days")
     sim = run.sim

@@ -263,7 +263,7 @@ class Sim:
                 "inv": {"food": p["start"]["food"], "coin": p["start"]["coin"]},
                 "work_progress": 0, "plan": [], "plan_event": None, "override": None,
                 "activity": "sleep", "place": fam["home"], "home": fam["home"], "route": None,
-                "soul": render_soul(p), "core": [], "recent": [], "episodes": [],
+                "soul": render_soul(p), "core": [], "recent": [], "episodes": json.loads(json.dumps(p.get("past_episodes", []))),
                 "relationships": {}, "beliefs": {}, "cooldown_until": 0,
                 "last_food_loss_event": None, "belief_causes": {}, "habit": None,
                 "intent": None, "occasion": None, "market_seen": None, "noticed": {"day": -1, "ids": []}, "calls": {"day": -1, "n": 0},
