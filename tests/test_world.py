@@ -187,7 +187,7 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "22": "f8e02d5476a6d4a53eebf1695f43dc57aee0935ac40bb99e744f8e80ee553b78",  # G1 fix; only the engine field differs from alms-1
           "player-ask-1": "0ff5dbc8bbbbc7fca23303b121c9766d616d93b8bd3ce0107115ed57d1ebab38",  # the player answers asks, on 22, before its number; no player: only the engine field differs
           "23": "8256877ebe7404477e3f5a7e660f8a754348e6a32425469f1c34a79afc30fbad",  # the player answers asks; only the engine field differs from player-ask-1
-          "neighbor-1": "a9decd340c5b93da7ac9e017436626998236c68adfe1b46abc2fbed24c328f1a"}  # G3 the sick-neighbor ask, on 23, before its number
+          "neighbor-1": "4cd77f7c0cf5a5c76b71b9a15ae387a3eeec1bd79a3396923a03b1a75b35faa1"}  # G3 the sick-neighbor ask, on 23, before its number
 
 
 def test_log_changes_bump_the_engine_version():
