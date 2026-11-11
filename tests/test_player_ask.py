@@ -17,8 +17,14 @@ GOLDEN_22 = "f8e02d5476a6d4a53eebf1695f43dc57aee0935ac40bb99e744f8e80ee553b78"  
 
 
 def test_a_world_with_no_player_is_engine_22_but_for_the_version_field():
-    from test_world import FIRE, run
-    s = run(StubMind(), agents=20, days=2, seed=3, player=FIRE)
+    from test_world import FIRE
+    from asiimov.params import generate_population
+    from asiimov.sim import DEFAULT_STAKES
+    # engine 22's stakes: the neighbor channel (G3 neighbor-1) came after and changes a sick world's log
+    stakes = {k: v for k, v in DEFAULT_STAKES.items() if k != "neighbor"}
+    s = Sim(3, 20, StubMind(), genesis={**generate_population(3, 20), "stakes": stakes})
+    s.run(2, FIRE)
+    s.finish()
     lines = [e.to_json() for e in s.events]
     g = json.loads(lines[0])
     g["data"]["engine"] = "22"

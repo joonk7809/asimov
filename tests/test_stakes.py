@@ -382,8 +382,10 @@ def test_every_catch_cites_its_source_and_a_chat_its_talk():
     for e in caught:
         src = [by_id[p] for p in e.parents if by_id[p].kind == "sick"]
         assert len(src) == 1 and src[0].actor == e.data["near"] and src[0].tick <= e.tick
-        talk = [by_id[p] for p in e.parents if by_id[p].kind == "talk"]
-        assert len(e.parents) == 1 + len(talk) and all({t.actor, t.data["with"]} == {e.actor, e.data["near"]} for t in talk)
+        # the contact it came through: a chat, or (neighbor-1) a visit's meet or a gift's receipt
+        talk = [by_id[p] for p in e.parents if by_id[p].kind in ("talk", "meet", "receipt")]
+        assert len(e.parents) == 1 + len(talk) and all(
+            {t.actor, t.data.get("with", t.data.get("to"))} == {e.actor, e.data["near"]} for t in talk)
     assert any(by_id[p].kind == "talk" for e in caught for p in e.parents)
     assert any(e.data["place"].startswith("home_") for e in caught)
     asks = [e for e in sim.events if e.kind == "receipt" and e.data.get("sick")]
