@@ -145,7 +145,8 @@ class ScriptMind(StubMind):
     acts aimed at a player show words, as a mind's do, so missing words don't give the script away. Only the
     reply's reason (its own act's sentence) and, for an intent, its goal (the sentence of its first act of
     these kinds, which every such step shows, as an 8B intent's goal is) are rewritten; the engine reads
-    neither, so the world is the stub's."""
+    neither, so the world is the stub's act for act. Its state hash differs, since an intent's goal and an
+    occasion's detail live in state."""
     model = "script-v0"
     SAYS = {"ask_kin": "We're family, and I could use some food.",
             "ask_food": "Could you spare some food? I'm hungry.",
