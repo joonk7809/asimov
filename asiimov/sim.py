@@ -90,9 +90,12 @@ SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
 # The sick-neighbor ask (G3 neighbor-1, plan/g1-g3-runs-spec.md §13): fixed before its pilot; rewording needs a new one.
 NEIGHBOR_ACTIONS = ("visit", "help", "keep_away", "carry_on")
-NEIGHBOR_CLAUSES = {"visit": "visit goes to {who} and spends time with them",
-                    "help": "help takes {who} {gift}", "keep_away": "keep_away keeps you away from {who} until bed",
-                    "carry_on": "carry_on goes on with your day"}
+# Reworded once after the 8B pilot (visit 0.873 of 377, results/raw/nb1-pilot-8b): each clause now says what the
+# choice costs, as the sick ask's clauses do; visit and help are close contact (catch_visit_pm).
+NEIGHBOR_CLAUSES = {"visit": "visit stops what you are doing to go to {who} and talk with them, with about a {chance} in 100 chance you catch it from them",
+                    "help": "help stops what you are doing to take {who} {gift} of yours, with about a {chance} in 100 chance you catch it from them",
+                    "keep_away": "keep_away keeps you away from {who} until bed",
+                    "carry_on": "carry_on goes on with your day as you planned it"}
 # What a deliberation may answer, in the order its prompt lists them (engine 10). Only the ones that can
 # work now are offered (_offer): with impossible ones listed, 63% of 4B famine answers chose buy_food away
 # from the market or facing an empty one (T16e), and cutting them sent minds to people instead (T16f).
@@ -463,7 +466,8 @@ class Sim:
                 x = self.state["agents"][view["occasion"]["who"]]
                 gift = (f"{self._gift_coin()} coin" if self._neighbor_gift(a) == "coin" else "1 food")
                 rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
-                         + ". ".join(NEIGHBOR_CLAUSES[o].format(who=x["name"], gift=gift) for o in view["offer"])
+                         + ". ".join(NEIGHBOR_CLAUSES[o].format(who=x["name"], gift=gift, chance=max(
+                             1, round(self.state["stakes"]["neighbor"]["catch_visit_pm"] / 10))) for o in view["offer"])
                          + ". Leave goal empty and then [].")
             elif (view.get("occasion") or {}).get("why") == "sick":  # the piloted tail (B5 sick-1)
                 rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
