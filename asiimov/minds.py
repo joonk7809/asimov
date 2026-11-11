@@ -49,6 +49,8 @@ class StubMind:
             out = self._plan(v)
         elif req.kind == "deliberate":
             out = self._deliberate(v)
+        elif req.kind == "recall":  # LH H2 (research): the first matching memory
+            out = {"recall": (v.get("recall_items") or [""])[0]}
         else:
             out = self._reflect(v)
         return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0}, "stop")

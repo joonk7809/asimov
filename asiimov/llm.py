@@ -38,6 +38,8 @@ SCHEMAS = {
             "required": ["activity", "start_h", "end_h"], "additionalProperties": False}}},
         "required": ["plan"], "additionalProperties": False,
     },
+    "recall": {"type": "object", "properties": {"recall": {"type": "string"}},  # LH H2 (research)
+               "required": ["recall"], "additionalProperties": False},
     "reflect": {
         "type": "object",
         "properties": {"core": {"type": "array", "maxItems": 2, "items": {"type": "string"}},

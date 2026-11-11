@@ -96,6 +96,12 @@ NEIGHBOR_CLAUSES = {"visit": "visit stops what you are doing to go to {who} and 
                     "help": "help stops what you are doing to take {who} {gift} of yours, with about a {chance} in 100 chance you catch it from them",
                     "keep_away": "keep_away keeps you away from {who} until bed",
                     "carry_on": "carry_on goes on with your day as you planned it"}
+# LH (research): the first, piloted wording (visit 0.873), chosen by stakes neighbor.wording = 1.
+NEIGHBOR_CLAUSES_V1 = {"visit": "visit goes to {who} and spends time with them", "help": "help takes {who} {gift}",
+                       "keep_away": "keep_away keeps you away from {who} until bed",
+                       "carry_on": "carry_on goes on with your day"}
+RECALL_WORDS = ("sick", "went to see", "came to see", "gave", "took them", "brought")  # LH H2's retrieval keys
+RECALL_ITEMS = 6
 # What a deliberation may answer, in the order its prompt lists them (engine 10). Only the ones that can
 # work now are offered (_offer): with impossible ones listed, 63% of 4B famine answers chose buy_food away
 # from the market or facing an empty one (T16e), and cutting them sent minds to people instead (T16f).
@@ -465,8 +471,11 @@ class Sim:
             if (view.get("occasion") or {}).get("why") == "sick_neighbor":  # neighbor-1's tail, as the sick ask's
                 x = self.state["agents"][view["occasion"]["who"]]
                 gift = (f"{self._gift_coin()} coin" if self._neighbor_gift(a) == "coin" else "1 food")
-                rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
-                         + ". ".join(NEIGHBOR_CLAUSES[o].format(who=x["name"], gift=gift, chance=max(
+                nb = self.state["stakes"]["neighbor"]
+                clauses = NEIGHBOR_CLAUSES_V1 if nb.get("wording") == 1 else NEIGHBOR_CLAUSES
+                rest += (self._occasion_text(a, view["occasion"]) + self._remember_line(a, view["occasion"])
+                         + " Your action happens now; target is null. "
+                         + ". ".join(clauses[o].format(who=x["name"], gift=gift, chance=max(
                              1, (self.state["stakes"]["neighbor"]["catch_visit_pm"] + 5) // 10)) for o in view["offer"])
                          + ". Leave goal empty and then [].")
             elif (view.get("occasion") or {}).get("why") == "sick":  # the piloted tail (B5 sick-1)
@@ -474,6 +483,10 @@ class Sim:
                          + ". ".join(SICK_CLAUSES[x] for x in view["offer"]) + ". Leave goal empty and then [].")
             else:
                 rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"], self._price())
+        if kind == "recall":  # LH H2: look back before the sick-neighbor ask
+            rest += (self._occasion_text(a, view["occasion"]) + " Before you decide, look back. Things you remember: "
+                     + "; ".join(view["recall_items"]) + '. Reply with JSON only, {"recall":"..."}: in one sentence,'
+                     " what you remember that bears on this.")
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
@@ -1116,6 +1129,28 @@ class Sim:
         return (f"{x['name']} (#{x['id']}), whom you know, is sick; it passes in about {left} days, and people near"
                 f" a sick person can catch it")
 
+    def _remember_line(self, a: dict, occ: dict) -> str:
+        """LH (research): H1 puts the seeded past beside the ask; H2 puts the mind's own recalled sentence there."""
+        h = self.state["stakes"]["neighbor"].get("harness", 0)
+        if h == 1 and a.get("past_episodes"):
+            return " You remember: " + "; ".join(e["text"] for e in a["past_episodes"]) + "."
+        if h == 2 and occ.get("recall"):
+            return " You remember: " + occ["recall"].rstrip(".") + "."
+        return ""
+
+    def _recall_items(self, a: dict, x: int) -> list[str]:
+        """LH H2's retrieval: the villager's own memory items that match the occasion (the same person, sickness,
+        visits, gifts), most important then most recent, from core, all episodes and today's notes."""
+        name = self.state["agents"][x]["name"]
+        eps = sorted(a["episodes"], key=lambda e: (-e["importance"], -e["tick"]))
+        pool = list(reversed(a["recent"])) + [e["text"] for e in eps] + list(reversed(a["core"]))
+        hits = [t for t in pool if name in t or any(w in t for w in RECALL_WORDS)]
+        return list(dict.fromkeys(hits))[:RECALL_ITEMS]
+
+    def _recalled(self, a: dict, occ: dict, eid: int, out: dict | None):
+        s = out.get("recall") if isinstance(out, dict) and isinstance(out.get("recall"), str) else ""
+        a["occasion"] = {**occ, "recall": s.strip()[:200], "event": eid, "tick": self.state["tick"]}
+
     def _neighbor_offer(self, y: dict) -> list[str]:
         return [o for o in NEIGHBOR_ACTIONS if o != "help" or self._neighbor_gift(y)]
 
@@ -1394,9 +1429,18 @@ class Sim:
                 a["occasion"] = None
                 return
             a["occasion"] = None
+        nb = self.state.get("stakes", {}).get("neighbor", {})
+        if occ["why"] == "sick_neighbor" and nb.get("harness") == 2 and "recall" not in occ:
+            items = self._recall_items(a, occ["who"])
+            if items:  # LH H2: a recall call first; the deliberation follows next tick with its sentence
+                view = self._view(a, occupancy)
+                view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
+                view["recall_items"] = items
+                self._request(a, "recall", view, [occ["event"]], lambda eid, out, occ=occ: self._recalled(a, occ, eid, out))
+                return
         a["cooldown_until"] = tick + 12
         view = self._view(a, occupancy)
-        view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
+        view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail", "recall") if k in occ}
         self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [],
                       lambda eid, out, why=occ["why"], who=occ.get("who"): (
                           self._neighbor_resolve(a, out or {}, eid, who) if why == "sick_neighbor"

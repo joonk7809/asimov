@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--fire", type=str, default=None, help="player fire as FAMILY@DAY, e.g. 3@1")
     ap.add_argument("--out", default="runs/demo")
     ap.add_argument("--pasts", type=int, default=None, help="life-history pilot (research): seed pasts with this salt")
+    ap.add_argument("--neighbor-wording", type=int, choices=[1, 2], default=None,
+                    help="LH (research): the sick-neighbor ask's wording, 1 = first (piloted), 2 = reworded")
     ap.add_argument("--resume", action="store_true", help="continue the run in --out (crashed or finished)")
     ap.add_argument("--pod", help="pod id from scripts/runpod_pod.py (url, model and key)")
     ap.add_argument("--llm-url")
@@ -72,10 +74,16 @@ def main():
             fam, day = (int(x) for x in args.fire.split("@"))
             player[day * TICKS_PER_DAY + 60] = [{"kind": "fire", "family": fam}]
         genesis = None
-        if args.pasts is not None:
+        if args.pasts is not None or args.neighbor_wording is not None:
             from .lifehistory import seed_pasts
             from .params import generate_population
-            genesis = seed_pasts(generate_population(args.seed, args.agents), args.pasts)
+            from .sim import DEFAULT_STAKES
+            genesis = generate_population(args.seed, args.agents)
+            if args.pasts is not None:
+                genesis = seed_pasts(genesis, args.pasts)
+            genesis["stakes"] = json.loads(json.dumps(DEFAULT_STAKES))
+            if args.neighbor_wording is not None:
+                genesis["stakes"]["neighbor"]["wording"] = args.neighbor_wording
         run = persist.start(args.out, args.seed, args.agents, mind, args.order, player, workers,
                             days=args.days or 3, mind_kind=args.mind, genesis=genesis, pasts=args.pasts)
     if run.days is None:

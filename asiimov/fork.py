@@ -343,6 +343,8 @@ def main():
     ap.add_argument("--live-from-day", type=int, default=0)
     ap.add_argument("--salt", type=int, default=0, help="sampling salt; give each noise twin its own")
     ap.add_argument("--days", type=int, help="run to this day (default: where the base stops)")
+    ap.add_argument("--neighbor-harness", type=int, choices=[0, 1, 2], default=None,
+                    help="LH (research): the sick-neighbor ask's harness level for this twin")
     ap.add_argument("--mind", choices=["stub", "noisy", "llm"], default=None,
                     help="default llm; on --resume, the twin's. stub twins are full reruns (nothing served)")
     ap.add_argument("--pod")
@@ -373,7 +375,8 @@ def main():
                               for a, d in (spec.split("@") for spec in args.sick)),
                "live": [int(x) for x in args.live.split(",") if x.strip()],
                "live_from": args.live_from_day * TICKS_PER_DAY, "salt": args.salt,
-               "until": args.days * TICKS_PER_DAY if args.days else None, "mind": args.mind or "llm"}
+               "until": args.days * TICKS_PER_DAY if args.days else None, "mind": args.mind or "llm",
+               **({"neighbor_harness": args.neighbor_harness} if args.neighbor_harness is not None else {})}
     args.mind = args.mind or cfg["mind"]
     with open(cfg["base"], "rb") as f:
         if hashlib.sha256(f.read()).hexdigest() != cfg["base_sha256"]:
@@ -397,6 +400,9 @@ def main():
     for t, act in cfg["player"]:
         player[t].append(act)
     genesis = with_sick_cases(base[0].data["population"], cfg["sick"]) if cfg.get("sick") else None
+    if cfg.get("neighbor_harness") is not None:  # LH (research): set per twin, in its genesis
+        genesis = json.loads(json.dumps(genesis or base[0].data["population"]))
+        genesis["stakes"]["neighbor"]["harness"] = cfg["neighbor_harness"]
     sim, mind = run_twin(base, live, args.out, player, cfg["live"], cfg["live_from"], cfg["salt"], cfg["arm"],
                          genesis=genesis, until=cfg["until"], workers=args.workers or (64 if args.mind == "llm" else 1), prior=prior,
                          serve=args.mind != "stub")
