@@ -419,6 +419,9 @@ func _draw_inhabitant() -> void:
 	var k := minf(300.0 / (hi.x - lo.x), (size.y - 40) / (hi.y - lo.y))  # the feed and panels take the rest
 	var origin := Vector2(20, 20)
 	var font := ThemeDB.fallback_font
+	var kin_homes := {}
+	for m in client.view.get("kin", []):
+		kin_homes[str(m["home"])] = true
 	for name in client.places:
 		var r = client.places[name]["rect"]
 		var rect := Rect2((Vector2(r[0], r[1]) - lo) * k + origin, Vector2(r[2], r[3]) * k)
@@ -426,8 +429,11 @@ func _draw_inhabitant() -> void:
 		var mine: bool = name == str(client.me.get("home", ""))
 		if mine or name == str(client.view.get("place")):
 			draw_rect(rect, Color(0.95, 0.85, 0.4), false, 2.0)
-		draw_string(font, rect.position + Vector2(2, 12), "your home" if mine else name.replace("_", " "),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 10)
+		# Only the homes that are yours to know get a label (yours, your family's): at 100 villagers the
+		# others' labels overlap into noise. Public places keep their names.
+		var label: String = "you" if mine else ("family" if kin_homes.has(name) else ("" if name.begins_with("home") else name.replace("_", " ")))
+		if label != "":
+			draw_string(font, rect.position + Vector2(2, 12), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(rect.size.x - 2, 8.0), 10)
 	var v: Dictionary = client.view
 	var at := (Vector2(v["pos"][0], v["pos"][1]) - lo) * k + origin
 	for i in v["present"].size():
