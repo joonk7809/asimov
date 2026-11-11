@@ -140,6 +140,34 @@ class NoisyMind(StubMind):
         return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0.7}, "stop")
 
 
+class ScriptMind(StubMind):
+    """The stub, saying one fixed sentence per act kind (test 16's blind pair, plan/test16-live-rule.md): its
+    acts aimed at a player show words, as a mind's do, so missing words don't give the script away. Only the
+    reply's reason (its own act's sentence) and, for an intent, its goal (the sentence of its first act of
+    these kinds, which every such step shows, as an 8B intent's goal is) are rewritten; the engine reads
+    neither, so the world is the stub's."""
+    model = "script-v0"
+    SAYS = {"ask_kin": "We're family, and I could use some food.",
+            "ask_food": "Could you spare some food? I'm hungry.",
+            "buy_from": "I'd like to buy some food from you.",
+            "give_food": "Here, take some food.",
+            "give_coin": "Here's a coin for you.",
+            "seek": "I wanted to see you."}
+
+    def decide(self, req: MindRequest) -> MindReply:
+        reply = super().decide(req)
+        if req.kind != "deliberate":
+            return reply
+        out = json.loads(reply.raw_output)
+        if out.get("action") in self.SAYS:
+            out["reason"] = self.SAYS[out["action"]]
+        kinds = [out.get("action")] + [st.get("do") for st in out.get("then") or []]
+        lead = next((k for k in kinds if k in self.SAYS), None)
+        if out.get("then") and lead is not None:  # an intent's steps aimed at the player show its goal
+            out["goal"] = self.SAYS[lead]
+        return MindReply(json.dumps(out, sort_keys=True), self.model, reply.sampling, reply.finish_reason)
+
+
 class ReplayMind:
     """Serves recorded outputs by (tick, agent) and refuses any request that doesn't match the record.
 
