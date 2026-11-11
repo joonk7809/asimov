@@ -72,6 +72,11 @@ class StubMind:
         return {"plan": blocks}
 
     def _deliberate(self, v: dict) -> dict:
+        if (v.get("occasion") or {}).get("why") == "sick_neighbor":  # G3 neighbor-1's stub rule, fixed before the pilot
+            t, offer = v["traits"], v["offer"]
+            pick = ("help" if t["agreeableness"] > 600 and "help" in offer else "keep_away" if t["emotionality"] > 600
+                    else "visit" if t["extraversion"] > 500 else "carry_on")
+            return {"action": pick, "target": None, "reason": "", "goal": "", "then": []}
         if (v.get("occasion") or {}).get("why") == "sick":  # B5 sick-1, the sandbox's rule: the agreeable stay
             pick = "home" if v["traits"]["agreeableness"] > 500 and v["coin"] >= 2 * v["food_price"] else "work"
             return {"action": pick, "target": None, "reason": "", "goal": "", "then": []}  # home unless broke

@@ -83,10 +83,16 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "intent_done": "you did what you set out to do: {detail}",
     "blocked": "you had to give up on what you set out to do: {detail}",
     "sick": "{detail}",  # B5 sick-1: the piloted ask (_sick_detail)
+    "sick_neighbor": "{detail}",  # G3 neighbor-1: someone you know is sick (_neighbor_detail)
 }
 # The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
 SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
+# The sick-neighbor ask (G3 neighbor-1, plan/g1-g3-runs-spec.md §13): fixed before its pilot; rewording needs a new one.
+NEIGHBOR_ACTIONS = ("visit", "help", "keep_away", "carry_on")
+NEIGHBOR_CLAUSES = {"visit": "visit goes to {who} and spends time with them",
+                    "help": "help takes {who} {gift}", "keep_away": "keep_away keeps you away from {who} until bed",
+                    "carry_on": "carry_on goes on with your day"}
 # What a deliberation may answer, in the order its prompt lists them (engine 10). Only the ones that can
 # work now are offered (_offer): with impossible ones listed, 63% of 4B famine answers chose buy_food away
 # from the market or facing an empty one (T16e), and cutting them sent minds to people instead (T16f).
@@ -141,7 +147,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "23"  # the player answers asks aimed at its body, on engine 22 (label player-ask-1)
+ENGINE_VERSION = "neighbor-1"  # G3 the sick-neighbor ask (plan/g1-g3-runs-spec.md §13), on engine 23; its label until merge
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -171,6 +177,12 @@ DEFAULT_STAKES = {
     # 1-6, outbreaks reach 59/10/50/60/11 (median 50, none above 70; seed 4 draws no case).
     "sick": {"chance_pm": 300, "days": 3, "catch_talk_pm": 5, "catch_work_pm": 3, "catch_home_pm": 20,
              "cases": []},
+    # neighbor-1 (G3's last v0 try, plan/g1-g3-runs-spec.md §13): a working adult outside a sick villager's
+    # family who knows them (affinity at least min_affinity, or contact in the last recent_days) learns of the
+    # sickness by seeing them sick at a shared place or being told in a chat by their family or by someone who
+    # visited or helped them, and is asked once: visit, help (1 food, or a meal's coin), keep_away or carry_on.
+    # A visit or a gift to a sick villager passes it with catch_visit_pm, as a night at home does.
+    "neighbor": {"min_affinity": 50, "recent_days": 2, "catch_visit_pm": 20},
     # alms-1 (G1 fix, plan/g1-g3-runs-spec.md): a villager at the market short of the price, with food on the
     # stall, gets the shortfall from the village chest, at most per_day times a day and only from what the chest
     # holds above its reserve (the coin that would leave the economy at the day's end). On the G1 8B log every
@@ -232,6 +244,8 @@ class Sim:
             self.state.update({"stakes": json.loads(json.dumps(pop["stakes"])), "chest": 0})
         if "sick" in self.state.get("stakes", {}):  # who is sick until when, who is immune, the source events (B5)
             self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}}
+            if "neighbor" in self.state["stakes"]:  # who knows of whose sickness, and who carries word (neighbor-1)
+                self.state["sick"].update({"news": {}, "carry": {}})
         if "alms" in self.state.get("stakes", {}):  # the day each villager last had alms (B5 alms-1)
             self.state["alms"] = {}
         if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
@@ -445,7 +459,13 @@ class Sim:
         if kind == "deliberate":
             if a["inv"]["coin"] < self._price():
                 rest += NO_COIN_LINE
-            if (view.get("occasion") or {}).get("why") == "sick":  # the piloted tail (B5 sick-1)
+            if (view.get("occasion") or {}).get("why") == "sick_neighbor":  # neighbor-1's tail, as the sick ask's
+                x = self.state["agents"][view["occasion"]["who"]]
+                gift = (f"{self._gift_coin()} coin" if self._neighbor_gift(a) == "coin" else "1 food")
+                rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
+                         + ". ".join(NEIGHBOR_CLAUSES[o].format(who=x["name"], gift=gift) for o in view["offer"])
+                         + ". Leave goal empty and then [].")
+            elif (view.get("occasion") or {}).get("why") == "sick":  # the piloted tail (B5 sick-1)
                 rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
                          + ". ".join(SICK_CLAUSES[x] for x in view["offer"]) + ". Leave goal empty and then [].")
             else:
@@ -508,6 +528,8 @@ class Sim:
         or "sold only at the market"."""
         if "sick" in self.state and (view.get("occasion") or {}).get("why") == "sick":
             return list(SICK_ACTIONS)  # sick-1: a sick ask offers work or home, nothing else (a read: no state)
+        if (view.get("occasion") or {}).get("why") == "sick_neighbor":
+            return self._neighbor_offer(a)  # neighbor-1: visit, help (if it has something to take), keep_away, carry_on
         coin_ok = a["inv"]["coin"] >= self._price()
         shown = view.get("market_food")
         drop = set()
@@ -1009,6 +1031,8 @@ class Sim:
             sick = [a for a in here if str(a["id"]) in sk["ill"]]
             if not sick or (home and not midnight):
                 continue
+            if not home:
+                self._seen_sick(here, sick)
             p = cfg["catch_home_pm"] if home else cfg["catch_work_pm"]
             src = min(a["id"] for a in sick)
             for b in here:
@@ -1026,6 +1050,101 @@ class Sim:
                 if (str(x) in sk["ill"] and str(y) not in sk["ill"] and str(y) not in sk["immune"]
                         and self.rng.at(f"catch-talk:{y}", e.tick, 0, 999) < p):
                     self._make_sick(self.state["agents"][y], [e.id, sk["src"][str(x)]], e.data["place"], x)
+            if "news" in sk:
+                self._tell_sick(e)
+
+    # ------------------------------------------------------------------ the sick-neighbor ask (G3 neighbor-1)
+    def _knows(self, y: dict, x: dict) -> bool:
+        """y knows x well enough to be asked about them: a working adult outside x's family, awake, well, not a
+        player's body, with affinity at least min_affinity toward x or contact in the last recent_days."""
+        if (y["family"] == x["family"] or y["role"] in ("child", "elder") or y["asleep"] or self._possessed(y)
+                or str(y["id"]) in self.state["sick"]["ill"]):
+            return False
+        cfg, r = self.state["stakes"]["neighbor"], y["relationships"].get(str(x["id"]))
+        return r is not None and (r["affinity"] >= cfg["min_affinity"]
+                                  or self.state["tick"] - r.get("last", -10 ** 9) <= cfg["recent_days"] * TICKS_PER_DAY)
+
+    def _learn_sick(self, y: dict, x: dict, data: dict, parents: list):
+        """y learns that x is sick (once per y and x): an event that cites how, a note, and the ask."""
+        news = self.state["sick"]["news"].setdefault(str(y["id"]), {})
+        if str(x["id"]) in news or not self._knows(y, x):
+            return
+        eid = self._emit("sick_news", "rule", y["id"], {"about": x["id"], **data}, parents)
+        news[str(x["id"])] = eid
+        self._note(y["id"], f"saw that {x['name']} is sick" if data["how"] == "seen"
+                   else f"heard from {self.state['agents'][data['by']]['name']} that {x['name']} is sick")
+        self._occasion(y, "sick_neighbor", y["cognition"]["deliberation_threshold"], x["id"], eid,
+                       self._neighbor_detail(y, x))
+
+    def _seen_sick(self, here: list, sick: list):
+        """The hourly scan: everyone awake at a shared place that is not a home sees who there is sick."""
+        for x in sick:
+            for y in here:
+                if y is not x and not y["asleep"]:
+                    self._learn_sick(y, x, {"how": "seen", "place": x["place"]}, [self.state["sick"]["src"][str(x["id"])]])
+
+    def _carried(self, z: dict) -> dict:
+        """The sick villagers z can tell others about, with the event z's word cites: its family's sickness
+        (the sick event) and anyone it visited or helped while they were sick (that visit or gift)."""
+        sk, out = self.state["sick"], {}
+        for m in self.state["families"][z["family"]]["members"]:
+            if m != z["id"] and str(m) in sk["ill"]:
+                out[m] = sk["src"][str(m)]
+        for x, eid in sorted(sk["carry"].get(str(z["id"]), {}).items(), key=lambda kv: int(kv[0])):
+            if x in sk["ill"]:
+                out.setdefault(int(x), eid)
+        return out
+
+    def _tell_sick(self, e):
+        """A chat: each side tells the other of the sickness it carries word of."""
+        ag = self.state["agents"]
+        for z, y in ((e.actor, e.data["with"]), (e.data["with"], e.actor)):
+            for x, cause in sorted(self._carried(ag[z]).items()):
+                if x != y:
+                    self._learn_sick(ag[y], ag[x], {"how": "told", "by": z}, [e.id, cause])
+
+    def _neighbor_gift(self, y: dict) -> str | None:
+        return "food" if y["inv"]["food"] >= 1 else "coin" if y["inv"]["coin"] >= self._gift_coin() else None
+
+    def _neighbor_detail(self, y: dict, x: dict) -> str:
+        """The ask: facts only, no cue words (L25)."""
+        left = -(-(self.state["sick"]["ill"][str(x["id"])] - self.state["tick"]) // TICKS_PER_DAY)
+        return (f"{x['name']} (#{x['id']}), whom you know, is sick; it passes in about {left} days, and people near"
+                f" a sick person can catch it")
+
+    def _neighbor_offer(self, y: dict) -> list[str]:
+        return [o for o in NEIGHBOR_ACTIONS if o != "help" or self._neighbor_gift(y)]
+
+    def _neighbor_resolve(self, y: dict, out: dict, eid: int, x: int):
+        """The sick-neighbor ask's answer: a receipt that names whom it is about, then the step it starts."""
+        offer = self._neighbor_offer(y)
+        pick = out.get("action") if out.get("action") in offer else None
+        if pick is None:
+            return self._receipt(y, eid, str(out.get("action")), False, "unparseable or unknown action", extra={"about": x})
+        self._receipt(y, eid, pick, True, {"visit": "going to see them", "help": "taking them something",
+                                           "keep_away": "keeping away", "carry_on": "carrying on"}[pick], extra={"about": x})
+        if pick == "carry_on":
+            return
+        y["intent"] = None
+        do = {"visit": "seek", "keep_away": "avoid"}.get(pick) or ("give_" + self._neighbor_gift(y))
+        left = max(1, y["sleep_tick"] - self.state["tick"]) if pick == "keep_away" else STEP_TICKS.get(do, DEFAULT_STEP_TICKS)
+        y["override"] = {"do": do, "target": x, "left": left, "event": eid}
+
+    def _close_contact(self, a: dict, b: dict, eid: int):
+        """A visit or a gift between two people: if one is sick the other may catch it (catch_visit_pm), and a
+        visitor from outside the family now carries word of the sickness (neighbor-1)."""
+        sk = self.state.get("sick")
+        if not sk or "news" not in sk:
+            return
+        p = self.state["stakes"]["neighbor"]["catch_visit_pm"]
+        for x, y in ((a, b), (b, a)):
+            if str(x["id"]) not in sk["ill"]:
+                continue
+            if y["family"] != x["family"]:
+                sk["carry"].setdefault(str(y["id"]), {}).setdefault(str(x["id"]), eid)
+            if (str(y["id"]) not in sk["ill"] and str(y["id"]) not in sk["immune"]
+                    and self.rng.at(f"catch-visit:{y['id']}", self.state["tick"], 0, 999) < p):
+                self._make_sick(y, [eid, sk["src"][str(x["id"])]], x["place"], x["id"])
 
     def _sick_detail(self, a: dict) -> str:
         """The piloted ask (B5, pack sha 163da069...c5b5): facts only, no cue words (L25)."""
@@ -1275,7 +1394,9 @@ class Sim:
         view = self._view(a, occupancy)
         view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
         self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [],
-                      lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick))
+                      lambda eid, out, why=occ["why"], who=occ.get("who"): (
+                          self._neighbor_resolve(a, out or {}, eid, who) if why == "sick_neighbor"
+                          else self._resolve(a, out, eid, why == "sick")))
 
     # ------------------------------------------------------------------ actions -> receipts
     def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None, parents=()):
@@ -1546,13 +1667,14 @@ class Sim:
 
     def _meet(self, a: dict, b: dict, eid: int):
         """A sought-out meeting: like a talk, but chosen, so it always happens once both are there."""
-        self._emit("meet", "rule", a["id"], {"with": b["id"], "place": a["place"]}, [eid])
+        mid = self._emit("meet", "rule", a["id"], {"with": b["id"], "place": a["place"]}, [eid])
         for x, y in ((a, b), (b, a)):
             x["needs"]["loneliness"] = _clamp(x["needs"]["loneliness"] - 200)
             r = self._met(x, y["id"])
             r["affinity"] = min(1000, r["affinity"] + 20)
         self._note(a["id"], f"went to see {b['name']} at the {a['place']}")
         self._note(b["id"], f"{a['name']} came to see me at the {a['place']}")
+        self._close_contact(a, b, mid)
 
     def _give(self, a: dict, b: dict, do: str, eid: int) -> int:
         """A gift: a transfer with a receipt. The receiver warms to the giver and may stop to think about it."""
@@ -1570,6 +1692,7 @@ class Sim:
         self._note(a["id"], f"gave {n} {what} to {b['name']}")
         self._note(b["id"], f"{a['name']} gave me {n} {what}")
         self._occasion(b, "gift", 400 + b["traits"]["agreeableness"] // 4, a["id"], rid, f"{n} {what}")
+        self._close_contact(a, b, rid)
         return rid
 
     def _steal(self, a: dict, t: dict, eid: int):

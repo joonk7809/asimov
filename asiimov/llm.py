@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 
 from .minds import MindReply, MindRequest
-from .sim import ACTIVITIES as _ACTIVITIES, STEP_DOS
+from .sim import ACTIVITIES as _ACTIVITIES, NEIGHBOR_ACTIONS, STEP_DOS
 
 ACTIVITIES = list(_ACTIVITIES)
 
@@ -76,7 +76,7 @@ def schema_for(req: MindRequest) -> dict:
     then = {"type": "array", "maxItems": 3, "items": {
         "type": "object", "properties": {"do": {"type": "string", "enum": dos}, "target": step_target},
         "required": ["do", "target"], "additionalProperties": False}}
-    branches = [_deliberate_branch([x for x in NO_TARGET if x in offer], {"type": "null"}, then)]
+    branches = [_deliberate_branch([x for x in NO_TARGET + list(NEIGHBOR_ACTIONS) if x in offer], {"type": "null"}, then)]
     for action, key in PERSON_ACTIONS:
         ids = _ids(req.view, key)
         if ids and action in offer:
