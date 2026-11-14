@@ -9,6 +9,7 @@ const WorldModel := preload("res://scripts/world_model.gd")
 
 signal welcomed(msg: Dictionary)
 signal ticked(msg: Dictionary)
+signal early(msg: Dictionary)  # E4: an act's own events, sent as it applies mid-tick; its tick message leaves them out
 signal acked(msg: Dictionary)
 signal status_changed(msg: Dictionary)
 signal failed(reason: String)
@@ -98,6 +99,10 @@ func _handle(text: String) -> void:
 		"events":
 			for e in m["events"]:
 				_add(e)
+		"early":
+			for e in m["events"]:
+				_add(e)
+			early.emit(m)
 		"tick":
 			for e in m["events"]:
 				_add(e)

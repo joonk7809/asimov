@@ -67,7 +67,9 @@ def test_an_act_lands_within_the_pull_floor_not_the_pace(tmp_path):
     assert len(waits) == 4 and all(w is not None and w < 2.5 for w in waits), waits
     assert [l.rstrip("\n") for l in open(os.path.join(out, "events.jsonl"))] == batch_of(out)
     side = [json.loads(l) for l in open(os.path.join(out, "runner.jsonl"))]
-    assert sum(r["kind"] == "pulled" for r in side) == 4
+    # Each act pulled a tick, or (E4) arrived while one ran and joined it at its fixed point.
+    late = sum(r["kind"] == "received" and r.get("late") is True for r in side)
+    assert sum(r["kind"] == "pulled" for r in side) + late == 4
 
 
 def test_without_the_pull_an_act_waits_out_the_pace(tmp_path):

@@ -18,6 +18,7 @@ in another process; asiimov.persist uses them to resume runs after a crash.
 """
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dataclasses import replace
 
@@ -149,7 +150,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "26"  # trade needs across families (research/g3w/report-dep-a.md), on engine 25 (label trade-1)
+ENGINE_VERSION = "27"  # E4 player acts at one fixed point, before any mind reply, and mid-tick (label pace-1), on 26
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -298,6 +299,9 @@ class Sim:
         self.pending: dict[int, tuple] = {}  # agent id -> (request, parents, prompt tokens, apply)
         self.player_pending: dict[int, tuple] = {}  # agent id -> a player act to apply in _commit (no mind call)
         self._acts: dict[int, list] = {}  # agent id -> this tick's queued player acts: (event, action, target)
+        self._branch: dict[int, str] = {}  # this tick: why a body takes no act (asleep, falling asleep, bedtime)
+        self._acted: set = set()  # this tick: bodies whose one act is taken
+        self._occupancy: dict = {}  # this tick's arrivals by place, for a late act's view (E4)
         self.expected = expected
         self.events: list[Event] = []
         self.metrics = {"activity": defaultdict(lambda: defaultdict(int))}
@@ -395,10 +399,20 @@ class Sim:
             ids.sort(key=lambda i: (self.rng.raw(f"order:{tick}", i), i))
         return ids
 
-    def _commit(self):
-        """Ask every pending request at once, then validate and apply replies in `_order`."""
+    def _commit(self, late=(), during=None):
+        """Ask every pending request at once, then validate and apply replies in `_order`. The tick's player
+        acts apply first, while the calls are out (E4): the player goes first in contests within its tick."""
         aids = sorted(self.pending)
-        replies = dict(zip(aids, dispatch(self.mind, [self.pending[i][0] for i in aids], self.workers)))
+        reqs = [self.pending[i][0] for i in aids]
+        if during is None:
+            self._play(late)
+            replies = dict(zip(aids, dispatch(self.mind, reqs, self.workers)))
+        else:
+            with ThreadPoolExecutor(1) as ex:  # the requests are built; nothing here reads a reply
+                fut = ex.submit(dispatch, self.mind, reqs, self.workers)
+                self._play(late)
+                during(self, fut.done)
+                replies = dict(zip(aids, fut.result()))
         # A reflection cut off at max_tokens is asked once more, with a keyed seed (the prompt-hash seed
         # repeats the same loop) and frequency penalty 1.0 (T21: 4B fiction loss 22.7% -> 7.8% in the
         # same-requests check). First asks are unchanged. Asked together, applied in _order below.
@@ -412,12 +426,7 @@ class Sim:
         r_ids = sorted(retry)
         retried = dict(zip(r_ids, dispatch(self.mind, [retry[i] for i in r_ids], self.workers)))
         pending, self.pending = self.pending, {}
-        players, self.player_pending = self.player_pending, {}
-        assert not set(players) & set(pending), "a possessed body never has a mind request and a player act"
-        for aid in self._order(aids + list(players)):
-            if aid in players:  # never dispatched to the mind, no mind event: applied from the recorded act
-                self._apply_act(self.state["agents"][aid], *players[aid])
-                continue
+        for aid in self._order(aids):
             req, parents, prompt_tokens, apply = pending[aid]
             reply = replies[aid]
             data = {"kind": req.kind}
@@ -430,6 +439,45 @@ class Sim:
                 req, reply = retry[aid], retried[aid]
                 eid = self._emit_mind(req, reply, {"kind": req.kind, "attempt": 1}, [eid], prompt_tokens)
             apply(eid, _parse(reply))
+
+    def _play(self, late=()):
+        """The tick's fixed point for player acts (E4): those that arrived before the tick, then late ones
+        in recorded order. Never dispatched to the mind, no mind event: applied from the recorded act."""
+        players, self.player_pending = self.player_pending, {}
+        assert not set(players) & set(self.pending), "a possessed body never has a mind request and a player act"
+        for aid in sorted(players):
+            self._apply_act(self.state["agents"][aid], *players[aid])
+        for act in late:
+            if self.late_act(act) is None:
+                raise ValueError("a late act for a body whose mind is being asked belongs to the next tick")
+
+    def takes_late(self) -> bool:
+        """Whether a late act can join this tick: not while the possessed body's own mind request is in
+        flight (the idle hand-back), nor once it has taken its one act this tick (a plan's next step sent on
+        the last one's receipt), when it waits for the next tick."""
+        p = self.state.get("player")
+        return p is not None and p["agent"] not in self.pending and p["agent"] not in self._acted
+
+    def late_act(self, act: dict) -> int | None:
+        """A player act that arrived during this tick, applied at the fixed point (E4). Returns its event id,
+        or None if it can't join (see takes_late), in which case nothing is logged."""
+        if not self.takes_late():
+            if "player" not in self.state:
+                raise ValueError("act: no body is possessed")
+            return None
+        if act.get("kind") != "act":
+            raise ValueError(f"only an act can arrive late, not {act.get('kind')!r}")
+        eid = self._player({k: v for k, v in act.items() if k != "late"}, late=True)
+        a = self.state["agents"][self.state["player"]["agent"]]
+        why = self._branch.get(a["id"])
+        if why:
+            self._refuse_acts(a, why)
+        else:
+            self._player_deliberate(a, self._occupancy)
+            for aid, pend in list(self.player_pending.items()):
+                del self.player_pending[aid]
+                self._apply_act(self.state["agents"][aid], *pend)
+        return eid
 
     def _emit_mind(self, req: MindRequest, reply, data: dict, parents, prompt_tokens: int) -> int:
         return self._emit(f"mind_{req.kind}", "mind", req.agent_id, data, parents, mind={
@@ -591,13 +639,22 @@ class Sim:
         while self.state["tick"] < end_tick:
             self.step(player_events.get(self.state["tick"], []))
 
-    def step(self, player_actions=()):
+    def step(self, player_actions=(), during=None):
+        """One tick. A player act marked `late` (E4) arrived while the tick ran: it applies at the tick's
+        fixed point, after the agent loop has built the minds' requests and before any mind reply applies,
+        in recorded order, as every other player act of the tick does. `during(sim, done)`, if given, is
+        called at that point while the minds' calls are in flight, and may hand in late acts through
+        late_act() until done() is true (the live runner). Nothing at that point reads a mind reply."""
         st = self.state
         tick = st["tick"]
         agents = st["agents"]
-        self._acts = {}
+        self._acts, self._branch, self._acted = {}, {}, set()
+        late = []
         for act in player_actions:
-            self._player(act)
+            if act.get("late"):
+                late.append(act)
+            else:
+                self._player(act)
         for q in list(self.state.get("player", {}).get("asks", [])):
             if tick >= q["until"]:  # unanswered for an hour: the body's own nature answers, as for anyone
                 self._settle_ask(q, None)
@@ -612,20 +669,24 @@ class Sim:
         for a in agents:
             if a["place"] is not None:
                 occupancy[a["place"]].append(a["id"])
+        self._occupancy = occupancy
 
         for a in agents:
             self._body(a, occupancy)
             if a["asleep"]:
                 if tick >= a["wake_tick"]:
                     self._wake(a, occupancy)
+                self._branch[a["id"]] = "asleep"
                 self._refuse_acts(a, "asleep")
                 continue
             if tick >= a["sleep_tick"] or a["needs"]["fatigue"] >= 1000:
                 if a["place"] == a["home"]:
                     self._sleep(a, occupancy)
+                    self._branch[a["id"]] = "falling asleep"
                     self._refuse_acts(a, "falling asleep")
                 else:
                     self._bedtime_walk(a)
+                    self._branch[a["id"]] = "bedtime"
                     self._refuse_acts(a, "bedtime")
                 continue
             self._stock_for_winter(a)
@@ -640,7 +701,7 @@ class Sim:
                 self._trade_due(a)
                 self._maybe_deliberate(a, occupancy)
 
-        self._commit()
+        self._commit(late, during)
         self._talk()
         for a in agents:  # what everyone awake at the market saw of its stock as the tick ended (walkers: None)
             if a["place"] == "market" and not a["asleep"]:
@@ -1911,6 +1972,7 @@ class Sim:
         """The possessed body's in-the-moment decision, where a mind's deliberation would be filed. Its
         view, situation and offer are a deliberation request's; it is applied in _commit, in _order."""
         (eid, action, target), *rest = self._acts.pop(a["id"])
+        self._acted.add(a["id"])
         for e2, a2, _ in rest:
             self._receipt(a, e2, a2, False, "one act per tick")
         if action in ANSWER_ACTS:  # held to no offer: an ask it can answer is checked in _answer
@@ -1961,7 +2023,7 @@ class Sim:
         return self._receipt(a, eid, "go_to", True, "already here" if here else "heading there",
                              extra={"place": place, "arrive": arrive})
 
-    def _player(self, act: dict):
+    def _player(self, act: dict, late: bool = False):
         kind = act["kind"]
         if kind == "possess":
             aid = act["agent"]
@@ -1990,6 +2052,8 @@ class Sim:
             data = {"action": action} if target is None else {"action": action, "target": target}
             if place is not None:
                 data["place"], target = place, place  # go_to carries its place where a person act's target is
+            if late:
+                data["late"] = True  # it arrived mid-tick and applied at the fixed point (E4); replay keeps it there
             eid = self._emit("act", "player", aid, data, [self.state["player"]["event"]])
             self.state["player"]["order"] = self.state["tick"]
             self._acts.setdefault(aid, []).append((eid, action, target))

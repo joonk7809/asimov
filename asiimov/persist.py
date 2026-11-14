@@ -44,10 +44,10 @@ class Run:
         self.log = open(os.path.join(out, "events.jsonl"), "a")
         os.makedirs(os.path.join(out, "snapshots"), exist_ok=True)
 
-    def advance(self, end_tick: int):
-        """Run up to (not including) end_tick."""
+    def advance(self, end_tick: int, during=None):
+        """Run up to (not including) end_tick. `during` is Sim.step's: the live runner's late acts (E4)."""
         while self.sim.state["tick"] < end_tick:
-            self._tick()
+            self._tick(during)
 
     def finish(self):
         """Snapshot the final state, append the end event and close the log."""
@@ -58,10 +58,11 @@ class Run:
         os.fsync(self.log.fileno())
         self.log.close()
 
-    def _tick(self):
+    def _tick(self, during=None):
         sim = self.sim
         try:
-            sim.step(self.player.get(sim.state["tick"], []))
+            acts = list(self.player.get(sim.state["tick"], []))
+            sim.step(acts) if during is None else sim.step(acts, during=during)
         except BaseException:
             # Whole ticks are already on disk. The unfinished one can't be resumed from, but its
             # recorded mind outputs are evidence of whatever killed the run, so set them aside.

@@ -236,11 +236,13 @@ def test_an_inhabitant_is_sent_nothing_it_could_not_perceive(tmp_path):
             check(m, None)
             if m["type"] == "ack" and m["status"] == "applied":
                 acts[m["event"]] = m["id"]
-            if m["type"] != "tick":
+            if m["type"] not in ("tick", "early"):
                 continue
-            for e in m["events"]:
-                if e["kind"] == "receipt" and e["actor"] == aid and e["parents"]:  # its ack follows the tick
+            for e in m["events"]:  # its ack follows the tick, or (E4) the early message of a mid-tick act
+                if e["kind"] == "receipt" and e["actor"] == aid and e["parents"]:
                     receipts[e["parents"][0]] = e["data"]["why"]
+            if m["type"] == "early":
+                continue
             v = m["view"]
             stats["offers"] += bool(v["offer"])
             if v["offer"] and rng.random() < 0.2:

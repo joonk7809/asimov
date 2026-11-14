@@ -55,6 +55,7 @@ func _ready() -> void:
 			client.scope = "inhabitant"
 			client.agent = int(args["inhabit"])
 			client.ticked.connect(_on_inhabit_tick)
+			client.early.connect(_on_early)
 			client.welcomed.connect(_on_inhabit_welcome)
 			client.heard.connect(_on_heard)
 			_build_inhabit_ui()
@@ -270,6 +271,16 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 	_take_receipts(evs)
 	if not pending.is_empty() and not pending.get("step", false) and int(v["tick"]) > int(pending["tick"]):
 		pending = {}  # its receipt is in this tick's lines
+	_plan_run()
+	_refresh_inhabit()
+
+
+func _on_early(m: Dictionary) -> void:
+	## E4: the player's act applied mid-tick; its receipt is here now, not with the tick.
+	if not _caught_up:
+		return  # the catch-up on the first tick reads seen_events, these included
+	_feed(m["events"])
+	_take_receipts(m["events"])
 	_plan_run()
 	_refresh_inhabit()
 
