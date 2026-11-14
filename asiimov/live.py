@@ -33,7 +33,7 @@ from collections import defaultdict
 
 from . import inhabitant, persist
 from .minds import NoisyMind, ScriptMind, StubMind
-from .sim import ENGINE_VERSION, PLAYER_ACTIONS, TICKS_PER_DAY
+from .sim import ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, TICKS_PER_DAY
 from .worldmap import position
 
 PROTOCOL = 2               # 2 adds the inhabitant scope (plan/player-body-spec.md)
@@ -145,7 +145,8 @@ class LiveRunner:
         n = len(self.sim.state["agents"])
         return {"fire": {"family": [0, len(self.sim.state["families"]) - 1]},
                 "possess": {"agent": [0, n - 1]}, "release": {},
-                "act": {"action": list(PLAYER_ACTIONS), "target": [0, n - 1]}}
+                "act": {"action": list(PLAYER_ACTIONS), "target": [0, n - 1],
+                        "place": sorted(self.sim.map["places"])}}  # place: go_to's, and only go_to's
 
     def _held_agent(self) -> int | None:
         return self._held_from()[0]
@@ -225,11 +226,16 @@ class LiveRunner:
         elif verb == "release":
             ok, act = args == {}, {"kind": "release"}
         else:
-            t = args.get("target")
-            ok = set(args) <= {"action", "target"} and isinstance(args.get("action"), str) \
-                and args["action"] in PLAYER_ACTIONS and (t is None or (_is_int(t) and 0 <= t < n))
+            t, place = args.get("target"), args.get("place")
+            go = args.get("action") in GO_ACTS
+            ok = set(args) <= {"action", "target", "place"} and isinstance(args.get("action"), str) \
+                and args["action"] in PLAYER_ACTIONS and (t is None or (_is_int(t) and 0 <= t < n)) \
+                and (place is None) != go and (not go or (t is None and isinstance(place, str)
+                                                          and place in self.sim.map["places"]))
             act = {"kind": "act", "action": args.get("action")} if t is None else \
                 {"kind": "act", "action": args.get("action"), "target": t}
+            if go:
+                act["place"] = place
         if not ok:
             return None, "bad_args"
         if not _is_int(seen) or not 0 <= seen <= now:
