@@ -133,6 +133,17 @@ A client interpolates between views for display only.
   `unknown_verb`, `bad_args`, `bad_seen_tick` (missing, or ahead of the view), `stale` (more than a
   day behind the view), `scope`, `inhabited`, `body_taken`, `no_body`.
 
+`heard`, to an inhabitant only, when the runner narrates (readable-world E2; `--narrate`): the spoken words of
+something it just witnessed, sent after the tick, so it can arrive after the next `tick` message:
+```json
+{"type": "heard", "tick": 211, "event": 6011, "kind": "talk", "to_player": false,
+ "lines": [{"who": 4, "name": "Ari Vosa", "text": "Morning. Field's dry again."}, {"who": 7, "name": "Bel Rota", "text": "Rain soon, I hope."}]}
+```
+`kind` is `talk` or `snub` at its place while it's awake there, `refusal` (a villager saying no to its ask), or
+`visit` (a villager come to see it). `event` is the event the words are about. Its own villager never
+speaks. The words are never part of the world: no event, no replay, no memory. They are kept in the run's
+`narration.jsonl` with the narrator and the facts it was given.
+
 `status`, broadcast after a control: `{"type": "status", "paused": true, "tps": 1.0, "view_tick": 212}`.
 
 `error`, then the server closes: a first message that isn't a valid `hello`, an unknown protocol, an

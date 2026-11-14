@@ -31,7 +31,7 @@ import sys
 import time
 from collections import defaultdict
 
-from . import inhabitant, persist
+from . import inhabitant, narrate, persist
 from .minds import NoisyMind, ScriptMind, StubMind
 from .sim import ENGINE_VERSION, PLAYER_ACTIONS, TICKS_PER_DAY
 from .worldmap import position
@@ -497,8 +497,14 @@ class Hub:
     """Paces the runner and fans out to clients. Everything that touches the runner happens between ticks,
     in the tick loop; a tick itself runs in a worker thread so the server keeps reading while it does."""
 
-    def __init__(self, runner: LiveRunner, tps: float = 1.0, paused: bool = False, token: str | None = None):
+    def __init__(self, runner: LiveRunner, tps: float = 1.0, paused: bool = False, token: str | None = None,
+                 narrator=None):
         self.runner, self.tps, self.paused, self.token = runner, tps, paused, token
+        # E2 (plan/readable-world-spec.md): words for what the inhabitant sees, written after each tick into
+        # narration.jsonl and sent as `heard`. Never part of the world: the log and replay don't see them.
+        self.narrator = narrator
+        self.narr = open(os.path.join(runner.out, "narration.jsonl"), "a") if narrator is not None else None
+        self.narr_slots = asyncio.Semaphore(8)
         self.conns: set[Conn] = set()
         self.inbox: list[tuple[Conn, dict]] = []
         self.wake = asyncio.Event()
@@ -632,6 +638,26 @@ class Hub:
                 c = self.waiters.pop(ack["id"], None)
                 if c:
                     c.send(ack)
+            if self.narrator is not None:
+                for c in self.conns:
+                    if c.ready and c.scope == "inhabitant":
+                        for it in narrate.items(self.runner.sim, events, c.agent):
+                            asyncio.create_task(self._narrate(c, it))
+
+    async def _narrate(self, conn: "Conn", it: dict):
+        async with self.narr_slots:
+            lines = await asyncio.to_thread(self.narrator.lines, it)
+        agents = self.runner.sim.state["agents"]
+        out = [{"who": x["who"], "name": agents[x["who"]]["name"], "text": x["text"]} for x in lines]
+        self.narr.write(json.dumps({"wall": round(time.time(), 3), "tick": it["tick"], "event": it["event"],
+                                    "kind": it["kind"], "player": it["player"], "to_player": it["to_player"],
+                                    "narrator": self.narrator.model, "fallback": it.get("fallback", False),
+                                    "latency_s": it.get("latency_s"), "prompt_facts": it["people"], "lines": out},
+                                   sort_keys=True) + "\n")
+        self.narr.flush()
+        if conn.ready and conn.agent == it["player"] and conn in self.conns:
+            conn.send(msg("heard", tick=it["tick"], event=it["event"], kind=it["kind"], to_player=it["to_player"],
+                          lines=out))
 
 
 def _hello_error(m) -> str | None:
@@ -651,9 +677,9 @@ def _hello_error(m) -> str | None:
 
 
 async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, tps: float = 1.0,
-                paused: bool = False, started=None, token: str | None = None):
+                paused: bool = False, started=None, token: str | None = None, narrator=None):
     """Run the hub until cancelled. `started(port, hub)` is called once the socket listens."""
-    hub = Hub(runner, tps, paused, token)
+    hub = Hub(runner, tps, paused, token, narrator)
     server = await asyncio.start_server(hub.handle, host, port, limit=1 << 16)
     if started:
         started(server.sockets[0].getsockname()[1], hub)
@@ -665,6 +691,26 @@ async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, t
         for c in list(hub.conns):
             c.close()
             c.writer.close()
+
+
+def narrator_from_args(args, kind: str):
+    """The same model narrates both sessions of a blind pair (Steering 2026-11-14): --narrate-url for a
+    scripted world, or the llm mind's own server. A template only when no model is given."""
+    url = args.narrate_url or (args.llm_url if kind == "llm" else None)
+    model = args.narrate_model or (args.llm_model if kind == "llm" else None)
+    key = args.narrate_key or (args.llm_key if kind == "llm" else None)
+    if (url is None or model is None) and getattr(args, "pod", None):
+        from .run import llm_from_args
+        m = llm_from_args(args)[0]
+        url, model, key = url or m.base_url, model or m.model, key or m.api_key
+    choice = args.narrate or ("model" if url and model else "template")
+    if choice == "off":
+        return None
+    if choice == "template":
+        return narrate.TemplateNarrator()
+    if not (url and model):
+        raise SystemExit("--narrate model needs --narrate-url and --narrate-model (or an llm mind)")
+    return narrate.LLMNarrator(url, model, key)
 
 
 def main(argv=None):
@@ -685,6 +731,12 @@ def main(argv=None):
     ap.add_argument("--paused", action="store_true")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--narrate", choices=["model", "template", "off"], default=None,
+                    help="words for what the inhabitant sees (E2). model: --narrate-url/--narrate-model, else the "
+                         "llm mind's; default model when one is given, else template")
+    ap.add_argument("--narrate-url")
+    ap.add_argument("--narrate-model")
+    ap.add_argument("--narrate-key")
     args = ap.parse_args(argv)
     if args.token is None and args.host not in ("127.0.0.1", "localhost", "::1"):
         raise SystemExit(f"--host {args.host} is not loopback: pass --token")
@@ -702,8 +754,10 @@ def main(argv=None):
                         workers=args.workers or (64 if kind == "llm" else 1))
     print(f"{'reopened' if runner.reopened else 'new world'} {args.out} at tick {runner.sim.state['tick']}, "
           f"engine {ENGINE_VERSION}, ws://{args.host}:{args.port}/", file=sys.stderr, flush=True)
+    narrator = narrator_from_args(args, kind)
+    print(f"narrator: {getattr(narrator, 'model', 'off')}", file=sys.stderr, flush=True)
     try:
-        asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token))
+        asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token, narrator=narrator))
     except KeyboardInterrupt:
         pass
     finally:
