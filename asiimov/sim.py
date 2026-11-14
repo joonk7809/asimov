@@ -2022,10 +2022,12 @@ class Sim:
             rid = self._kin_answer(x, t, action, q["src"], yes, cite)
         else:
             rid = self._share_answer(x, t, action, q["src"], yes, cite)
-        author, _, holder = self._running(x)
-        if holder is not None and holder.get("asked") == q["event"]:  # the step that asked is still running
-            del holder["asked"]
-            self._end_step(x, author, self.events[rid].data["ok"], self.events[rid].data["why"])
+        # The step that asked ends: the running one, or an intent's step a rule's one-off has paused (review on #66)
+        for author, holder in (("deliberate", x["override"]), ("intent", x["intent"])):
+            if holder is not None and holder.get("asked") == q["event"]:
+                del holder["asked"]
+                self._end_step(x, author, self.events[rid].data["ok"], self.events[rid].data["why"])
+                break
         return rid
 
     def _answer(self, a: dict, eid: int, action: str, target) -> int:

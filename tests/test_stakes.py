@@ -683,6 +683,26 @@ def test_a_supply_run_pauses_a_running_intent_which_resumes_after():
     assert a["override"] is None and sim._running(a)[0] == "intent"
 
 
+def test_an_ask_held_by_a_paused_intent_still_ends_its_step_when_answered():
+    sim = Sim(1, 100, StubMind())
+    sim.run_until(TICKS_PER_DAY + 60)
+    ag = sim.state["agents"]
+    b = next(b for b in ag if not b["asleep"] and b["place"] not in (None, b["home"]))
+    sim.step([{"kind": "possess", "agent": b["id"]}])
+    a = next(a for a in ag if a["role"] == "farmer" and a["family"] != b["family"] and not a["asleep"])
+    a["place"], a["route"], a["override"], b["inv"]["food"] = b["place"], None, None, 5
+    pos = next(e.id for e in sim.events if e.kind == "possess")
+    a["intent"] = {"goal": "get food", "steps": [{"do": "ask_food", "target": b["id"]}], "i": 0, "event": pos,
+                   "tick": sim.state["tick"], "left": 6}
+    sim.step([{"kind": "act", "action": "wait"}])
+    assert a["intent"].get("asked") is not None
+    a["supplied"], a["trade_try"] = {}, {}
+    sim._trade_due(a)  # the supply run pauses the intent that waits on the ask
+    assert a["override"] and a["override"]["do"] == "trade"
+    sim.step([{"kind": "act", "action": "agree", "target": a["id"]}])
+    assert a["intent"] is None or "asked" not in a["intent"]
+
+
 def test_trade_keeps_the_ledgers_and_replays():
     sim = Sim(3, 100, StubMind())
     assert checked(sim, 4, FIRE) == []
