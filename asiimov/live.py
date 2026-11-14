@@ -639,6 +639,7 @@ class Hub:
         self.narr = open(os.path.join(runner.out, "narration.jsonl"), "a") if narrator is not None else None
         self.narr_slots = asyncio.Semaphore(8)
         self.narr_tasks: set = set()  # held, so a pending narration isn't collected (review of #61)
+        self.recent = narrate.Recent()  # each villager's own events of the last day: the words' topics (E2c)
         self.conns: set[Conn] = set()
         self.inbox: list[tuple[Conn, dict]] = []
         self.wake = asyncio.Event()
@@ -834,9 +835,10 @@ class Hub:
                 if c:
                     c.send(ack)
             if self.narrator is not None:
+                self.recent.feed(self.runner.sim, events)
                 for c in self.conns:
                     if c.ready and c.scope == "inhabitant":
-                        for it in narrate.items(self.runner.sim, events, c.agent):
+                        for it in narrate.items(self.runner.sim, events, c.agent, self.recent):
                             t = asyncio.create_task(self._narrate(c, it))
                             self.narr_tasks.add(t)
                             t.add_done_callback(self.narr_tasks.discard)
@@ -849,7 +851,8 @@ class Hub:
         self.narr.write(json.dumps({"wall": round(time.time(), 3), "tick": it["tick"], "event": it["event"],
                                     "kind": it["kind"], "player": it["player"], "to_player": it["to_player"],
                                     "narrator": self.narrator.model, "fallback": it.get("fallback", False),
-                                    "latency_s": it.get("latency_s"), "prompt_facts": it["people"], "lines": out},
+                                    "latency_s": it.get("latency_s"), "prompt_facts": it["people"],
+                                    "topics": it.get("topics", []), "denied": it.get("denied", []), "lines": out},
                                    sort_keys=True) + "\n")
         self.narr.flush()
         if conn.ready and conn.agent == it["player"] and conn in self.conns:
