@@ -19,6 +19,7 @@ var pressed := []       # intent ids sent
 var buttons := 0
 var started := 0
 var done := false
+var heard_n := 0        # `heard` messages: words spoken near the villager (readable-world E2/C3)
 
 
 func _init() -> void:
@@ -93,6 +94,16 @@ func _init() -> void:
 		printerr("your own outcomes don't read right:\n%s" % "\n".join(lines))
 		quit(1)
 		return
+	# Words spoken near you (C3): quoted, named, markup-safe, and what's said to you in the ask colour.
+	var h1 := Words.heard({"tick": 61, "kind": "talk", "to_player": false, "lines": [{"who": 4, "name": "Ari", "text": "Rain [b]soon[/b]?"},
+			{"who": 5, "name": "Bo", "text": "Hope so."}]}, 144)
+	var h2 := Words.heard({"tick": 61, "kind": "refusal", "to_player": true, "lines": [{"who": 4, "name": "Ari", "text": "Not today."}]}, 144)
+	if not ("10:10" in h1 and "[b]Ari[/b]: \u201cRain [lb]b]soon[lb]/b]?\u201d" in h1 and "[b]Bo[/b]" in h1) \
+			or not ("#f0c060" in h2 and "Not today." in h2) or "#f0c060" in h1:
+		printerr("words said near you don't read right: %s | %s" % [h1, h2])
+		quit(1)
+		return
+	me.heard.connect(func(m): heard_n += 1)
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
 		want_ticks = int(a[2])
@@ -184,8 +195,11 @@ func _process(_delta: float) -> bool:
 		if applied < 20 or receipted != applied or buttons == 0:  # an ack follows the tick that carries its receipt
 			_fail("%d acts sent, %d applied, %d with receipts, %d buttons shown" % [pressed.size(), applied, receipted, buttons])
 			return true
-		print("inhabited villager %d for %d ticks: %d buttons shown, %d acts applied, %d with receipts"
-				% [me.agent, seen, buttons, applied, receipted])
+		if heard_n == 0:  # the runner's default narrator (a template with no model) speaks for what it witnessed
+			_fail("heard nothing said near villager %d in %d ticks" % [me.agent, seen])
+			return true
+		print("inhabited villager %d for %d ticks: %d buttons shown, %d acts applied, %d with receipts, %d heard"
+				% [me.agent, seen, buttons, applied, receipted, heard_n])
 		done = true
 		quit(0)
 	return false

@@ -38,7 +38,8 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"bedtime": "it's bedtime, so you head home", "falling asleep": "you're falling asleep",
 		"no food to give": "you have no food to give", "no coin to give": "you have no coin to give", "no stock": "the market has no food left",
 		"unparseable or unknown action": "that isn't something you can do",
-		"heading there": "you set off", "already here": "you're already there", "arrived": "you arrive"}
+		"heading there": "you set off", "already here": "you're already there", "arrived": "you arrive",
+		"time ran out": "it took too long"}
 const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food", "refused": "you said no",
 		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
 		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
@@ -325,3 +326,16 @@ static func here(v: Dictionary, doing: Dictionary) -> String:
 		out.append(line)
 	return "\n".join(out)
 
+
+
+static func heard(m: Dictionary, per_day: int) -> String:
+	## Words spoken near you (readable-world E2): who said what, quoted; what was said to you in the ask colour.
+	## A villager's words are text, never markup.
+	var t := clock(int(m["tick"]), per_day).split(", ")[1]
+	var out := []
+	for x in m.get("lines", []):
+		var line := "[b]%s[/b]: \u201c%s\u201d" % [str(x["name"]).replace("[", "[lb]"), str(x["text"]).replace("[", "[lb]")]
+		out.append("[color=#f0c060]%s[/color]" % line if m.get("to_player", false) else line)
+	if out.is_empty():
+		return ""
+	return "[color=#8a93a6]%s[/color]  %s" % [t, "\n         ".join(out)]
