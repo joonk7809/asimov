@@ -12,6 +12,7 @@ signal ticked(msg: Dictionary)
 signal acked(msg: Dictionary)
 signal status_changed(msg: Dictionary)
 signal failed(reason: String)
+signal heard(msg: Dictionary)  # inhabitant: words spoken near it (readable-world E2), after the tick
 
 var model := WorldModel.new()
 var ws := WebSocketPeer.new()
@@ -107,6 +108,8 @@ func _handle(text: String) -> void:
 		"ack":
 			acks[str(m["id"])] = m
 			acked.emit(m)
+		"heard":
+			heard.emit(m)
 		"status":
 			paused = m["paused"]
 			tps = float(m["tps"])

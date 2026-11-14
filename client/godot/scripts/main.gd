@@ -55,6 +55,7 @@ func _ready() -> void:
 			client.agent = int(args["inhabit"])
 			client.ticked.connect(_on_inhabit_tick)
 			client.welcomed.connect(_on_inhabit_welcome)
+			client.heard.connect(_on_heard)
 			_build_inhabit_ui()
 			for k in ["family", "fire", "play", "menu_scroll", "slider", "clock"]:  # divine verbs and controls aren't an inhabitant's
 				ui[k].visible = false
@@ -189,6 +190,9 @@ func _build_inhabit_ui() -> void:
 	feed_box.offset_bottom = -12
 	ui["layer"].add_child(feed_box)
 	ui["feed"] = _panel(feed_box, "What's happening", true)
+	ui["feed"].size_flags_stretch_ratio = 1.6
+	ui["said"] = _panel(feed_box, "Said near you", true)  # readable-world C3: talk you can hear, in words
+	ui["said"].append_text("[color=#8a93a6]Conversations near you, and what people say to you, show up here.[/color]\n")
 
 
 var _menu_key := ""
@@ -228,6 +232,12 @@ func _feed(evs: Array) -> void:
 		var line := Words.describe(e, client.me, names)
 		if line != "":
 			ui["feed"].append_text("[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line])
+
+
+func _on_heard(m: Dictionary) -> void:
+	var line := Words.heard(m, client.ticks_per_day())
+	if line != "":
+		ui["said"].append_text(line + "\n")
 
 
 func _on_inhabit_tick(m: Dictionary) -> void:

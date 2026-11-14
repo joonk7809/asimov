@@ -325,3 +325,16 @@ static func here(v: Dictionary, doing: Dictionary) -> String:
 		out.append(line)
 	return "\n".join(out)
 
+
+
+static func heard(m: Dictionary, per_day: int) -> String:
+	## Words spoken near you (readable-world E2): who said what, quoted; what was said to you in the ask colour.
+	## A villager's words are text, never markup.
+	var t := clock(int(m["tick"]), per_day).split(", ")[1]
+	var out := []
+	for x in m.get("lines", []):
+		var line := "[b]%s[/b]: \u201c%s\u201d" % [str(x["name"]).replace("[", "[lb]"), str(x["text"]).replace("[", "[lb]")]
+		out.append("[color=#f0c060]%s[/color]" % line if m.get("to_player", false) else line)
+	if out.is_empty():
+		return ""
+	return "[color=#8a93a6]%s[/color]  %s" % [t, "\n         ".join(out)]
