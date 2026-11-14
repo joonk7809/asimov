@@ -213,7 +213,7 @@ def test_kill_mid_tick_after_an_early_ack_and_resume_to_the_same_event(tmp_path)
     r.run.log.close()
 
     r2 = live.LiveRunner(out, StubMind(), 4, 20)  # reopen: the crashed tick runs again from the record
-    assert r2.intents["k1"]["status"] in ("pending", "applied")
+    assert r2.intents["k1"]["status"] == "applied"  # rebuilt from the sidecar, so step() checks the re-run against it
     while True:
         tick, events, acks = r2.step()
         if tick == t:
@@ -246,4 +246,34 @@ def test_a_rerun_that_moved_an_early_acked_act_is_caught(tmp_path):
     r._during = tamper
     with pytest.raises(RuntimeError, match="was acked as event"):
         r.step()
+
+
+def test_after_a_resume_an_early_ack_the_rerun_contradicts_is_caught(tmp_path):
+    """Steering's condition on #69: the check runs after a reopen too, from the intents the sidecar rebuilds."""
+    out = str(tmp_path / "w")
+    r = _runner_at_noon(out, StubMind())
+    aid = next(a["id"] for a in r.sim.state["agents"] if not a["asleep"] and a["sleep_tick"] > r.sim.state["tick"] + 60)
+    r.inhabit(aid, "c1")
+    r.step()
+    t = r.sim.state["tick"]
+
+    def send(ack, evs):
+        raise RuntimeError("killed mid-tick")
+    r.queue_late(intent("k3", "act", {"action": "work"}, t), "c1", "inhabitant", send)
+    with pytest.raises(RuntimeError, match="killed mid-tick"):
+        r.step()
+    r.side.close()
+    r.run.log.close()
+    side = os.path.join(out, "runner.jsonl")
+    lines = [json.loads(l) for l in open(side)]
+    for x in lines:  # the sidecar says the ack named another event than the re-run will make
+        if x["kind"] == "applied" and x["id"] == "k3":
+            x["event"] += 1
+    with open(side, "w") as f:
+        f.write("".join(json.dumps(x, sort_keys=True) + "\n" for x in lines))
+    r2 = live.LiveRunner(out, StubMind(), 4, 20)
+    assert r2.intents["k3"]["status"] == "applied"
+    with pytest.raises(RuntimeError, match="'k3' was acked as event"):
+        while r2.sim.state["tick"] <= t:
+            r2.step()
 
