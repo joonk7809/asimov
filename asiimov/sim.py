@@ -102,6 +102,11 @@ NEIGHBOR_CLAUSES_V1 = {"visit": "visit goes to {who} and spends time with them",
                        "carry_on": "carry_on goes on with your day"}
 RECALL_WORDS = ("sick", "went to see", "came to see", "gave", "took them", "brought")  # LH H2's retrieval keys
 RECALL_ITEMS = 6
+# G3w rep-1 (research): the word a chat passes on beyond theft, its sign (on the share rule's odds and on the
+# hearer's feeling, scaled by stakes rep share_pm and aff), and how the hearer's beliefs put it (facts, L25)
+REP_HEARD = {"helped": 1, "refused": -1, "brought": -1}
+REP_TEXT = {"helped": "{who} gave food or coin to someone outside their family",
+            "refused": "{who} refused to share food", "brought": "{who} passed on the sickness"}
 # What a deliberation may answer, in the order its prompt lists them (engine 10). Only the ones that can
 # work now are offered (_offer): with impossible ones listed, 63% of 4B famine answers chose buy_food away
 # from the market or facing an empty one (T16e), and cutting them sent minds to people instead (T16f).
@@ -255,6 +260,8 @@ class Sim:
             self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}}
             if "neighbor" in self.state["stakes"]:  # who knows of whose sickness, and who carries word (neighbor-1)
                 self.state["sick"].update({"news": {}, "carry": {}})
+        if "owe" in self.state.get("stakes", {}):  # G3w owe-1 (research): debtor -> creditor -> debt
+            self.state["debts"] = {}
         if "alms" in self.state.get("stakes", {}):  # the day each villager last had alms (B5 alms-1)
             self.state["alms"] = {}
         if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
@@ -443,6 +450,8 @@ class Sim:
         fam = self.state["families"][a["family"]]["members"]
         present = [{"id": o, "role": agents[o]["role"], "has_food": agents[o]["inv"]["food"] > 0,
                     "kin": o in fam} for o in occupancy.get(a["place"], []) if o != a["id"]]
+        if "rep" in self.state.get("stakes", {}):  # rep-1: whom the villager has heard well of first (stable)
+            present.sort(key=lambda p: -self._standing(a, agents[p["id"]]))
         kin = [{"id": o, "has_food": agents[o]["inv"]["food"] > 1} for o in fam if o != a["id"]]
         at_market = a["place"] == "market"
         view = {"role": a["role"], "traits": a["traits"], "hour": self._hour(), "coin": a["inv"]["coin"],
@@ -650,6 +659,7 @@ class Sim:
                 if self._possessed(a) and (a["occasion"] or {}).get("player"):
                     a["occasion"] = None  # the hand-back never asks the mind about the player's own act
                 self._sick_ask(a)
+                self._repay_due(a)
                 self._maybe_deliberate(a, occupancy)
 
         self._commit()
@@ -1013,6 +1023,8 @@ class Sim:
             data.update(place=where, near=near)
         eid = self._emit("sick", "chance", a["id"], data, parents)
         sk["src"][aid] = eid  # the cause whoever catches it from this agent cites
+        if near is not None and self.state["agents"][near]["family"] != a["family"]:
+            self._reputed(a, self.state["agents"][near], "brought", eid)
         # no IMPORTANT_WORDS key ("caught" weighs a theft's 8; L27)
         self._note(a["id"], "fell sick" if near is None
                    else f"fell sick at the {where.replace('_', ' ')} near {self.state['agents'][near]['name']}")
@@ -1184,6 +1196,80 @@ class Sim:
             if (str(y["id"]) not in sk["ill"] and str(y["id"]) not in sk["immune"]
                     and self.rng.at(f"catch-visit:{y['id']}", self.state["tick"], 0, 999) < p):
                 self._make_sick(y, [eid, sk["src"][str(x["id"])]], x["place"], x["id"])
+
+    # ------------------------------------------------------------------ G3w couplings (research, stakes owe / rep)
+    @property
+    def _told(self) -> tuple:
+        """The belief kinds a chat passes on: thieves, and with rep-1 who helped, refused or brought sickness."""
+        return ("thief:",) + (tuple(f"{k}:" for k in REP_HEARD) if "rep" in self.state.get("stakes", {}) else ())
+
+    def _rep_aff(self) -> int:
+        return self.state["stakes"]["rep"]["aff"]
+
+    def _reputed(self, x: dict, y: dict, kind: str, cause: int):
+        """rep-1: x now holds that y helped, refused or brought sickness; a chat passes it on."""
+        if "rep" not in self.state.get("stakes", {}) or x["id"] == y["id"]:
+            return
+        k = f"{kind}:{y['id']}"
+        x["beliefs"][k] = REP_TEXT[kind].format(who=y["name"])
+        x["belief_causes"][k] = cause
+
+    def _standing(self, t: dict, a: dict) -> int:
+        """What t's own state adds to its odds of sharing with a, per mille: owe-1's debts (t owes a: more; a owes
+        t: less) and rep-1's word (a helped: more; refused or brought sickness: less)."""
+        st, s = self.state.get("stakes", {}), 0
+        if "owe" in st:
+            debts, pm = self.state["debts"], st["owe"]["share_pm"]
+            s += pm * (str(a["id"]) in debts.get(str(t["id"]), {})) - pm * (str(t["id"]) in debts.get(str(a["id"]), {}))
+        if "rep" in st:
+            pm = st["rep"]["share_pm"]
+            s += sum(pm * REP_HEARD[k] for k in REP_HEARD if f"{k}:{a['id']}" in t["beliefs"])
+        return s
+
+    def _owe(self, debtor: dict, creditor: dict, what: str, n: int, cause: int):
+        """owe-1: a gift or a shared meal across families is a debt, shown in both villagers' beliefs."""
+        if "owe" not in self.state.get("stakes", {}):
+            return
+        d = self.state["debts"].setdefault(str(debtor["id"]), {})
+        old = d.get(str(creditor["id"]))
+        d[str(creditor["id"])] = {"what": what, "n": (old["n"] if old and old["what"] == what else 0) + n,
+                                  "since": old["since"] if old else self.state["tick"], "cause": cause}
+        n2 = d[str(creditor["id"])]["n"]
+        debtor["beliefs"][f"owe:{creditor['id']}"] = f"I owe {creditor['name']} {n2} {what}"
+        creditor["beliefs"][f"owed:{debtor['id']}"] = f"{debtor['name']} owes me {n2} {what}"
+        debtor["belief_causes"][f"owe:{creditor['id']}"] = creditor["belief_causes"][f"owed:{debtor['id']}"] = cause
+
+    def _settles(self, a: dict, b: dict) -> bool:
+        """A gift from a debtor to its creditor pays the debt back, whatever it was."""
+        d = self.state.get("debts", {}).get(str(a["id"]), {})
+        if str(b["id"]) not in d:
+            return False
+        del d[str(b["id"])]
+        if not d:
+            del self.state["debts"][str(a["id"])]
+        a["beliefs"].pop(f"owe:{b['id']}", None)
+        a["belief_causes"].pop(f"owe:{b['id']}", None)
+        b["beliefs"].pop(f"owed:{a['id']}", None)
+        b["belief_causes"].pop(f"owed:{a['id']}", None)
+        return True
+
+    def _repay_due(self, a: dict):
+        """owe-1's rule, on the hour: a well, awake debtor with nothing deliberated running and something to spare
+        goes to pay back its oldest due debt (due_days old) to a creditor who is awake. No mind is asked."""
+        cfg = self.state.get("stakes", {}).get("owe")
+        d = self.state.get("debts", {}).get(str(a["id"]))
+        if (not cfg or not d or self.state["tick"] % 6 or a["override"] or a["role"] in ("child", "elder")
+                or self._possessed(a) or str(a["id"]) in self.state.get("sick", {}).get("ill", {})):
+            return
+        for c, debt in sorted(d.items(), key=lambda kv: (kv[1]["since"], int(kv[0]))):
+            b = self.state["agents"][int(c)]
+            spare = a["inv"]["food"] >= 2 if debt["what"] == "food" else a["inv"]["coin"] >= self._gift_coin() + self._price()
+            if self.state["tick"] - debt["since"] < cfg["due_days"] * TICKS_PER_DAY or b["asleep"] or not spare:
+                continue
+            eid = self._emit("repay_due", "rule", a["id"], {"to": b["id"], "what": debt["what"]}, [debt["cause"]])
+            a["intent"] = None
+            a["override"] = {"do": "give_" + debt["what"], "target": b["id"], "left": DEFAULT_STEP_TICKS, "event": eid}
+            return
 
     def _sick_detail(self, a: dict) -> str:
         """The piloted ask (B5, pack sha 163da069...c5b5): facts only, no cue words (L25)."""
@@ -1686,7 +1772,8 @@ class Sim:
                 limit = self._kin_limit(t, a)
             else:
                 limit = _clamp(SHARE_BASE[action] + t["traits"]["agreeableness"] // 4
-                               + self._rel(t, a["id"])["affinity"] // 4 + (SHARE_KIN if kin else 0), 0, SHARE_MAX)
+                               + self._rel(t, a["id"])["affinity"] // 4 + (SHARE_KIN if kin else 0)
+                               + self._standing(t, a), 0, SHARE_MAX)
             extra, origin, yes = {"stream": stream, "index": idx, "roll": roll, "limit": limit, "kin": kin, **to}, \
                 "chance", roll < limit
         else:
@@ -1705,11 +1792,17 @@ class Sim:
                 self._note(a["id"], f"{t['name']} gave me 1 food when I asked")
                 self._note(t["id"], f"gave 1 food to {a['name']}, who asked")
             r["affinity"] = min(1000, r["affinity"] + 50)
-            return self._receipt(a, eid, action, True, "sold" if action == "buy_from" else "gave", origin, extra,
-                                 parents=tuple(parents) + tuple(self._price_cause() if action == "buy_from" else ()))
+            rid = self._receipt(a, eid, action, True, "sold" if action == "buy_from" else "gave", origin, extra,
+                                parents=tuple(parents) + tuple(self._price_cause() if action == "buy_from" else ()))
+            if action == "ask_food" and not kin:
+                self._owe(a, t, "food", 1, rid)
+                self._reputed(a, t, "helped", rid)
+            return rid
         self._note(a["id"], f"{t['name']} refused to {'sell me' if action == 'buy_from' else 'give me'} food")
         r["affinity"] = max(-1000, r["affinity"] - 50)
         rid = self._receipt(a, eid, action, False, "refused", origin, extra, parents=parents)
+        if not kin:
+            self._reputed(a, t, "refused", rid)
         self._occasion(a, "refused", 450 + (1000 - a["traits"]["agreeableness"]) // 4, t["id"], rid)
         return rid
 
@@ -1731,15 +1824,24 @@ class Sim:
             return self._receipt(a, eid, do, False, f"no {what} to give", extra={"to": b["id"]})
         a["inv"][what] -= n
         b["inv"][what] += n
-        rid = self._receipt(a, eid, do, True, "gave", extra={"to": b["id"], what: n},
+        repays = self._settles(a, b)
+        rid = self._receipt(a, eid, do, True, "repaid" if repays else "gave",
+                            extra={"to": b["id"], what: n, **({"repays": 1} if repays else {})},
                             parents=self._price_cause() if what == "coin" else ())
         r = self._met(b, a["id"])
         r["affinity"] = min(1000, r["affinity"] + 100)
         r["cause"] = rid
         self._met(a, b["id"])
-        self._note(a["id"], f"gave {n} {what} to {b['name']}")
-        self._note(b["id"], f"{a['name']} gave me {n} {what}")
-        self._occasion(b, "gift", 400 + b["traits"]["agreeableness"] // 4, a["id"], rid, f"{n} {what}")
+        if repays:  # owe-1: a debt paid back is no new gift (no gift occasion, no new debt)
+            self._note(a["id"], f"paid back {b['name']} with {n} {what}")
+            self._note(b["id"], f"{a['name']} paid me back {n} {what}")
+        else:
+            self._note(a["id"], f"gave {n} {what} to {b['name']}")
+            self._note(b["id"], f"{a['name']} gave me {n} {what}")
+            self._occasion(b, "gift", 400 + b["traits"]["agreeableness"] // 4, a["id"], rid, f"{n} {what}")
+            if b["family"] != a["family"]:
+                self._owe(b, a, what, n, rid)
+                self._reputed(b, a, "helped", rid)
         self._close_contact(a, b, rid)
         return rid
 
@@ -1813,7 +1915,7 @@ class Sim:
                 transfers, sources = [], []
                 for x, y in ((a, b), (b, a)):
                     for k in sorted(y["beliefs"]):
-                        if k.startswith("thief:") and k not in x["beliefs"] and int(k.split(":")[1]) != x["id"]:
+                        if k.startswith(self._told) and k not in x["beliefs"] and int(k.split(":")[1]) != x["id"]:
                             c_roll = self.rng.at(f"cred:{x['id']}:{y['id']}:{k}", tick, 0, 999)
                             if c_roll < x["cognition"]["credulity"]:
                                 transfers.append((x, y, k))
@@ -1830,7 +1932,8 @@ class Sim:
                     x["beliefs"][k] = y["beliefs"][k].split(" (heard")[0] + f" (heard from {y['name']})"
                     x["belief_causes"][k] = tid
                     rr = self._rel(x, int(k.split(":")[1]))
-                    rr["affinity"] = max(-1000, rr["affinity"] - 150)
+                    rr["affinity"] = _clamp(rr["affinity"] + (REP_HEARD[k.split(":")[0]] * self._rep_aff()) // 100
+                                            if not k.startswith("thief:") else rr["affinity"] - 150, -1000, 1000)
                     rr["cause"] = tid
                 self._note(aid, f"talked with {b['name']} at the {place}")
                 self._note(b["id"], f"talked with {a['name']} at the {place}")
