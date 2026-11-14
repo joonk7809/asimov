@@ -265,10 +265,10 @@ def test_stub_twins_are_full_reruns(monkeypatch):
     monkeypatch.setattr(sim_mod, "FARM_YIELD", 1)
     monkeypatch.setitem(sim_mod.DEFAULT_STAKES["year"], "yields", [1] * 7)  # the same scarcity under the year (B5)
     base = Sim(1, 50, StubMind()); base.run(4); base.finish()
-    truth = Sim(1, 50, StubMind()); truth.run(4, fire(1)); truth.finish()
-    served, _ = run_twin(base.events, StubMind(), player=fire(1))
+    truth = Sim(1, 50, StubMind()); truth.run(4, fire(0)); truth.finish()  # family 0 since trade-1 (1 no longer differs)
+    served, _ = run_twin(base.events, StubMind(), player=fire(0))
     assert logs(served.events) != logs(truth.events)
-    rerun, mind = run_twin(base.events, StubMind(), player=fire(1), serve=False)
+    rerun, mind = run_twin(base.events, StubMind(), player=fire(0), serve=False)
     assert logs(rerun.events) == logs(truth.events) and mind.counts["base"] == 0
     s = summary(base.events, rerun.events)
     assert s["agents_diverged"] == len(divergence(base.events, truth.events))

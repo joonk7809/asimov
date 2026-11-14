@@ -76,7 +76,9 @@ def test_pay_pulls_each_working_adult_toward_its_trades_mean_and_keeps_that_mean
     within rounding to nearest, at every seed tried."""
     pull = DEFAULT_STAKES["pay"]["pull_pct"]
     for seed in range(1, 11):
-        on = Sim(seed, 100, StubMind())
+        # trade-1 slows an unsupplied worker after genesis; pay's pull is read without it
+        on = Sim(seed, 100, StubMind(), genesis={**generate_population(seed, 100), "stakes": {
+            k: v for k, v in DEFAULT_STAKES.items() if k != "trade"}})
         off = Sim(seed, 100, StubMind(), genesis={**generate_population(seed, 100), "stakes": {"tithe": DEFAULT_STAKES["tithe"]}})
         r_on, r_off = _rates(on), _rates(off)
         for t in {a["role"] for a in on.state["agents"] if a["id"] in r_on}:
@@ -597,3 +599,77 @@ def test_a_world_with_no_sickness_is_unchanged_by_the_neighbor_channel():
     # every event but genesis (its stakes) and the state hashes (state holds the stakes) is engine 23's
     same = lambda s: [e.to_json() for e in s.events[1:] if e.kind not in ("checkpoint", "end")]
     assert same(on) == same(off)
+
+
+# ------------------------------------------------------------------ trade-1 (DEP-a, research/g3w/report-dep-a.md)
+TR = DEFAULT_STAKES["trade"]
+
+
+def test_a_worker_lacking_its_input_works_slow_and_the_rule_sends_it_to_a_supplier_outside_its_family():
+    sim = Sim(1, 100, StubMind())
+    sim.run_until(TICKS_PER_DAY + 60)  # 10:00: suppliers are up
+    day = sim.state["tick"] // TICKS_PER_DAY
+    a = next(a for a in sim.state["agents"] if a["role"] == "farmer" and not a["asleep"] and a["override"] is None)
+    full = sim._work_rate({**a, "supplied": {"crafter": day}})
+    assert sim._work_rate({**a, "supplied": {}}) == full * TR["slow_pct"] // 100
+    a.pop("supplied", None), a.pop("trade_try", None)
+    n0 = len(sim.events)
+    sim._trade_due(a)
+    due = next(e for e in sim.events[n0:] if e.kind == "trade_due")
+    b = sim.state["agents"][due.data["to"]]
+    assert b["role"] == "crafter" and b["family"] != a["family"] and a["override"]["do"] == "trade"
+    assert a["override"]["target"] == b["id"] and a["override"]["event"] == due.id
+    coin_a, coin_b = a["inv"]["coin"], b["inv"]["coin"]
+    rid = sim._trade(a, b, due.id)
+    r = sim.events[rid]
+    assert r.data == {"action": "trade", "ok": True, "why": "supplied", "to": b["id"], "coin": TR["price"]}
+    assert (a["inv"]["coin"], b["inv"]["coin"]) == (coin_a - TR["price"], coin_b + TR["price"])
+    assert sim._supplied(a) and a["beliefs"]["supplier:crafter"].endswith(b["name"])
+    sim._trade_due(a)  # once supplied, no second run that day
+    assert not [e for e in sim.events[rid:] if e.kind == "trade_due"]
+
+
+def test_suppliers_are_kept_balanced_by_customers_and_re_chosen_after_a_failed_try():
+    sim = Sim(2, 100, StubMind())
+    sim.run(3)
+    load = sim.state["trade_load"]
+    for role in ("farmer", "crafter"):
+        n = [load.get(str(o["id"]), 0) for o in sim.state["agents"] if o["role"] == role]
+        assert max(n) - min(n) <= 2, (role, sorted(n))
+    assert sum(load.values()) == sum(len(a.get("suppliers", {})) for a in sim.state["agents"])
+    a = next(a for a in sim.state["agents"] if a.get("suppliers"))
+    need, s = next(iter(a["suppliers"].items()))
+    a["supply_failed"][need] = 1
+    assert sim._supplier(a, need)["id"] != s
+
+
+def test_the_players_body_is_exempt_and_a_buy_from_it_waits_for_its_answer():
+    for answer, why in (("agree", "supplied"), ("decline", "refused")):
+        sim = Sim(1, 100, StubMind())
+        sim.run_until(TICKS_PER_DAY + 60)
+        ag = sim.state["agents"]
+        b = next(b for b in ag if b["role"] == "crafter" and not b["asleep"] and b["place"] not in (None, b["home"]))
+        sim.step([{"kind": "possess", "agent": b["id"]}])
+        assert sim._supplied(b)  # no supply order for the player's body, so no slow pace
+        a = next(a for a in ag if a["role"] == "farmer" and a["family"] != b["family"] and not a["asleep"])
+        a["place"], a["route"] = b["place"], None
+        a["inv"]["coin"], a["override"], a["intent"] = 50, None, None
+        a["supplied"], a["trade_try"] = {}, {}
+        a.setdefault("suppliers", {})["crafter"] = b["id"]
+        a.setdefault("supply_failed", {})["crafter"] = 0
+        sim._trade_due(a)
+        assert a["override"]["do"] == "trade" and a["override"]["target"] == b["id"]
+        sim.step([{"kind": "act", "action": "wait"}])
+        ask = next(e for e in sim.events if e.kind == "ask" and e.actor == a["id"])
+        assert ask.data == {"action": "trade", "to": b["id"]} and a["override"].get("asked") == ask.id
+        sim.step([{"kind": "act", "action": answer, "target": a["id"]}])
+        r = next(e for e in reversed(sim.events) if e.kind == "receipt" and e.actor == a["id"] and e.data["action"] == "trade")
+        assert r.data["why"] == why and ask.id in r.parents and a["override"] is None
+        assert sim._supplied(a) == (answer == "agree") and a["supply_failed"]["crafter"] == (answer == "decline")
+
+
+def test_trade_keeps_the_ledgers_and_replays():
+    sim = Sim(3, 100, StubMind())
+    assert checked(sim, 4, FIRE) == []
+    assert [e for e in sim.events if e.kind == "receipt" and e.data["action"] == "trade" and e.data["ok"]]
+    assert replay(sim.events).state_hash() == sim.state_hash()
