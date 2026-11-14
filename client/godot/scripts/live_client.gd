@@ -12,6 +12,7 @@ signal ticked(msg: Dictionary)
 signal acked(msg: Dictionary)
 signal status_changed(msg: Dictionary)
 signal failed(reason: String)
+signal heard(msg: Dictionary)  # inhabitant: words spoken near it (readable-world E2), after the tick
 
 var model := WorldModel.new()
 var ws := WebSocketPeer.new()
@@ -107,6 +108,8 @@ func _handle(text: String) -> void:
 		"ack":
 			acks[str(m["id"])] = m
 			acked.emit(m)
+		"heard":
+			heard.emit(m)
 		"status":
 			paused = m["paused"]
 			tps = float(m["tps"])
@@ -137,13 +140,16 @@ func fire(family: int) -> String:
 	return id
 
 
-func act(action: String, target: int = -1) -> String:
+func act(action: String, target: int = -1, place: String = "") -> String:
 	## Inhabitant scope: the body's act. Its ack names the act event; the receipt follows in a tick's events.
+	## `place` is go_to's (engine 24), and only go_to's.
 	_seq += 1
 	var id := "i%x%x-%d" % [Time.get_ticks_usec(), randi(), _seq]
 	var args := {"action": action}
 	if target >= 0:
 		args["target"] = target
+	if place != "":
+		args["place"] = place
 	_send({"type": "intent", "id": id, "verb": "act", "args": args, "seen_tick": view_tick})
 	return id
 

@@ -11,6 +11,7 @@ extends Node2D
 const WorldModel := preload("res://scripts/world_model.gd")
 const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
+const Plan := preload("res://scripts/plan_queue.gd")
 const COLORS := {"sleep": Color(0.35, 0.35, 0.5), "home": Color(0.6, 0.6, 0.7), "work": Color(0.85, 0.6, 0.2),
 		"shop": Color(0.3, 0.7, 0.4), "socialize": Color(0.8, 0.4, 0.7), "rest": Color(0.5, 0.7, 0.9),
 		"explore": Color(0.9, 0.9, 0.5)}  # sim.py ACTIVITIES plus sleep; anything newer is drawn white
@@ -26,7 +27,13 @@ var shot := {}              # --screenshot: {path, frames left}
 var names := {}             # inhabitant: id -> name, from what the server sent (welcome, present, kin)
 var roles := {}             # inhabitant: id -> role, from the welcome's people and the present list
 var doing := {}             # inhabitant: what each villager here was last seen doing
-var pending := {}           # inhabitant: the act sent and not yet resolved {id, label, tick}
+var pending := {}           # inhabitant: the act sent and not yet resolved {id, label, tick, event?, step?}
+var plan_q := []            # inhabitant: the player's own plan (readable-world C2), head first
+var plan_state := ""        # the head step's state: "" (not sent), "wait", "hold" or "failed: WHY"
+var plan_act := -1          # the act event of the head step, once acked
+var plan_receipts := []     # receipts (and a seek's meet) so far that cite plan_act
+var plan_sent := 0          # the view tick the head step was sent at
+var map_rects := {}         # inhabitant: place name -> its rect on screen, for clicks
 
 
 func _ready() -> void:
@@ -49,6 +56,7 @@ func _ready() -> void:
 			client.agent = int(args["inhabit"])
 			client.ticked.connect(_on_inhabit_tick)
 			client.welcomed.connect(_on_inhabit_welcome)
+			client.heard.connect(_on_heard)
 			_build_inhabit_ui()
 			for k in ["family", "fire", "play", "menu_scroll", "slider", "clock"]:  # divine verbs and controls aren't an inhabitant's
 				ui[k].visible = false
@@ -139,6 +147,21 @@ func _build_inhabit_ui() -> void:
 	ui["you"] = _panel(side, "You")
 	ui["plan"] = _panel(side, "Today's plan")
 	ui["here"] = _panel(side, "Here with you")
+	ui["myplan"] = _panel(side, "Your plan")
+	var ctl := HFlowContainer.new()
+	side.add_child(ctl)
+	var ahead := CheckButton.new()
+	ahead.text = "Plan ahead"
+	ahead.tooltip_text = "On: actions and places you press line up in your plan instead of happening now."
+	ahead.toggled.connect(func(on): _menu_key = ""; _refresh_inhabit())
+	ctl.add_child(ahead)
+	ui["ahead"] = ahead
+	for k in ["Next", "Retry", "Clear"]:
+		var b := Button.new()
+		b.text = k
+		b.pressed.connect(_plan_button.bind(k))
+		ctl.add_child(b)
+		ui["plan_" + k.to_lower()] = b
 	var head := Label.new()
 	head.text = "What you can do"
 	head.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
@@ -168,6 +191,9 @@ func _build_inhabit_ui() -> void:
 	feed_box.offset_bottom = -12
 	ui["layer"].add_child(feed_box)
 	ui["feed"] = _panel(feed_box, "What's happening", true)
+	ui["feed"].size_flags_stretch_ratio = 1.6
+	ui["said"] = _panel(feed_box, "Said near you", true)  # readable-world C3: talk you can hear, in words
+	ui["said"].append_text("[color=#8a93a6]Conversations near you, and what people say to you, show up here.[/color]\n")
 
 
 var _menu_key := ""
@@ -209,6 +235,12 @@ func _feed(evs: Array) -> void:
 			ui["feed"].append_text("[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line])
 
 
+func _on_heard(m: Dictionary) -> void:
+	var line := Words.heard(m, client.ticks_per_day())
+	if line != "":
+		ui["said"].append_text(line + "\n")
+
+
 func _on_inhabit_tick(m: Dictionary) -> void:
 	var v: Dictionary = m["view"]
 	_learn_names(v)
@@ -235,18 +267,102 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 					doing[int(e["actor"])] = "eating"
 				"sleep":
 					doing[int(e["actor"])] = "asleep"
-	if not pending.is_empty() and int(v["tick"]) > int(pending["tick"]):
+	_take_receipts(evs)
+	if not pending.is_empty() and not pending.get("step", false) and int(v["tick"]) > int(pending["tick"]):
 		pending = {}  # its receipt is in this tick's lines
+	_plan_run()
 	_refresh_inhabit()
 
 
 func _on_ack(m: Dictionary) -> void:
 	if client.scope != "inhabitant":
 		ui["status"].text = "intent %s: %s" % [m["id"], m["status"]]
+	elif m["status"] == "applied" and pending.get("id") == m["id"]:
+		pending["event"] = int(m["event"])
+		if pending.get("step", false):
+			plan_act = int(m["event"])
+			_take_receipts(client.seen_events.filter(func(e): return int(e["tick"]) >= int(pending["tick"])))
 	elif m["status"] == "rejected" and pending.get("id") == m["id"]:
 		ui["feed"].append_text("[color=#e07070]Not sent: %s (%s).[/color]\n" % [pending["label"], m.get("reason", "")])
+		if pending.get("step", false):
+			plan_state = "failed: " + str(m.get("reason", "rejected"))
 		pending = {}
 		_refresh_inhabit()
+
+
+func _take_receipts(evs: Array) -> void:
+	## Receipts for the plan's step in hand; settle it, and send the next step when it's done.
+	if plan_act < 0 or plan_q.is_empty():
+		return
+	for e in evs:
+		if e["kind"] in ["receipt", "meet"] and not e["parents"].is_empty() and int(e["parents"][0]) == plan_act \
+				and not plan_receipts.any(func(r): return r["id"] == e["id"]):
+			plan_receipts.append(e)
+	var st := Plan.settle(plan_q[0], plan_receipts, int(client.view.get("tick", 0)) - plan_sent)
+	plan_state = st
+	if st != "wait" and pending.get("step", false):
+		pending = {}
+	if st == "done":
+		_plan_pop()
+
+
+func _plan_pop() -> void:
+	plan_q.pop_front()
+	plan_state = ""
+	plan_act = -1
+	plan_receipts = []
+
+
+func _plan_button(k: String) -> void:
+	match k:
+		"Next":
+			if plan_state == "hold":
+				_plan_pop()
+		"Retry":
+			if plan_state.begins_with("failed"):
+				plan_state = ""
+				plan_act = -1
+				plan_receipts = []
+		"Clear":
+			plan_q = []
+			plan_state = ""
+			plan_act = -1
+			plan_receipts = []
+	_plan_run()
+	_refresh_inhabit()
+
+
+func _plan_run() -> void:
+	## Sends the head step when nothing else is in flight and it hasn't been sent.
+	if plan_q.is_empty() or plan_state != "" or not pending.is_empty() or client.view.is_empty() or client.view["asleep"]:
+		return
+	var s: Dictionary = plan_q[0]
+	pending = {"id": client.act(s["action"], int(s["target"]), str(s["place"])), "label": s["label"],
+			"tick": int(client.view["tick"]), "step": true}
+	plan_state = "wait"
+	plan_sent = int(client.view["tick"])
+
+
+func _choose(action: String, target: int, place: String, label: String) -> void:
+	## A button or a map place: into the plan with "Plan ahead" on, else done now.
+	if ui["ahead"].button_pressed:
+		if plan_q.size() < Plan.MAX_STEPS:
+			plan_q.append(Plan.step(action, target, place, label))
+		_plan_run()
+	elif pending.is_empty():
+		pending = {"id": client.act(action, target, place), "label": label, "tick": int(client.view["tick"])}
+	_refresh_inhabit()
+
+
+func _unhandled_input(ev: InputEvent) -> void:
+	if client == null or client.scope != "inhabitant" or not (ev is InputEventMouseButton) or not ev.pressed \
+			or ev.button_index != MOUSE_BUTTON_LEFT:
+		return
+	for name in map_rects:
+		if map_rects[name].has_point(ev.position):
+			_choose("go_to", -1, name, "Go to " + Words.place(name, client.me))
+			get_viewport().set_input_as_handled()
+			return
 
 
 func _refresh_inhabit() -> void:
@@ -258,6 +374,10 @@ func _refresh_inhabit() -> void:
 	ui["plan"].text = Words.plan(v, per_day, names)
 	ui["here"].text = Words.here(v, doing)
 	ui["asked"].text = Words.asks(v, names, 1.0 / maxf(client.tps, 0.001))  # what waits on your answer, if anything
+	ui["myplan"].text = Plan.lines(plan_q, plan_state, Words.WHY)
+	ui["plan_next"].disabled = plan_state != "hold"
+	ui["plan_retry"].disabled = not plan_state.begins_with("failed")
+	ui["plan_clear"].disabled = plan_q.is_empty()
 	_rebuild_menu()
 
 
@@ -266,13 +386,28 @@ func _rebuild_menu() -> void:
 	var v: Dictionary = client.view
 	var items := LiveClient.menu(v)
 	var cooling := int(v["tick"]) < int(v["cooldown_until"])
-	var key := JSON.stringify([items, pending.get("id"), cooling, v.get("asks", [])])
+	var ahead: bool = ui["ahead"].button_pressed
+	var key := JSON.stringify([items, pending.get("id"), cooling, v.get("asks", []), ahead])
 	if key == _menu_key:
 		return
 	_menu_key = key
 	var box: VBoxContainer = ui["menu"]
 	for c in box.get_children():
 		c.queue_free()
+	if ahead:  # planning: the acts that name nobody can be lined up from anywhere; the engine checks each when it comes up
+		var row := HFlowContainer.new()
+		var lab := Label.new()
+		lab.text = "Plan from anywhere:"
+		row.add_child(lab)
+		for act in Plan.ANYWHERE:
+			var pb := Button.new()
+			pb.text = Words.action_label(act, "")
+			pb.pressed.connect(_choose.bind(act, -1, "", Words.action_label(act, "")))
+			row.add_child(pb)
+		box.add_child(row)
+		var hint := Label.new()
+		hint.text = "Click a place on the map to walk there."
+		box.add_child(hint)
 	if items.is_empty():
 		var l := Label.new()
 		l.text = "Nothing to do while asleep." if v["asleep"] else "Nothing to choose right now."
@@ -292,13 +427,12 @@ func _rebuild_menu() -> void:
 			continue
 		var b := Button.new()
 		b.text = Words.action_label(it["action"], names.get(t, "#%d" % t)) if t < 0 else Words.SHORT.get(it["action"], it["action"])
-		b.disabled = not pending.is_empty()
-		if cooling and it["action"] in Words.RATED:
+		b.disabled = not pending.is_empty() and not ahead
+		if cooling and it["action"] in Words.RATED and not ahead:
 			b.disabled = true
 			b.tooltip_text = "Too soon after your last ask or purchase."
 		var label := Words.action_label(it["action"], names.get(t, "#%d" % t))
-		b.pressed.connect(func(): pending = {"id": client.act(it["action"], it["target"]), "label": label,
-				"tick": int(client.view["tick"])}; _refresh_inhabit())
+		b.pressed.connect(_choose.bind(it["action"], int(it["target"]), "", label))
 		if t < 0:
 			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			box.add_child(b)
@@ -429,10 +563,19 @@ func _draw_inhabitant() -> void:
 	var kin_homes := {}
 	for m in client.view.get("kin", []):
 		kin_homes[str(m["home"])] = true
+	var going := ""  # where the plan's walk, or the walk under way, is headed
+	if not plan_q.is_empty() and plan_q[0]["action"] == "go_to":
+		going = str(plan_q[0]["place"])
+	elif client.view.get("route") != null:
+		going = str(client.view["route"]["to"])
+	map_rects = {}
 	for name in client.places:
 		var r = client.places[name]["rect"]
 		var rect := Rect2((Vector2(r[0], r[1]) - lo) * k + origin, Vector2(r[2], r[3]) * k)
+		map_rects[name] = rect.grow(2)
 		draw_rect(rect, Color(0.25, 0.3, 0.25) if name.begins_with("home") else Color(0.3, 0.35, 0.45))
+		if name == going:
+			draw_rect(rect, Color(0.5, 0.85, 0.6), false, 2.0)
 		var mine: bool = name == str(client.me.get("home", ""))
 		if mine or name == str(client.view.get("place")):
 			draw_rect(rect, Color(0.95, 0.85, 0.4), false, 2.0)
@@ -441,6 +584,8 @@ func _draw_inhabitant() -> void:
 		var label: String = "you" if mine else ("family" if kin_homes.has(name) else ("" if name.begins_with("home") else name.replace("_", " ")))
 		if label != "":
 			draw_string(font, rect.position + Vector2(2, 12), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(rect.size.x - 2, 8.0), 10)
+	draw_string(font, Vector2(origin.x, origin.y + (hi.y - lo.y) * k + 18), "Click a place to walk there.",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.65, 0.75, 0.9))
 	var v: Dictionary = client.view
 	var at := (Vector2(v["pos"][0], v["pos"][1]) - lo) * k + origin
 	for i in v["present"].size():
