@@ -55,7 +55,7 @@ INSTANT_STEPS = ("ask_kin", "ask_food", "buy_from", "steal")
 ANSWER_ACTS = ("agree", "decline")  # the player's answer to an ask aimed at its body (player-ask-1)
 ASK_WAIT_TICKS = 6  # an unanswered ask is answered by the body's own nature after this many ticks (an hour)
 RATED_ACTS = INSTANT_STEPS + ("buy_food",)  # player acts that roll or buy: held to the deliberation cooldown
-REACH_STEPS = ("seek", "give_food", "give_coin")  # go where the target is, then act when both are there
+REACH_STEPS = ("seek", "give_food", "give_coin", "trade")  # trade: DEP-a's rule step, never a mind's  # go where the target is, then act when both are there
 WAIT_STEPS = REACH_STEPS + ("shop",)  # steps that wait to arrive somewhere, and fail if their time runs out
 STEP_TICKS = {"avoid": 24}  # how long a step lasts (activities, avoid) or may take to get done (the rest)
 DEFAULT_STEP_TICKS = 18     # 3 hours
@@ -87,6 +87,8 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 # The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
 SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
+# DEP-a trade-1 (research): what each supplying trade sells another
+TRADE_INPUT = {"farmer": "seed and feed", "crafter": "tools", "trader": "goods", "healer": "care", "guard": "watch"}
 # The sick-neighbor channel's answers (G3w-b, plan/v0-after-g3.md; steering 2026-11-14 05:16Z): a trait rule in
 # every world, no mind ask. As an 8B ask it collapsed onto visit (0.873, then 0.981 reworded; L31).
 NEIGHBOR_ACTIONS = ("visit", "help", "keep_away", "carry_on")
@@ -243,6 +245,8 @@ class Sim:
             self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}}
             if "neighbor" in self.state["stakes"]:  # who knows of whose sickness, and who carries word (neighbor-1)
                 self.state["sick"].update({"news": {}, "carry": {}})
+        if "trade" in self.state.get("stakes", {}):  # DEP-a trade-1 (research): each supplier's customer count
+            self.state["trade_load"] = {}
         if "alms" in self.state.get("stakes", {}):  # the day each villager last had alms (B5 alms-1)
             self.state["alms"] = {}
         if "year" in self.state.get("stakes", {}):  # the stall's price and what last moved its stock (B5 year-1)
@@ -622,6 +626,7 @@ class Sim:
                 if self._possessed(a) and (a["occasion"] or {}).get("player"):
                     a["occasion"] = None  # the hand-back never asks the mind about the player's own act
                 self._sick_ask(a)
+                self._trade_due(a)
                 self._maybe_deliberate(a, occupancy)
 
         self._commit()
@@ -846,7 +851,7 @@ class Sim:
                 if do == "seek":
                     self._meet(a, b, holder["event"])
                     return self._end_step(a, author, True, "met")
-                rid = self._give(a, b, do, holder["event"])
+                rid = self._trade(a, b, holder["event"]) if do == "trade" else self._give(a, b, do, holder["event"])
                 return self._end_step(a, author, self.events[rid].data["ok"], self.events[rid].data["why"])
         holder["left"] -= 1
         if holder["left"] <= 0:  # activities and avoid are done when their time is up; the rest ran out of it
@@ -941,6 +946,9 @@ class Sim:
             r = (pull * total + (100 - pull) * n * r + 50 * n) // (100 * n)
         if str(a["id"]) in self.state.get("sick", {}).get("ill", {}):  # sick-1: half pace
             r //= 2
+        tr = self.state.get("stakes", {}).get("trade")
+        if tr and not self._supplied(a):
+            r = r * tr["slow_pct"] // 100  # DEP-a trade-1: without today's inputs from its suppliers
         return r
 
     def _trade_speed(self, role: str) -> tuple[int, int]:
@@ -1130,6 +1138,80 @@ class Sim:
             if (str(y["id"]) not in sk["ill"] and str(y["id"]) not in sk["immune"]
                     and self.rng.at(f"catch-visit:{y['id']}", self.state["tick"], 0, 999) < p):
                 self._make_sick(y, [eid, sk["src"][str(x["id"])]], x["place"], x["id"])
+
+    # ------------------------------------------------------------------ DEP-a trade-1 (research, stakes "trade")
+    def _trade_needs(self, a: dict) -> list[str]:
+        return list(self.state.get("stakes", {}).get("trade", {}).get("needs", {}).get(a["role"], []))
+
+    def _supplied(self, a: dict) -> bool:
+        """Whether a has had every input its trade needs today."""
+        day = self.state["tick"] // TICKS_PER_DAY
+        return all(a.get("supplied", {}).get(n) == day for n in self._trade_needs(a))
+
+    def _supplier(self, a: dict, need: str) -> dict | None:
+        """Whom a gets a trade's input from: the one it last got it from, unless that failed; else, among that trade's
+        working adults outside a's family, the one with the fewest customers (a lasting tie), then a keyed draw."""
+        ag, sup = self.state["agents"], a.setdefault("suppliers", {})
+        s = sup.get(need)
+        if s is not None and not a.get("supply_failed", {}).get(need):
+            return ag[s]
+        load = self.state["trade_load"]
+        cands = [o["id"] for o in ag if o["role"] == need and o["family"] != a["family"] and o["id"] != s]
+        if not cands:
+            return None
+        pick = min(cands, key=lambda o: (load.get(str(o), 0), self.rng.raw(f"supplier:{a['id']}:{need}", o), o))
+        if s is not None:
+            load[str(s)] -= 1
+        load[str(pick)] = load.get(str(pick), 0) + 1
+        sup[need], a.setdefault("supply_failed", {})[need] = pick, False
+        return ag[pick]
+
+    def _trade_due(self, a: dict):
+        """trade-1's rule: a working adult whose trade needs others' inputs, with nothing deliberated running, goes
+        to the supplier of the first input it lacks today once that supplier is up, to buy it (price coin). At most
+        one try per input a day. No mind is asked; a sick villager still goes."""
+        tr = self.state.get("stakes", {}).get("trade")
+        if not tr or a["override"] or self._possessed(a):
+            return
+        day = self.state["tick"] // TICKS_PER_DAY
+        tried = a.setdefault("trade_try", {})
+        for need in self._trade_needs(a):
+            if a.get("supplied", {}).get(need) == day or tried.get(need) == day:
+                continue
+            b = self._supplier(a, need)
+            if b is None or b["asleep"]:
+                continue
+            tried[need] = day
+            eid = self._emit("trade_due", "rule", a["id"], {"to": b["id"], "need": need},
+                             [a["plan_event"]] if a.get("plan_event") is not None else [])
+            if a["intent"]:
+                self._emit("intent_dropped", "rule", a["id"], {"i": a["intent"]["i"], "why": "replaced"},
+                           [a["intent"]["event"]])
+            a["intent"] = None
+            a["override"] = {"do": "trade", "target": b["id"], "left": tr["step_ticks"], "event": eid, "need": need}
+            a["supply_failed"][need] = True  # cleared when the trade is made
+            return
+
+    def _trade(self, a: dict, b: dict, eid: int) -> int:
+        """trade-1: a buys today's input from b, its supplier, for price coin; they meet (close contact)."""
+        price, need = self.state["stakes"]["trade"]["price"], b["role"]
+        if a["inv"]["coin"] < price:
+            return self._receipt(a, eid, "trade", False, "no coin", extra={"to": b["id"]})
+        a["inv"]["coin"] -= price
+        b["inv"]["coin"] += price
+        a.setdefault("supplied", {})[need] = self.state["tick"] // TICKS_PER_DAY
+        a["supply_failed"][need] = False
+        rid = self._receipt(a, eid, "trade", True, "supplied", extra={"to": b["id"], "coin": price})
+        for x, y in ((a, b), (b, a)):
+            r = self._met(x, y["id"])
+            r["affinity"] = min(1000, r["affinity"] + 20)
+        what = TRADE_INPUT[need]
+        self._note(a["id"], f"got {what} from {b['name']} for {price} coin")
+        self._note(b["id"], f"sold {what} to {a['name']} for {price} coin")
+        a["beliefs"][f"supplier:{need}"] = f"I get my {what} from {b['name']}"
+        a["belief_causes"][f"supplier:{need}"] = rid
+        self._close_contact(a, b, rid)
+        return rid
 
     def _sick_detail(self, a: dict) -> str:
         """The piloted ask (B5, pack sha 163da069...c5b5): facts only, no cue words (L25)."""
