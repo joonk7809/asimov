@@ -207,6 +207,12 @@ def test_the_deny_list_catches_kinds_of_food_stalls_animals_weather_and_wrong_gr
     assert narrate.invented("Good afternoon. Bought some food?", 14) == []
     assert narrate.invented("Good evening.", 23) == [] and narrate.invented("Mornin'!", 7) == []
     assert narrate.invented("I need tools from Oren, and the plaza's busy.", 10) == []
+    # Review of #70: a plain time word is a true topic, not a greeting.
+    assert narrate.invented("I got tools from Rolu this morning.", 15) == []
+    assert narrate.invented("See you this evening at the plaza.", 10) == []
+    assert narrate.invented("I will rest this afternoon.", 9) == []
+    assert narrate.invented("Well. Evening, Rolu!", 10) == ["evening greeting"]
+    assert narrate.invented("Hi. Mornin' to you.", 15) == ["morning greeting"]
 
 
 def test_a_deny_list_hit_is_asked_once_more_then_falls_back():
@@ -247,6 +253,7 @@ def test_topics_come_from_the_speakers_own_events_of_the_last_day():
             super().__init__(id, kind, actor, data)
             self.tick = tick
     r.feed(sim, [E(1, "receipt", x, {"action": "buy_food", "ok": True, "why": "bought"}, t - 200),  # over a day ago
+                 E(8, "receipt", x, {"action": "buy_from", "ok": True, "why": "sold", "to": other}, t - 5),
                  E(2, "receipt", x, {"action": "ask_food", "ok": False, "why": "refused", "to": other}),
                  E(3, "receipt", y, {"action": "give_food", "ok": True, "why": "gave", "to": other}),
                  E(4, "receipt", me, {"action": "buy_food", "ok": True, "why": "bought"}),
@@ -255,6 +262,7 @@ def test_topics_come_from_the_speakers_own_events_of_the_last_day():
     it = narrate.items(sim, [Ev(9, "talk", x, {"with": y, "gossip": []})], me, r)[0]
     nx, ny, no, ns = (ag[i]["name"] for i in (x, y, other, sup))
     assert it["topics"] == [f"{nx} asked {no} for food and was turned down", f"{ny} needs tools from {ns}, the crafter, today"]
+    assert r.topics(sim, x) == [f"{nx} asked {no} for food and was turned down", f"{nx} bought food from {no}"]
     p = narrate.prompt(it)
     assert "True things from their day they might mention: " + "; ".join(it["topics"]) in p
     assert "bought food" not in p  # the old buy, the player's own and a bystander's stay out

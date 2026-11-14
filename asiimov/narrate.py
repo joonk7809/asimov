@@ -77,9 +77,12 @@ def invented(text: str, hour: int) -> list[str]:
     """What in a line the world doesn't have (the deny list), or a greeting for another part of the day."""
     hits = [m.group(0).lower() for m in DENY.finditer(text)]
     right = greeting(hour).split()[1]
-    low = text.lower()
+    low = text.lower().strip()
     for part, words in GREETINGS.items():
-        if part != right and any(re.search(r"\b(good )?" + w + r"'?\b", low) for w in words):
+        # Only greeting forms (review of #70): "good X", or X opening a sentence or followed by "," or "!".
+        # A plain time word ("this morning") is a true topic, not a greeting.
+        w = "(?:" + "|".join(words) + ")'?"
+        if part != right and re.search(r"\bgood " + w + r"\b|(?:^|[.!?]\s+)" + w + r"(?![a-z])|\b" + w + r"\s*[,!]", low):
             hits.append(f"{part} greeting")
     return hits
 
@@ -118,7 +121,7 @@ class Recent:
                 t = f"{who} in {name(a)}'s family gave them food" if who else f"{name(a)}'s family gave them food"
             elif act == "ask_kin" and why in ("kin refused", "kin has nothing to spare"):
                 t = f"{name(a)} asked {who or 'their family'} for food and got none"
-            elif act in ("ask_food", "buy_from") and who and why == "gave":
+            elif act in ("ask_food", "buy_from") and who and why in ("gave", "sold"):
                 t = f"{who} gave {name(a)} food when asked" if act == "ask_food" else f"{name(a)} bought food from {who}"
             elif act in ("ask_food", "buy_from") and who and why in ("refused", "nothing to spare"):
                 t = f"{name(a)} asked {who} for food and was turned down"
