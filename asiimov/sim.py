@@ -89,6 +89,7 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
 # DEP-a trade-1 (research): what each supplying trade sells another
+TRADE_FAILS = ("time ran out", "no coin", "refused")  # a supply run's ends that count against the supplier
 TRADE_INPUT = {"farmer": "seed and feed", "crafter": "tools", "trader": "goods", "healer": "care", "guard": "watch"}
 # The sick-neighbor channel's answers (G3w-b, plan/v0-after-g3.md; steering 2026-11-14 05:16Z): a trait rule in
 # every world, no mind ask. As an 8B ask it collapsed onto visit (0.873, then 0.981 reworded; L31).
@@ -876,6 +877,8 @@ class Sim:
 
     def _end_step(self, a: dict, author: str, ok: bool, why: str):
         if author == "deliberate":
+            if a["override"].get("do") == "trade":  # trade-1: the day's try for this input is used up when it ends
+                self._trade_ended(a, a["override"]["need"], ok, why)
             a["override"] = None
             return
         it = a["intent"]
@@ -1186,9 +1189,10 @@ class Sim:
         return ag[pick]
 
     def _trade_due(self, a: dict):
-        """trade-1's rule: a working adult whose trade needs others' inputs, with nothing deliberated running, goes
-        to the supplier of the first input it lacks today once that supplier is up, to buy it (price coin). At most
-        one try per input a day. No mind is asked; a sick villager still goes."""
+        """trade-1's rule: a working adult whose trade needs others' inputs, with no one-off step running, goes to
+        the supplier of the first input it lacks today once that supplier is up, to buy it (price coin); a running
+        intent is dropped, and recorded so. One finished try per input a day. No mind is asked; a sick villager
+        still goes."""
         tr = self.state.get("stakes", {}).get("trade")
         if not tr or a["override"] or self._possessed(a):
             return
@@ -1200,7 +1204,6 @@ class Sim:
             b = self._supplier(a, need)
             if b is None or b["asleep"]:
                 continue
-            tried[need] = day
             eid = self._emit("trade_due", "rule", a["id"], {"to": b["id"], "need": need},
                              [a["plan_event"]] if a.get("plan_event") is not None else [])
             if a["intent"]:
@@ -1208,8 +1211,15 @@ class Sim:
                            [a["intent"]["event"]])
             a["intent"] = None
             a["override"] = {"do": "trade", "target": b["id"], "left": tr["step_ticks"], "event": eid, "need": need}
-            a["supply_failed"][need] = 1  # cleared when the trade is made (ints: no bools in state)
             return
+
+    def _trade_ended(self, a: dict, need: str, ok: bool, why: str):
+        """A supply run ended: the day's try is used up, and only the supplier's own failure (no time to reach it,
+        no coin for it, the player's no) re-chooses it. A run another step replaced before it ended is tried
+        again later the same day (review on #66)."""
+        a.setdefault("trade_try", {})[need] = self.state["tick"] // TICKS_PER_DAY
+        if not ok and why in TRADE_FAILS:
+            a.setdefault("supply_failed", {})[need] = 1  # ints: no bools in state
 
     def _trade(self, a: dict, b: dict, eid: int, parents=()) -> int:
         """trade-1: a buys today's input from b, its supplier, for price coin; they meet (close contact)."""
