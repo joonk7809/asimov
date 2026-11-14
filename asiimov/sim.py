@@ -1108,6 +1108,8 @@ class Sim:
                                            "keep_away": "keeping away", "carry_on": "carrying on"}[pick], extra={"about": x})
         if pick == "carry_on":
             return
+        if y["intent"]:  # as a deliberation that replaces an intent records it (review on #62)
+            self._emit("intent_dropped", "rule", y["id"], {"i": y["intent"]["i"], "why": "replaced"}, [y["intent"]["event"]])
         y["intent"] = None
         do = {"visit": "seek", "keep_away": "avoid"}.get(pick) or ("give_" + self._neighbor_gift(y))
         left = max(1, y["sleep_tick"] - self.state["tick"]) if pick == "keep_away" else STEP_TICKS.get(do, DEFAULT_STEP_TICKS)

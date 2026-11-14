@@ -537,7 +537,7 @@ def test_the_trait_rule_picks_each_answer_which_starts_its_step_and_help_needs_s
         y["override"], y["inv"]["food"] = None, 2
         y["traits"].update(agreeableness=ag, emotionality=em, extraversion=ex)
         sim._neighbor_resolve(y, 0, x["id"])
-        r = sim.events[-1]
+        r = next(e for e in reversed(sim.events) if e.kind == "receipt")
         assert r.kind == "receipt" and r.data["action"] == pick and r.data["ok"] and r.data["about"] == x["id"]
         assert (y["override"] or {}).get("do") == do and (do is None or y["override"]["target"] == x["id"])
     y["traits"].update(agreeableness=700, emotionality=0, extraversion=600)
@@ -571,6 +571,19 @@ def test_the_channel_keeps_the_ledgers_replays_and_its_notes_carry_no_important_
     eps = [e for a in sim.state["agents"] for e in a["episodes"] if "is sick" in e["text"]]
     assert eps and all(w not in e["text"] for e in eps for w in IMPORTANT_WORDS)
     assert replay(sim.events).state_hash() == sim.state_hash()
+
+
+def test_an_answer_that_cuts_a_running_intent_records_it_dropped():
+    sim = _sick_world()
+    x, y = _two_outsiders(sim)
+    sim._make_sick(x, [])
+    iid = sim._emit("intent_set", "rule", y["id"], {"goal": "g", "steps": [{"do": "work", "target": None}], "dropped": 0}, [])
+    y["intent"] = {"steps": [{"do": "work", "target": None}], "i": 0, "event": iid, "goal": "g", "left": 18}
+    y["traits"].update(agreeableness=0, emotionality=0, extraversion=600)
+    n0 = len(sim.events)
+    sim._neighbor_resolve(y, 0, x["id"])
+    d = next(e for e in sim.events[n0:] if e.kind == "intent_dropped")
+    assert d.actor == y["id"] and d.data == {"i": 0, "why": "replaced"} and d.parents == [iid] and y["intent"] is None
 
 
 def test_a_world_with_no_sickness_is_unchanged_by_the_neighbor_channel():
