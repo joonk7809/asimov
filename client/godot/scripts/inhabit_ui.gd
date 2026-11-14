@@ -34,13 +34,25 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"released": "you let go of the villager first", "stays home sick": "you stay home sick",
 		"works sick": "you work while sick", "said yes": "they get what they asked for",
 		"said no": "they're told no", "no ask": "they hadn't asked you anything",
-		"already asked": "they're still waiting for an answer"}
+		"already asked": "they're still waiting for an answer", "asleep": "you were asleep",
+		"bedtime": "it's bedtime, so you head home", "falling asleep": "you're falling asleep",
+		"no food to give": "you have no food to give", "no coin to give": "you have no coin to give", "no stock": "the market has no food left",
+		"unparseable or unknown action": "that isn't something you can do",
+		"heading there": "you set off", "already here": "you're already there", "arrived": "you arrive"}
 const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food", "refused": "you said no",
 		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
 		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
 		"kin has nothing to spare": "you had nothing to spare", "target asleep": "you were asleep",
 		"target not here": "you weren't there any more", "no coin": "they couldn't pay", "target has no food": "you had no food"}
 const ANSWERS := ["gave", "sold", "refused", "kin gave food", "kin refused"]  # an ask's yes or no
+# What a villager did with your own act aimed at them, by name (%s): the outcome first, then the why.
+const BY_THEM := {"refused": "%s said no.", "kin refused": "%s said no.", "nothing to spare": "%s had nothing to spare.",
+		"kin has nothing to spare": "%s had nothing to spare.", "kin gave food": "%s gave you food.",
+		"target asleep": "%s is asleep.", "target not here": "%s isn't here any more.",
+		"unknown target": "%s isn't here any more.",
+		"caught": "%s caught you stealing.", "stolen": "You stole food from %s and got away with it."}
+const ASKING := {"ask_kin": "You asked %s for food", "ask_food": "You asked %s for food", "buy_from": "You tried to buy food from %s",
+		"steal": "You tried to steal food from %s", "give_food": "You gave food to %s", "give_coin": "You gave a coin to %s"}
 const ASKED := {"ask_kin": "asked you for food", "ask_food": "asked you for food", "buy_from": "wanted to buy food from you",
 		"steal": "tried to steal from you", "give_food": "gave you food", "give_coin": "gave you a coin",
 		"seek": "came to see you"}
@@ -168,11 +180,12 @@ static func _line(e: Dictionary, me: Dictionary, names: Dictionary) -> String:
 		"plan_receipt":
 			return "You plan your day." if d.get("ok", false) else ""
 		"receipt":
-			return _receipt(e, d, mine, a, me_id, names)
+			return _receipt(e, d, mine, a, me, names)
 	return ""  # act (the button press itself), day_rhythm, intent_* bookkeeping
 
 
-static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me_id: int, names: Dictionary) -> String:
+static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Dictionary, names: Dictionary) -> String:
+	var me_id := int(me.get("id", -1))
 	var why := str(d.get("why", ""))
 	var said: String = WHY.get(why, why)
 	if "%d" in said:
@@ -186,6 +199,30 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me_id:
 		return line + (": " + answer + "." if answer != "" else ".")
 	if e.get("origin") == "rule" and why in ["heading to market", "started", "waited"] and d.get("ok", false):
 		return ""  # the activity line that follows says it
+	if str(d.get("action", "")) == "go_to":  # go-to-1: where you're walking, and when you'll be there
+		var where := place(d.get("place"), me)
+		if why == "arrived":
+			return ""  # the arrive event says it
+		if why == "already here":
+			return "You're already at %s, so you stay." % where
+		var mins := (int(d.get("arrive", e["tick"])) - int(e["tick"])) * 10
+		return "You set off for %s; you'll be there in about %d minutes." % [where, mins]
+	var whom = d.get("to", d.get("victim"))  # a theft's receipt names its victim
+	if whom != null and int(whom) != me_id and why in ["gave", "sold"]:
+		var who := _who(whom, me_id, names)
+		match str(d.get("action", "")):
+			"give_food":
+				return "You gave %d food to %s." % [int(d.get("food", 1)), who]
+			"give_coin":
+				return "You gave %d coin to %s." % [int(d.get("coin", 1)), who]
+			"buy_from":
+				return "%s sold you food." % who
+			"ask_food", "ask_kin":
+				return "You asked %s for food. %s gave you some." % [who, who]
+	if whom != null and int(whom) != me_id and why in BY_THEM:
+		var them := _who(whom, me_id, names)
+		var lead: String = ASKING.get(str(d.get("action", "")), "")
+		return ((lead % them + ". ") if lead != "" and why not in ["stolen", "caught"] else "") + BY_THEM[why] % them
 	if d.get("to") != null and int(d["to"]) != me_id:
 		doing += " (" + _who(d["to"], me_id, names) + ")"
 	return ("Done: %s, %s." if d.get("ok", false) else "Didn't work: %s, because %s.") % [doing, said]
@@ -196,7 +233,8 @@ static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:
 	if v["asleep"]:
 		lines.append("Asleep at %s." % place(v["place"], me))
 	elif v.get("route") != null:
-		lines.append("Walking to %s." % place(v["route"]["to"], me))
+		lines.append("Walking to %s, there at %s." % [place(v["route"]["to"], me),
+				clock(int(v["route"]["arrive"]), per_day).split(", ")[1]])
 	else:
 		lines.append("%s at %s." % [NOW.get(str(v["activity"]), str(v["activity"])), place(v["place"], me)])
 	lines.append("Hunger %d/1000, %s." % [int(v["hunger"]), hunger_word(int(v["hunger"]))])

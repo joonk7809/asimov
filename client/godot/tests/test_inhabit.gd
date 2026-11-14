@@ -69,6 +69,30 @@ func _init() -> void:
 		printerr("an answer doesn't read right: %s | %s" % [rolled, pressed])
 		quit(1)
 		return
+	# Your own act's outcome reads by name, refusals included (readable-world C1), and a walk says when.
+	var me3 := {"id": 3, "name": "Me", "home": "home_1"}
+	var mine := func(d: Dictionary) -> String:
+		return Words.describe({"kind": "receipt", "actor": 3, "origin": "rule", "tick": 50, "data": d}, me3, {4: "Ari"})
+	var lines := [mine.call({"action": "ask_food", "ok": false, "why": "refused", "to": 4}),
+			mine.call({"action": "ask_kin", "ok": false, "why": "kin has nothing to spare", "to": 4}),
+			mine.call({"action": "ask_food", "ok": true, "why": "gave", "to": 4}),
+			mine.call({"action": "steal", "ok": false, "why": "caught", "victim": 4}),
+			mine.call({"action": "give_coin", "ok": true, "why": "gave", "to": 4, "coin": 3}),
+			mine.call({"action": "go_to", "ok": true, "why": "heading there", "place": "woods", "arrive": 53}),
+			mine.call({"action": "go_to", "ok": true, "why": "already here", "place": "home_1", "arrive": 50}),
+			mine.call({"action": "go_to", "ok": true, "why": "arrived", "place": "woods"}),
+			mine.call({"action": "ask_food", "ok": false, "why": "asleep"}),
+			mine.call({"action": "steal", "ok": true, "why": "stolen", "victim": 4}),
+			mine.call({"action": "give_coin", "ok": false, "why": "no coin to give", "to": 4})]
+	var want := ["You asked Ari for food. Ari said no.", "You asked Ari for food. Ari had nothing to spare.",
+			"You asked Ari for food. Ari gave you some.", "Ari caught you stealing.", "You gave 3 coin to Ari.",
+			"You set off for the woods; you'll be there in about 30 minutes.", "You're already at your home, so you stay.",
+			"", "Didn't work: ask for food, because you were asleep.", "You stole food from Ari and got away with it.",
+			"Didn't work: give a coin (Ari), because you have no coin to give."]
+	if lines != want:
+		printerr("your own outcomes don't read right:\n%s" % "\n".join(lines))
+		quit(1)
+		return
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
 		want_ticks = int(a[2])
