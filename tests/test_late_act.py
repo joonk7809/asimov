@@ -228,3 +228,22 @@ def test_kill_mid_tick_after_an_early_ack_and_resume_to_the_same_event(tmp_path)
     r2.finish()
     events = [Event(**json.loads(l)) for l in open(os.path.join(out, "events.jsonl"))]
     assert replay(events).state_hash() == r2.sim.state_hash()
+
+
+def test_a_rerun_that_moved_an_early_acked_act_is_caught(tmp_path):
+    """Review of #69: an act acked at the fixed point is checked against the tick's events once it ends."""
+    out = str(tmp_path / "w")
+    r = _runner_at_noon(out, StubMind())
+    aid = next(a["id"] for a in r.sim.state["agents"] if not a["asleep"] and a["sleep_tick"] > r.sim.state["tick"] + 60)
+    r.inhabit(aid, "c1")
+    r.step()
+    t = r.sim.state["tick"]
+    r.queue_late(intent("k2", "act", {"action": "work"}, t), "c1", "inhabitant", lambda ack, evs: None)
+
+    def tamper(sim, done, run=r._during):
+        run(sim, done)
+        r.intents["k2"]["event"] += 1  # as if the record and the re-run disagreed
+    r._during = tamper
+    with pytest.raises(RuntimeError, match="was acked as event"):
+        r.step()
+

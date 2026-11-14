@@ -420,6 +420,14 @@ class LiveRunner:
         due = sorted((rec["slot"], iid) for iid, rec in self.intents.items()
                      if rec["status"] == "pending" and rec["tick"] == tick)
         acks = []
+        early = [(rec["slot"], iid) for iid, rec in self.intents.items()
+                 if rec["status"] == "applied" and rec["tick"] == tick and "slot" in rec]
+        if early:  # acked at the fixed point: a re-run of this tick (resume) must make the same event
+            player = self._slot_events(events, tick)
+            for slot, iid in early:
+                if player[slot].id != self.intents[iid]["event"]:
+                    raise RuntimeError(f"tick {tick}: intent {iid!r} was acked as event "
+                                       f"{self.intents[iid]['event']}, the re-run made {player[slot].id}")
         if due:
             os.fsync(self.run.log.fileno())  # acked only once durable
             player = self._slot_events(events, tick)
