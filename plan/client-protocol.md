@@ -91,7 +91,7 @@ sent twice and none skipped.
   - `fire` with `{"family": int}`.
   - `possess` with `{"agent": int}`. Refused with `body_taken` while a body is held (release first).
   - `release` with `{}`. Refused with `no_body` if none is held.
-  - `act` with `{"action": one of PLAYER_ACTIONS (DELIBERATE_ACTIONS plus `agree` and `decline`, which answer an ask aimed at the body; target: the asker), "target": int?}`, on the possessed body. Refused
+  - `act` with `{"action": one of PLAYER_ACTIONS (DELIBERATE_ACTIONS plus `agree` and `decline`, which answer an ask aimed at the body; target: the asker; and `go_to`), "target": int?, "place": str?}`, on the possessed body. `place` names a place on the map (`verbs.act.place`) and goes with `go_to` alone, which takes no target (go-to-1: the body walks there and stays for an activity's time; its receipt says `heading there` or `already here` with the `arrive` tick, and a second receipt says `arrived`). Refused
     with `no_body` if none is held. Whether the act works is the engine's call in that tick's commit
     phase, and the outcome is a `receipt` event citing the `act` event (plan/player-body-spec.md). The
     ack names the `act` event, not the receipt. An act followed in the same tick by `release`, or by a
@@ -132,6 +132,17 @@ A client interpolates between views for display only.
   boundary. A rejected intent changes nothing in the world. Reasons: `bad_message`, `bad_id`,
   `unknown_verb`, `bad_args`, `bad_seen_tick` (missing, or ahead of the view), `stale` (more than a
   day behind the view), `scope`, `inhabited`, `body_taken`, `no_body`.
+
+`heard`, to an inhabitant only, when the runner narrates (readable-world E2; `--narrate`): the spoken words of
+something it just witnessed, sent after the tick, so it can arrive after the next `tick` message:
+```json
+{"type": "heard", "tick": 211, "event": 6011, "kind": "talk", "to_player": false,
+ "lines": [{"who": 4, "name": "Ari Vosa", "text": "Morning. Field's dry again."}, {"who": 7, "name": "Bel Rota", "text": "Rain soon, I hope."}]}
+```
+`kind` is `talk` or `snub` at its place while it's awake there, `refusal` (a villager saying no to its ask), or
+`visit` (a villager come to see it). `event` is the event the words are about. Its own villager never
+speaks. The words are never part of the world: no event, no replay, no memory. They are kept in the run's
+`narration.jsonl` with the narrator and the facts it was given.
 
 `status`, broadcast after a control: `{"type": "status", "paused": true, "tps": 1.0, "view_tick": 212}`.
 
