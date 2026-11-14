@@ -187,7 +187,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "22": "f8e02d5476a6d4a53eebf1695f43dc57aee0935ac40bb99e744f8e80ee553b78",  # G1 fix; only the engine field differs from alms-1
           "player-ask-1": "0ff5dbc8bbbbc7fca23303b121c9766d616d93b8bd3ce0107115ed57d1ebab38",  # the player answers asks, on 22, before its number; no player: only the engine field differs
           "23": "8256877ebe7404477e3f5a7e660f8a754348e6a32425469f1c34a79afc30fbad",  # the player answers asks; only the engine field differs from player-ask-1
-          "go-to-1": "8d0e7638edd81b1228af397331db5001599b59fee135bdde60024a009499e4f1"}  # the player's go_to, on 23, before its number; no go_to: only the engine field differs
+          "go-to-1": "8d0e7638edd81b1228af397331db5001599b59fee135bdde60024a009499e4f1",  # the player's go_to, on 23, before its number; no go_to: only the engine field differs
+          "24": "6921592f2151f9bb0daeb15ec6f0072b76ce75b6bc87e6342880eef4915e3e31"}  # the player's go_to; only the engine field differs from go-to-1
 
 
 def test_log_changes_bump_the_engine_version():
