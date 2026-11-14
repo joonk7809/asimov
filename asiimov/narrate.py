@@ -12,8 +12,8 @@ minds' acts, not acts.
 
 The narrator is one model for both sessions of a blind pair, over whichever mind ran the acts (Steering:
 otherwise the pair compares narrators). TemplateNarrator is only the fallback when no model is served.
-The prompt holds only what the event and the speakers' public state hold: names, roles, the place, the
-gossip passed on, each side's hunger as a word and their last two notes.
+The prompt holds only what the player could see: names, roles, the place, the gossip passed on in the
+talk, and whether someone looks starving. Never a villager's memory or needs (review of #61).
 """
 import json
 import time
@@ -24,10 +24,6 @@ ASK_ACTS = ("ask_kin", "ask_food", "buy_from")
 REFUSALS = ("refused", "kin refused", "nothing to spare", "kin has nothing to spare")
 MAX_CHARS = 120
 MAX_LINES = 2
-
-
-def hunger_word(h: int) -> str:
-    return "full" if h < 300 else "a little hungry" if h < 550 else "hungry" if h < 800 else "starving"
 
 
 def items(sim, events, aid: int) -> list[dict]:
@@ -59,9 +55,9 @@ def items(sim, events, aid: int) -> list[dict]:
     for it in out:
         it["tick"] = sim.state["tick"] - 1
         it["place"] = me["place"]
+        # Only what the player could see of them (review of #61): no memory, no needs but a visible starving.
         it["people"] = {str(p): {"name": agents[p]["name"], "role": agents[p]["role"],
-                                 "hunger": hunger_word(agents[p]["needs"]["hunger"]),
-                                 "notes": [n.split(" ", 1)[-1] for n in agents[p]["recent"][-2:]]}
+                                 "looks": "starving" if agents[p]["needs"]["hunger"] >= 800 else ""}
                         for p in set(it["speakers"]) | {aid}}
         it["player"] = aid
     return out
@@ -78,8 +74,7 @@ def prompt(it: dict) -> str:
              f"Place: the {str(it['place']).replace('_', ' ')}."]
     for p, x in sorted(it["people"].items()):
         tag = " (the person listening)" if int(p) == pl and pl not in it["speakers"] else ""
-        notes = "; ".join(x["notes"]) or "nothing much"
-        lines.append(f"- {x['name']}, {x['role']}, {x['hunger']}{tag}. Lately: {notes}.")
+        lines.append(f"- {x['name']}, {x['role']}{', looks starving' if x['looks'] else ''}{tag}.")
     a = _who(it, it["speakers"][0])
     you = _who(it, pl)
     gossip = (" " + "; ".join(it["gossip"]) + ".") if it.get("gossip") else ""

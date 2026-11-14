@@ -48,7 +48,7 @@ def test_talk_here_gets_words_and_the_players_villager_never_speaks():
             assert line["who"] in it["speakers"] and 0 < len(line["text"]) <= narrate.MAX_CHARS
         p = narrate.prompt(it)
         assert all(sim.state["agents"][s]["name"] in p for s in it["speakers"])
-        assert "soul" not in p.lower() and "trait" not in p.lower()
+        assert "soul" not in p.lower() and "trait" not in p.lower() and "Lately" not in p
 
 
 def test_talk_elsewhere_or_while_asleep_gets_no_words():
@@ -141,3 +141,18 @@ def test_an_inhabitant_hears_words_and_the_world_log_is_unchanged(tmp_path):
     assert len(side) >= len(heard) and all(r["narrator"] == "template-v0" and r["player"] == aid for r in side)
     assert [l.rstrip("\n") for l in open(os.path.join(out, "events.jsonl"))] == batch_of(out)
     assert not any("heard" in e.kind or "narrat" in e.kind for e in read_jsonl(os.path.join(out, "events.jsonl")))
+
+
+def test_the_prompt_holds_nothing_the_player_could_not_see():
+    """Review of #61: a speaker's memory (its notes, say of a theft elsewhere) and needs stay out of the prompt."""
+    sim, me, (x, y, *_) = world_with_body()
+    sim._note(x, "stole food from Somebody Elsewhere")
+    sim.state["agents"][x]["needs"]["hunger"] = 600
+    sim.state["agents"][y]["needs"]["hunger"] = 900
+    its = narrate.items(sim, [Ev(1, "talk", x, {"with": y, "gossip": []}), Ev(2, "meet", x, {"with": me})], me)
+    for it in its:
+        p = narrate.prompt(it)
+        assert "stole" not in p and "Somebody Elsewhere" not in p and "hungry" not in p
+    assert "looks starving" in narrate.prompt(its[0])
+    for facts in its[0]["people"].values():
+        assert set(facts) == {"name", "role", "looks"}

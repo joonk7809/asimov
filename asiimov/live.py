@@ -505,6 +505,7 @@ class Hub:
         self.narrator = narrator
         self.narr = open(os.path.join(runner.out, "narration.jsonl"), "a") if narrator is not None else None
         self.narr_slots = asyncio.Semaphore(8)
+        self.narr_tasks: set = set()  # held, so a pending narration isn't collected (review of #61)
         self.conns: set[Conn] = set()
         self.inbox: list[tuple[Conn, dict]] = []
         self.wake = asyncio.Event()
@@ -642,7 +643,9 @@ class Hub:
                 for c in self.conns:
                     if c.ready and c.scope == "inhabitant":
                         for it in narrate.items(self.runner.sim, events, c.agent):
-                            asyncio.create_task(self._narrate(c, it))
+                            t = asyncio.create_task(self._narrate(c, it))
+                            self.narr_tasks.add(t)
+                            t.add_done_callback(self.narr_tasks.discard)
 
     async def _narrate(self, conn: "Conn", it: dict):
         async with self.narr_slots:
