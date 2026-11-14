@@ -668,6 +668,21 @@ def test_the_players_body_is_exempt_and_a_buy_from_it_waits_for_its_answer():
         assert sim._supplied(a) == (answer == "agree") and a["supply_failed"]["crafter"] == (answer == "decline")
 
 
+def test_a_supply_run_pauses_a_running_intent_which_resumes_after():
+    sim = Sim(1, 100, StubMind())
+    sim.run_until(TICKS_PER_DAY + 60)
+    a = next(a for a in sim.state["agents"] if a["role"] == "farmer" and not a["asleep"])
+    iid = sim._emit("intent_set", "rule", a["id"], {"goal": "g", "steps": [{"do": "work", "target": None}], "dropped": 0}, [])
+    it = {"steps": [{"do": "work", "target": None}], "i": 0, "event": iid, "goal": "g", "left": 18}
+    a["intent"], a["override"], a["supplied"], a["trade_try"] = it, None, {}, {}
+    n0 = len(sim.events)
+    sim._trade_due(a)
+    assert a["override"]["do"] == "trade" and a["intent"] is it
+    assert not [e for e in sim.events[n0:] if e.kind == "intent_dropped"]
+    sim._end_step(a, "deliberate", True, "supplied")
+    assert a["override"] is None and sim._running(a)[0] == "intent"
+
+
 def test_trade_keeps_the_ledgers_and_replays():
     sim = Sim(3, 100, StubMind())
     assert checked(sim, 4, FIRE) == []

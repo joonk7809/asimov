@@ -1191,7 +1191,7 @@ class Sim:
     def _trade_due(self, a: dict):
         """trade-1's rule: a working adult whose trade needs others' inputs, with no one-off step running, goes to
         the supplier of the first input it lacks today once that supplier is up, to buy it (price coin); a running
-        intent is dropped, and recorded so. One finished try per input a day. No mind is asked; a sick villager
+        intent pauses and resumes after. One finished try per input a day. No mind is asked; a sick villager
         still goes."""
         tr = self.state.get("stakes", {}).get("trade")
         if not tr or a["override"] or self._possessed(a):
@@ -1206,10 +1206,8 @@ class Sim:
                 continue
             eid = self._emit("trade_due", "rule", a["id"], {"to": b["id"], "need": need},
                              [a["plan_event"]] if a.get("plan_event") is not None else [])
-            if a["intent"]:
-                self._emit("intent_dropped", "rule", a["id"], {"i": a["intent"]["i"], "why": "replaced"},
-                           [a["intent"]["event"]])
-            a["intent"] = None
+            # a running intent is paused, not dropped: the override takes precedence (_running) and the intent
+            # resumes when the run ends (steering on #66, for minds' coherence)
             a["override"] = {"do": "trade", "target": b["id"], "left": tr["step_ticks"], "event": eid, "need": need}
             return
 
