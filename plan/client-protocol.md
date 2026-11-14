@@ -91,7 +91,7 @@ sent twice and none skipped.
   - `fire` with `{"family": int}`.
   - `possess` with `{"agent": int}`. Refused with `body_taken` while a body is held (release first).
   - `release` with `{}`. Refused with `no_body` if none is held.
-  - `act` with `{"action": one of PLAYER_ACTIONS (DELIBERATE_ACTIONS plus `agree` and `decline`, which answer an ask aimed at the body; target: the asker), "target": int?}`, on the possessed body. Refused
+  - `act` with `{"action": one of PLAYER_ACTIONS (DELIBERATE_ACTIONS plus `agree` and `decline`, which answer an ask aimed at the body; target: the asker; and `go_to`), "target": int?, "place": str?}`, on the possessed body. `place` names a place on the map (`verbs.act.place`) and goes with `go_to` alone, which takes no target (go-to-1: the body walks there and stays for an activity's time; its receipt says `heading there` or `already here` with the `arrive` tick, and a second receipt says `arrived`). Refused
     with `no_body` if none is held. Whether the act works is the engine's call in that tick's commit
     phase, and the outcome is a `receipt` event citing the `act` event (plan/player-body-spec.md). The
     ack names the `act` event, not the receipt. An act followed in the same tick by `release`, or by a
