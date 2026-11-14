@@ -77,14 +77,14 @@ def test_the_model_narrator_keeps_good_lines_and_falls_back_on_anything_else():
     it = narrate.items(sim, [Ev(1, "talk", x, {"with": y, "gossip": []})], me)[0]
     nx, ny = sim.state["agents"][x]["name"], sim.state["agents"][y]["name"]
     n = narrate.LLMNarrator("http://127.0.0.1:9", "m")
-    replies = [json.dumps({"lines": [{"who": nx, "text": "Morning."}, {"who": ny, "text": "Morning to you."}]}),
+    replies = [json.dumps({"lines": [{"who": nx, "text": "Morning."}, {"who": ny, "text": "Busy one, isn't it?"}]}),
                json.dumps({"lines": [{"who": "Somebody Else", "text": "Hi"}]}),  # not a speaker
                "not json", json.dumps({"lines": []})]
     for i, text in enumerate(replies):
         n.client.post = lambda path, body, t=text: {"choices": [{"message": {"content": t}}]}
         got = n.lines(dict(it))
         if i == 0:
-            assert got == [{"who": x, "text": "Morning."}, {"who": y, "text": "Morning to you."}]
+            assert got == [{"who": x, "text": "Morning."}, {"who": y, "text": "Busy one, isn't it?"}]
         else:
             assert got == narrate.TemplateNarrator().lines(it)
 
@@ -155,7 +155,7 @@ def test_the_prompt_holds_nothing_the_player_could_not_see():
         assert "stole" not in p and "Somebody Elsewhere" not in p and "hungry" not in p
     assert "looks starving" in narrate.prompt(its[0])
     for facts in its[0]["people"].values():
-        assert set(facts) == {"name", "role", "looks", "doing"}
+        assert set(facts) == {"name", "role", "looks", "doing", "mood"}
 
 
 def test_the_prompt_names_the_hour_the_season_and_what_each_speaker_is_doing():
@@ -213,6 +213,8 @@ def test_the_deny_list_catches_kinds_of_food_stalls_animals_weather_and_wrong_gr
     assert narrate.invented("I will rest this afternoon.", 9) == []
     assert narrate.invented("Well. Evening, Rolu!", 10) == ["evening greeting"]
     assert narrate.invented("Hi. Mornin' to you.", 15) == ["morning greeting"]
+    assert narrate.invented("Evening comes soon.", 14) == [] and narrate.invented("Evening.", 14) == ["evening greeting"]
+    assert narrate.invented("Afternoon's been slow.", 9) == [] and narrate.invented("Good mornin'!", 15) == ["morning greeting"]
 
 
 def test_a_deny_list_hit_is_asked_once_more_then_falls_back():
@@ -220,8 +222,8 @@ def test_a_deny_list_hit_is_asked_once_more_then_falls_back():
     it = narrate.items(sim, [Ev(1, "talk", x, {"with": y, "gossip": []})], me)[0]
     it["hour"] = 14
     nx, ny = sim.state["agents"][x]["name"], sim.state["agents"][y]["name"]
-    bad = json.dumps({"lines": [{"who": nx, "text": "Fresh beans today."}, {"who": ny, "text": "Good afternoon."}]})
-    good = json.dumps({"lines": [{"who": nx, "text": "Good afternoon."}, {"who": ny, "text": "Afternoon to you."}]})
+    bad = json.dumps({"lines": [{"who": nx, "text": "Fresh beans today."}, {"who": ny, "text": "Busy day."}]})
+    good = json.dumps({"lines": [{"who": nx, "text": "Good afternoon."}, {"who": ny, "text": "Busy day, that's all."}]})
     n = narrate.LLMNarrator("http://127.0.0.1:9", "m")
     for replies, fallback in (([bad, good], False), ([bad, bad], True), ([good], False)):
         asked = []
@@ -232,43 +234,95 @@ def test_a_deny_list_hit_is_asked_once_more_then_falls_back():
         lines = n.lines(got)
         assert got["fallback"] is fallback and len(asked) == len(replies)
         assert lines == (narrate.TemplateNarrator().lines(it) if fallback else
-                         [{"who": x, "text": "Good afternoon."}, {"who": y, "text": "Afternoon to you."}])
+                         [{"who": x, "text": "Good afternoon."}, {"who": y, "text": "Busy day, that's all."}])
         if len(asked) == 2:
             assert "Not beans" in asked[1] and asked[1].startswith(asked[0])
             assert got["denied"][0] == ["beans"]
 
 
-def test_topics_come_from_the_speakers_own_events_of_the_last_day():
-    """E2c: one or two topics from the speakers' own real events: what they bought, asked for, gave or were
-    refused, the trade input they need, and sickness in their family. Never the player's or a bystander's."""
+def test_topics_come_from_the_speakers_own_events_and_favour_what_stands_out():
+    """E2c: topics come from the speakers' own real events of the last day, never the player's or a bystander's.
+    E2d (Steering 13:44Z): one per speaker; what touches the other speaker or the listener first, then what
+    stands out (a refusal, a gift, sickness), then a purchase, then routine trade, at most one routine trade
+    topic per exchange; a speaker just turned down sounds it."""
     sim, me, (x, y, *_) = world_with_body()
     ag = sim.state["agents"]
     other = next(a["id"] for a in ag if a["id"] not in (me, x, y) and a["family"] != ag[x]["family"])
-    sup = next(a["id"] for a in ag if a["role"] == "crafter" and a["family"] != ag[x]["family"])
+    sup = next(a["id"] for a in ag if a["role"] == "crafter" and a["id"] not in (me, x, y, other))
     t = sim.state["tick"]
-    r = narrate.Recent()
+    nx, ny, no, ns = (ag[i]["name"] for i in (x, y, other, sup))
+    talk = [Ev(9, "talk", x, {"with": y, "gossip": []})]
 
     class E(Ev):
         def __init__(self, id, kind, actor, data, tick=t - 1):
             super().__init__(id, kind, actor, data)
             self.tick = tick
+
+    r = narrate.Recent()
     r.feed(sim, [E(1, "receipt", x, {"action": "buy_food", "ok": True, "why": "bought"}, t - 200),  # over a day ago
-                 E(8, "receipt", x, {"action": "buy_from", "ok": True, "why": "sold", "to": other}, t - 5),
-                 E(2, "receipt", x, {"action": "ask_food", "ok": False, "why": "refused", "to": other}),
-                 E(3, "receipt", y, {"action": "give_food", "ok": True, "why": "gave", "to": other}),
-                 E(4, "receipt", me, {"action": "buy_food", "ok": True, "why": "bought"}),
-                 E(5, "receipt", other, {"action": "buy_food", "ok": True, "why": "bought"}),
-                 E(6, "trade_due", y, {"need": "crafter", "to": sup})])
-    it = narrate.items(sim, [Ev(9, "talk", x, {"with": y, "gossip": []})], me, r)[0]
-    nx, ny, no, ns = (ag[i]["name"] for i in (x, y, other, sup))
-    assert it["topics"] == [f"{nx} asked {no} for food and was turned down", f"{ny} needs tools from {ns}, the crafter, today"]
-    assert r.topics(sim, x) == [f"{nx} asked {no} for food and was turned down", f"{nx} bought food from {no}"]
+                 E(2, "receipt", x, {"action": "buy_from", "ok": True, "why": "sold", "to": other}, t - 30),
+                 E(3, "receipt", x, {"action": "ask_food", "ok": False, "why": "refused", "to": other}, t - 20),
+                 E(4, "receipt", y, {"action": "trade", "ok": True, "why": "supplied", "to": sup, "coin": 1}),
+                 E(5, "receipt", y, {"action": "give_food", "ok": True, "why": "gave", "to": other}, t - 40),
+                 E(6, "receipt", me, {"action": "buy_food", "ok": True, "why": "bought"}),
+                 E(7, "receipt", other, {"action": "give_coin", "ok": True, "why": "gave", "to": x})])
+    assert r.candidates(sim, x) == [(narrate.STANDOUT, f"{nx} asked {no} for food and was turned down"),
+                                    (narrate.BUY, f"{nx} bought food from {no}")]
+    # A newer routine trade loses to an older gift.
+    assert r.topics(sim, y, k=1) == [f"{ny} gave food to {no}"]
+    it = narrate.items(sim, talk, me, r)[0]
+    assert it["topics"] == [{"who": x, "text": f"{nx} asked {no} for food and was turned down"},
+                            {"who": y, "text": f"{ny} gave food to {no}"}]
     p = narrate.prompt(it)
-    assert "True things from their day they might mention: " + "; ".join(it["topics"]) in p
-    assert "bought food" not in p  # the old buy, the player's own and a bystander's stay out
-    r.feed(sim, [E(7, "receipt", y, {"action": "trade", "ok": True, "why": "supplied", "to": sup, "coin": 1})])
-    assert r.topics(sim, y) == [f"{ny} got tools from {ns}, the crafter", f"{ny} gave food to {no}"]
-    kin = [m for m in sim.state["families"][ag[y]["family"]]["members"] if m != y][0]
-    sim.state["sick"]["ill"] = {str(kin): t + 99, str(other): t + 99}  # a bystander's sickness stays out
-    assert r.topics(sim, y) == [f"{ag[kin]['name']} in {ny}'s family is sick", f"{ny} got tools from {ns}, the crafter"]
-    assert narrate.items(sim, [Ev(9, "talk", x, {"with": y, "gossip": []})], me)[0]["topics"] == []
+    assert f"Something true {nx} might bring up: {nx} asked {no} for food and was turned down." in p
+    assert f"{ny} may skip theirs" in p and "bought food" not in p  # the old buy, the player's and a bystander's
+    assert it["people"][str(x)]["mood"] == "" and "color how they speak" not in p  # turned down 20 ticks ago
+    # What touches the listener or the other speaker comes first.
+    r.feed(sim, [E(8, "receipt", y, {"action": "give_coin", "ok": True, "why": "gave", "to": me}, t - 50)])
+    assert narrate.items(sim, talk, me, r)[0]["topics"][1] == {"who": y, "text": f"{ny} gave coin to {ag[me]['name']}"}
+    # Sickness in the family stands out; a bystander's doesn't count.
+    kin = [m for m in sim.state["families"][ag[x]["family"]]["members"] if m != x][0]
+    sim.state["sick"]["ill"] = {str(kin): t + 99, str(other): t + 99}
+    assert r.candidates(sim, x)[0] == (narrate.STANDOUT, f"{ag[kin]['name']} in {nx}'s family is sick")
+    # Just turned down: the tone may show it.
+    r.feed(sim, [E(10, "receipt", x, {"action": "ask_kin", "ok": False, "why": "kin refused", "to": kin})])
+    it = narrate.items(sim, talk, me, r)[0]
+    assert it["people"][str(x)]["mood"] == "just turned down for food" and "color how they speak" in narrate.prompt(it)
+    assert narrate.items(sim, talk, me)[0]["topics"] == []
+
+
+def test_an_exchange_gets_at_most_one_routine_trade_topic():
+    sim, me, (x, y, *_) = world_with_body()
+    ag = sim.state["agents"]
+    sup = next(a["id"] for a in ag if a["role"] == "crafter" and a["id"] not in (me, x, y))
+    t = sim.state["tick"]
+    r = narrate.Recent()
+    evs = [Ev(1, "receipt", x, {"action": "trade", "ok": True, "why": "supplied", "to": sup}),
+           Ev(2, "receipt", y, {"action": "trade", "ok": True, "why": "supplied", "to": sup})]
+    for e in evs:
+        e.tick = t - 1
+    r.feed(sim, evs)
+    it = narrate.items(sim, [Ev(9, "talk", x, {"with": y, "gossip": []})], me, r)[0]
+    assert [tp["who"] for tp in it["topics"]] == [x]
+
+
+def test_only_the_opener_greets():
+    """E2d: the reply answers what was said and doesn't greet; a second greeting is a hit, asked once more."""
+    sim, me, (x, y, *_) = world_with_body()
+    it = dict(narrate.items(sim, [Ev(1, "talk", x, {"with": y, "gossip": []})], me)[0], hour=14)
+    two = lambda a, b: [{"who": x, "text": a}, {"who": y, "text": b}]
+    assert narrate.check(it, two("Good afternoon, Ari.", "Good afternoon to you.")) == ["second greeting"]
+    assert narrate.check(it, two("Good afternoon.", "Hello there.")) == ["second greeting"]
+    assert narrate.check(it, two("Good afternoon. Any luck?", "Afternoon's been slow, honestly.")) == []
+    assert narrate.check(it, two("Good afternoon. Any luck?", "None. Hit a wall, I did.")) == []
+    # Review of #71: a bare part-of-day word greets only before ",", "!", "." or the end.
+    assert narrate.check(it, two("Good afternoon.", "Afternoon is long today.")) == []
+    assert narrate.check(it, two("Good afternoon.", "Evening comes soon.")) == []
+    assert narrate.check(it, two("Good afternoon.", "Afternoon!")) == ["second greeting"]
+    assert narrate.check(it, two("Good afternoon.", "Afternoon, Ari. Busy?")) == ["second greeting"]
+    assert narrate.check(it, two("Good afternoon.", "Afternoon to you.")) == ["second greeting"]
+    assert narrate.check(it, [{"who": x, "text": "Hello!"}]) == []
+    p = narrate.prompt(it)
+    nx, ny = (sim.state["agents"][i]["name"] for i in (x, y))
+    assert f"Only {nx} may greet. {ny} doesn't greet: {ny} answers what {nx} just said" in p
+    assert 'Only the first line may greet, with "Good afternoon"' in p
