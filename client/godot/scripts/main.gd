@@ -24,6 +24,7 @@ var scrub_tick := 0
 var ui := {}
 var shot := {}              # --screenshot: {path, frames left}
 var names := {}             # inhabitant: id -> name, from what the server sent (welcome, present, kin)
+var roles := {}             # inhabitant: id -> role, from the welcome's people and the present list
 var doing := {}             # inhabitant: what each villager here was last seen doing
 var pending := {}           # inhabitant: the act sent and not yet resolved {id, label, tick}
 
@@ -176,6 +177,8 @@ var _caught_up := false
 func _learn_names(v: Dictionary) -> void:
 	for p in v.get("present", []) + v.get("kin", []):
 		names[int(p["id"])] = p["name"]
+		if p.has("role"):
+			roles[int(p["id"])] = p["role"]
 
 
 func _on_inhabit_welcome(m: Dictionary) -> void:
@@ -183,6 +186,7 @@ func _on_inhabit_welcome(m: Dictionary) -> void:
 	names[int(m["world"]["me"]["id"])] = m["world"]["me"]["name"]
 	for f in m["world"]["family"] + m["world"].get("people", []):
 		names[int(f["id"])] = f["name"]
+		roles[int(f["id"])] = f.get("role", "")
 	_learn_names(m["view"])
 	_refresh_inhabit()
 	get_tree().create_timer(1.0).timeout.connect(_catch_up)  # the backlog follows the welcome in chunks
@@ -313,7 +317,10 @@ func _rebuild_menu() -> void:
 			continue
 		if not rows.has(t):
 			var who := Label.new()
-			who.text = names.get(t, "#%d" % t) + ":"
+			var tags := [roles.get(t, "")] if roles.get(t, "") != "" else []
+			if present.get(t, false):
+				tags.append("family")
+			who.text = names.get(t, "#%d" % t) + (" (%s)" % ", ".join(tags) if not tags.is_empty() else "") + ":"
 			rows[t] = HFlowContainer.new()
 			rows[t].add_child(who)
 			box.add_child(rows[t])

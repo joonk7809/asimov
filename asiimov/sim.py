@@ -116,7 +116,8 @@ ACTION_CLAUSES = {
     "wait": "wait does nothing for now",
 }
 assert set(ACTION_CLAUSES) == set(DELIBERATE_ACTIONS)
-PLAYER_ACTIONS = DELIBERATE_ACTIONS + ANSWER_ACTS  # what a player's act may name
+GO_ACTS = ("go_to",)  # the player walks its body to a named place and stays a while (go-to-1); never a mind's
+PLAYER_ACTIONS = DELIBERATE_ACTIONS + ANSWER_ACTS + GO_ACTS  # what a player's act may name
 
 
 def action_clauses(price: int) -> dict:
@@ -144,7 +145,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "25"  # G3w-b the sick-neighbor channel as a trait rule (plan/v0-after-g3.md), on engine 23 (label neighbor-2); 24 is go-to-1 (#59)
+ENGINE_VERSION = "25"  # G3w-b the sick-neighbor channel as a trait rule (plan/v0-after-g3.md), on engine 24 (label neighbor-2)
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -781,6 +782,8 @@ class Sim:
     def _step_activity(self, a: dict, step: dict) -> tuple[str, str]:
         """What a step has the agent do, and where. Reads where its target is now (L2); no side effects."""
         do, t = step["do"], step["target"]
+        if do == "go":  # the player's go_to: there, and it stays until the step's time is up
+            return "visit", step["place"]
         if do in INSTANT_STEPS:  # acts where the agent already is, or is headed
             return a["activity"], self._dest(a)
         if do in REACH_STEPS:  # where the target is, or is walking to
@@ -828,6 +831,9 @@ class Sim:
     def _progress(self, a: dict, author: str, step: dict, holder: dict):
         """Advance the running step after the agent has acted this tick."""
         do, t = step["do"], step["target"]
+        if do == "go" and a["place"] == step["place"] and not step["arrived"]:
+            step["arrived"] = 1
+            self._receipt(a, holder["event"], "go_to", True, "arrived", extra={"place": step["place"]})
         if do == "shop" and a["place"] == "market":
             return self._end_step(a, author, *self._buy(a, holder["event"]))
         if do in INSTANT_STEPS:
@@ -1803,6 +1809,9 @@ class Sim:
             return
         for q in list(self.state["player"].get("asks", [])):  # it moved on without answering: its nature does
             self._settle_ask(q, None, [eid])
+        if action in GO_ACTS:  # any place on the map, always: no offer, cooldown or people
+            self.player_pending[a["id"]] = (eid, action, target, [], [])
+            return
         if action in RATED_ACTS and self.state["tick"] < a["cooldown_until"]:
             self._receipt(a, eid, action, False, "cooldown")
             return
@@ -1820,12 +1829,28 @@ class Sim:
         """A player act, with the checks a mind's reply schema would have made, then the mind's own path."""
         if action in ANSWER_ACTS:
             return self._answer(a, eid, action, target)
+        if action in GO_ACTS:
+            return self._go_to(a, eid, target)
         if action not in offer:
             self._receipt(a, eid, action, False, "not offered", extra={"offer": offer})
         elif action in PERSON_STEPS and target not in people:
             self._receipt(a, eid, action, False, "unknown target")
         else:
             self._resolve(a, {"action": action, "target": target if action in PERSON_STEPS else None}, eid)
+
+    def _go_to(self, a: dict, eid: int, place: str):
+        """The player's go_to: a one-off step that walks the body to `place` and keeps it there for the
+        step's time (an activity's), unless another act replaces it. Its receipt says when it arrives, and
+        a second receipt marks the arrival."""
+        here, tick, r = a["place"] == place, self.state["tick"], a["route"]
+        # The walk starts on the next tick's _act, as every override's does, from where the body is then.
+        frm = self.map["places"][a["place"]]["anchor"] if r is None else \
+            position(r, self.map["places"][r["to"]]["anchor"], tick + 1)
+        arrive = tick if here else tick + 1 + travel_ticks(frm, self.map["places"][place]["anchor"])
+        a["override"] = {"do": "go", "target": None, "place": place, "arrived": int(here), "event": eid,
+                         "left": DEFAULT_STEP_TICKS}
+        return self._receipt(a, eid, "go_to", True, "already here" if here else "heading there",
+                             extra={"place": place, "arrive": arrive})
 
     def _player(self, act: dict):
         kind = act["kind"]
@@ -1848,8 +1873,14 @@ class Sim:
             action, target = act["action"], act.get("target")
             if action not in PLAYER_ACTIONS or not (target is None or _is_int(target)):
                 raise ValueError(f"act: bad action {action!r} or target {target!r}")
+            place = act.get("place")
+            if (action in GO_ACTS) != (place is not None) or action in GO_ACTS and \
+                    (target is not None or not isinstance(place, str) or place not in self.map["places"]):
+                raise ValueError(f"act: go_to takes a place on the map and only go_to does ({action!r}, {place!r})")
             aid = self.state["player"]["agent"]
             data = {"action": action} if target is None else {"action": action, "target": target}
+            if place is not None:
+                data["place"], target = place, place  # go_to carries its place where a person act's target is
             eid = self._emit("act", "player", aid, data, [self.state["player"]["event"]])
             self.state["player"]["order"] = self.state["tick"]
             self._acts.setdefault(aid, []).append((eid, action, target))
@@ -1936,4 +1967,6 @@ class Sim:
         for eid, action, _ in self._acts.pop(a["id"], []):
             self._receipt(a, eid, action, False, "released")
         a["occasion"] = None  # the player handled whatever it was; the mind isn't asked about it later
+        if (a["override"] or {}).get("do") == "go":  # a player-only step never outlives the player
+            a["override"] = None
         return self._emit("release", "player", a["id"], {"agent": a["id"]}, [p["event"]])
