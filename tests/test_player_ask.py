@@ -20,8 +20,8 @@ def test_a_world_with_no_player_is_engine_22_but_for_the_version_field():
     from test_world import FIRE
     from asiimov.params import generate_population
     from asiimov.sim import DEFAULT_STAKES
-    # engine 22's stakes: the neighbor channel (G3 neighbor-1) came after and changes a sick world's log
-    stakes = {k: v for k, v in DEFAULT_STAKES.items() if k != "neighbor"}
+    # engine 22's stakes: the neighbor channel (engine 25) and trade-1 came after and change the log
+    stakes = {k: v for k, v in DEFAULT_STAKES.items() if k not in ("neighbor", "trade")}
     s = Sim(3, 20, StubMind(), genesis={**generate_population(3, 20), "stakes": stakes})
     s.run(2, FIRE)
     s.finish()
@@ -278,6 +278,9 @@ def test_the_asker_s_reason_is_shown_on_the_ask_and_only_on_acts_aimed_at_the_bo
         if asks:
             v = inhabitant.view(sim, 5)
             for x in v["asks"]:
+                if x["action"] == "trade":  # trade-1's rule buy: no mind reply, so no words (the client words it)
+                    assert x["says"] is None
+                    continue
                 assert x["says"] == REASON
                 shown += 1
             acts.append({"kind": "act", "action": "agree", "target": asks[0]["asker"]})

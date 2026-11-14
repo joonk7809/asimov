@@ -65,7 +65,7 @@ def test_every_event_has_provenance():
         if e.kind == "receipt":  # a deliberation or plan, or an intent a deliberation set, or the neighbor rule
             p = s.events[e.parents[0]]
             assert (p.origin == "mind" or (p.kind == "intent_set" and s.events[p.parents[0]].origin == "mind")
-                    or p.kind == "sick_news")  # G3w-b: the sick-neighbor channel answers by rule from the news
+                    or p.kind in ("sick_news", "trade_due"))  # the neighbor channel's and trade-1's rules
         seen.add(e.id)
     deliberations = {e.id for e in s.events if e.kind == "mind_deliberate"}
     assert deliberations == {e.parents[0] for e in s.events if e.kind == "receipt"} & deliberations  # each has one
@@ -191,7 +191,9 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "go-to-1": "8d0e7638edd81b1228af397331db5001599b59fee135bdde60024a009499e4f1",  # the player's go_to, on 23, before its number; no go_to: only the engine field differs
           "24": "6921592f2151f9bb0daeb15ec6f0072b76ce75b6bc87e6342880eef4915e3e31",  # the player's go_to; only the engine field differs from go-to-1
           "neighbor-2": "1d4c8442506b03c5187f5806aa213b8a88e82a7f76c741a9bf81d0ce7e36c932",  # G3w-b the sick-neighbor channel as a trait rule, on 23, before its number
-          "25": "0b305730d87847be5430e52f34ff074a3f2744309513e63d3804fccfea9dc0d3"}  # G3w-b; only the engine field differs from neighbor-2
+          "25": "0b305730d87847be5430e52f34ff074a3f2744309513e63d3804fccfea9dc0d3",  # G3w-b; only the engine field differs from neighbor-2
+          "trade-1": "52c8b3689e1824890fbd69e0a478edc342072ad899f541e80195bd4351ab359d",  # DEP-a trade needs across families, on 25, before its number
+          "26": "3cef40e24fb78a22fc95c2509ac032e65b04986e6aefbc82ec100012ec01dc86"}  # trade-1; only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
