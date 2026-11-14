@@ -40,6 +40,7 @@ PROTOCOL = 2               # 2 adds the inhabitant scope (plan/player-body-spec.
 SCOPES = ("god", "inhabitant")
 MAX_LAG = TICKS_PER_DAY    # an intent seen more than a day ago is stale
 ORPHAN_TICKS = 36          # a body still held on reopen is released this long after, unless an inhabitant claims it
+PULL_MIN_S = 1.0           # E3: an inhabitant's act runs the next tick at least this long after the last one started
 MAX_FRAME = 1 << 20        # client frames
 BACKLOG_CHUNK = 500        # events per backlog message
 SEND_QUEUE = 4096          # messages a slow client may fall behind before it is dropped
@@ -504,8 +505,11 @@ class Hub:
     in the tick loop; a tick itself runs in a worker thread so the server keeps reading while it does."""
 
     def __init__(self, runner: LiveRunner, tps: float = 1.0, paused: bool = False, token: str | None = None,
-                 narrator=None):
+                 pull_min: float | None = PULL_MIN_S, narrator=None):
         self.runner, self.tps, self.paused, self.token = runner, tps, paused, token
+        # E3 (plan/readable-world-spec.md): an inhabitant's act pulls the next tick forward, at least
+        # pull_min seconds after the last one started, instead of waiting out the pace. None: never.
+        self.pull_min, self.pull = pull_min, False
         # E2 (plan/readable-world-spec.md): words for what the inhabitant sees, written after each tick into
         # narration.jsonl and sent as `heard`. Never part of the world: the log and replay don't see them.
         self.narrator = narrator
@@ -572,6 +576,8 @@ class Hub:
                 ack = self.runner.submit(m, client=conn.name, scope=conn.scope)
                 if ack is None:
                     self.waiters[m["id"]] = conn
+                    if conn.scope == "inhabitant" and m.get("verb") == "act":
+                        self.pull = True
                 else:
                     conn.send(ack)
             elif t == "control":
@@ -625,6 +631,8 @@ class Hub:
                 last = None
                 continue
             wait = 0 if self.step_once or last is None else last + 1 / self.tps - loop.time()
+            if self.pull and self.pull_min is not None and last is not None:  # the player acted: don't wait out the pace
+                wait = min(wait, last + self.pull_min - loop.time())
             if wait > 0:  # a message is drained and the wait resumes, at the tps it now has: only time steps
                 self.wake.clear()
                 try:
@@ -632,8 +640,11 @@ class Hub:
                 except asyncio.TimeoutError:
                     pass
                 continue
-            self.step_once, last = False, loop.time()
+            self.step_once, last, pulled = False, loop.time(), self.pull
+            self.pull = False
             tick, events, acks = await asyncio.to_thread(self.runner.step)
+            if pulled:
+                self.runner._side("pulled", tick=tick)
             dicts = event_dicts(events)
             text = json.dumps(msg("tick", tick=tick, events=dicts, view=self.runner.view()))
             for c in self.conns:
@@ -686,9 +697,10 @@ def _hello_error(m) -> str | None:
 
 
 async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, tps: float = 1.0,
-                paused: bool = False, started=None, token: str | None = None, narrator=None):
+                paused: bool = False, started=None, token: str | None = None, pull_min: float | None = PULL_MIN_S,
+                narrator=None):
     """Run the hub until cancelled. `started(port, hub)` is called once the socket listens."""
-    hub = Hub(runner, tps, paused, token, narrator)
+    hub = Hub(runner, tps, paused, token, pull_min, narrator)
     server = await asyncio.start_server(hub.handle, host, port, limit=1 << 16)
     if started:
         started(server.sockets[0].getsockname()[1], hub)
@@ -740,6 +752,9 @@ def main(argv=None):
     ap.add_argument("--paused", action="store_true")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--pull-min", type=float, default=PULL_MIN_S,
+                    help="an inhabitant's act runs the next tick this many seconds after the last at the soonest (E3); "
+                         "negative: wait out the pace as before")
     ap.add_argument("--narrate", choices=["model", "template", "off"], default=None,
                     help="words for what the inhabitant sees (E2). model: --narrate-url/--narrate-model, else the "
                          "llm mind's; default model when one is given, else template")
@@ -766,7 +781,8 @@ def main(argv=None):
     narrator = narrator_from_args(args, kind)
     print(f"narrator: {getattr(narrator, 'model', 'off')}", file=sys.stderr, flush=True)
     try:
-        asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token, narrator=narrator))
+        asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token,
+                          pull_min=None if args.pull_min < 0 else args.pull_min, narrator=narrator))
     except KeyboardInterrupt:
         pass
     finally:
