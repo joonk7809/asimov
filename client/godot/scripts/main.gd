@@ -572,6 +572,8 @@ func _draw_inhabitant() -> void:
 		var label: String = "you" if mine else ("family" if kin_homes.has(name) else ("" if name.begins_with("home") else name.replace("_", " ")))
 		if label != "":
 			draw_string(font, rect.position + Vector2(2, 12), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(rect.size.x - 2, 8.0), 10)
+	draw_string(font, Vector2(origin.x, origin.y + (hi.y - lo.y) * k + 18), "Click a place to walk there.",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.65, 0.75, 0.9))
 	var v: Dictionary = client.view
 	var at := (Vector2(v["pos"][0], v["pos"][1]) - lo) * k + origin
 	for i in v["present"].size():
