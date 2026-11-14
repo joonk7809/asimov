@@ -15,6 +15,7 @@ var plan := []
 var state := ""
 var act_id := ""
 var act_event := -1
+var sent_at := 0
 var settled := []
 var started := 0
 var ticks := 0
@@ -28,12 +29,25 @@ func _init() -> void:
 			[go, [r.call("heading there"), r.call("arrived")], "done"], [go, [r.call("already here")], "done"],
 			[go, [r.call("asleep", false)], "failed: asleep"],
 			[Plan.step("buy_food"), [r.call("bought")], "done"], [Plan.step("buy_food"), [r.call("no coin", false)], "failed: no coin"],
-			[Plan.step("work"), [r.call("started")], "hold"], [Plan.step("ask_food", 4), [r.call("refused", false)], "failed: refused"]]
+			[Plan.step("work"), [r.call("started")], "hold"], [Plan.step("ask_food", 4), [r.call("refused", false)], "failed: refused"],
+			# review of #63: a gift's or a market trip's first receipt only says the walk began
+			[Plan.step("give_food", 4), [r.call("started")], "wait"], [Plan.step("give_food", 4), [r.call("started"), r.call("gave")], "done"],
+			[Plan.step("give_coin", 4), [r.call("started"), r.call("no coin to give", false)], "failed: no coin to give"],
+			[Plan.step("go_market"), [r.call("heading to market")], "wait"],
+			[Plan.step("go_market"), [r.call("heading to market"), r.call("had enough")], "done"],
+			[Plan.step("seek", 4), [r.call("started")], "wait"],
+			[Plan.step("seek", 4), [r.call("started"), {"id": 9, "kind": "meet", "data": {"with": 4}}], "done"],
+			[Plan.step("avoid", 4), [r.call("started")], "hold"]]
 	for c in cases:
 		if Plan.settle(c[0], c[1]) != c[2]:
 			printerr("settle %s on %s is %s, not %s" % [c[0]["action"], c[1], Plan.settle(c[0], c[1]), c[2]])
 			quit(1)
 			return
+	if Plan.settle(Plan.step("seek", 4), [r.call("started")], 21) != "failed: time ran out" \
+			or Plan.settle(Plan.step("seek", 4), [r.call("started")], 20) != "wait":
+		printerr("a step past its time should fail, and not before")
+		quit(1)
+		return
 	var shown := Plan.lines([go, Plan.step("buy_food", -1, "", "Buy food")], "failed: no coin", {"no coin": "you have no coin"})
 	if not ("Go to the market" in shown and "you have no coin" in shown and "2. Buy food" in shown):
 		printerr("the plan doesn't read right: " + shown)
@@ -54,8 +68,10 @@ func _init() -> void:
 
 func _on_welcome(m: Dictionary) -> void:
 	var home := str(m["world"]["me"]["home"])
+	var kin := int(m["world"]["family"][0]["id"])  # a gift walks to them first: it settles on "gave", not "started"
 	plan = [Plan.step("go_to", -1, "market", "Go to the market"), Plan.step("buy_food", -1, "", "Buy food"),
-			Plan.step("go_to", -1, home, "Go home"), Plan.step("rest", -1, "", "Rest")]
+			Plan.step("go_to", -1, home, "Go home"), Plan.step("give_food", kin, "", "Give food to family"),
+			Plan.step("go_to", -1, home, "Go home again"), Plan.step("rest", -1, "", "Rest")]
 	god.control("step")
 
 
@@ -70,9 +86,11 @@ func _on_tick(m: Dictionary) -> void:
 	ticks += 1
 	var v: Dictionary = m["view"]
 	if not plan.is_empty() and act_event >= 0:
-		var rs := me.seen_events.filter(func(e): return e["kind"] == "receipt" and not e["parents"].is_empty() \
+		var rs := me.seen_events.filter(func(e): return e["kind"] in ["receipt", "meet"] and not e["parents"].is_empty() \
 				and int(e["parents"][0]) == act_event)
-		state = Plan.settle(plan[0], rs)
+		state = Plan.settle(plan[0], rs, int(v["tick"]) - sent_at)
+		if plan[0]["action"] == "give_food" and state == "done" and not rs.any(func(e): return e["data"].get("why") == "gave"):
+			_fail("the gift settled before it was given: %s" % [rs])
 		if state.begins_with("failed"):
 			_fail("step %s failed: %s" % [plan[0]["label"], state])
 		if state == "done" or state == "hold":
@@ -87,15 +105,16 @@ func _on_tick(m: Dictionary) -> void:
 		return
 	if act_id == "" and not v["asleep"]:
 		act_id = me.act(plan[0]["action"], int(plan[0]["target"]), str(plan[0]["place"]))
+		sent_at = int(v["tick"])
 	if ticks > 100:
 		_fail("the plan didn't finish in 100 ticks: %s, step %s is %s" % [settled, plan[0]["label"], state])
 	god.control("step")
 
 
 func _finish(v: Dictionary) -> void:
-	if settled.size() != 4 or settled[0][0] != "Go to the market" or settled[3][1] != "hold":
+	if settled.size() != 6 or settled[0][0] != "Go to the market" or settled[5][1] != "hold":
 		_fail("steps settled wrong: %s" % [settled])
-	print("plan of 4 steps settled in %d ticks: %s" % [ticks, settled])
+	print("plan of 6 steps settled in %d ticks: %s" % [ticks, settled])
 	done = true
 	quit(0)
 

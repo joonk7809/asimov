@@ -38,7 +38,8 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"bedtime": "it's bedtime, so you head home", "falling asleep": "you're falling asleep",
 		"no food to give": "you have no food to give", "no coin to give": "you have no coin to give", "no stock": "the market has no food left",
 		"unparseable or unknown action": "that isn't something you can do",
-		"heading there": "you set off", "already here": "you're already there", "arrived": "you arrive"}
+		"heading there": "you set off", "already here": "you're already there", "arrived": "you arrive",
+		"time ran out": "it took too long"}
 const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food", "refused": "you said no",
 		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
 		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
