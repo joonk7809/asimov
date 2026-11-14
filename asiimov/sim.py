@@ -193,9 +193,11 @@ DEFAULT_STAKES = {
     # step_ticks. On the stub the median villager then gets 1.1-2.0 acts a day from other families (from 0.04-0.38)
     # and the food bar holds; two inputs a day broke it. A buy from the player's body waits for its yes or no.
     # supply-1 (G1-r): an input bought lasts through the next day, the run waits for time outside a work block
-    # unless the input has lapsed, and a sick villager makes none (8B engine 26 lost 29% of effective work).
+    # unless the input has lapsed, and a sick villager makes none (8B engine 26 lost 29% of effective work). The
+    # village starts with day 0's inputs, a villager over its sickness has its inputs back, and a trade's work runs
+    # gain_pct faster with its inputs held: the smallest step that keeps produce within 5% of engine 22's stub.
     "trade": {"needs": {"farmer": ["crafter"], "crafter": ["farmer"], "trader": ["crafter"], "guard": ["farmer"],
-                        "healer": ["crafter"]}, "price": 1, "slow_pct": 50, "step_ticks": 18},
+                        "healer": ["crafter"]}, "price": 1, "slow_pct": 50, "step_ticks": 18, "gain_pct": 3},
     # alms-1 (G1 fix, plan/g1-g3-runs-spec.md): a villager at the market short of the price, with food on the
     # stall, gets the shortfall from the village chest, at most per_day times a day and only from what the chest
     # holds above its reserve (the coin that would leave the economy at the day's end). On the G1 8B log every
@@ -1038,6 +1040,8 @@ class Sim:
         tr = self.state.get("stakes", {}).get("trade")
         if tr and not self._supplied(a):
             r = r * tr["slow_pct"] // 100  # DEP-a trade-1: without today's inputs from its suppliers
+        elif tr and self._trade_needs(a) and not self._possessed(a):
+            r = r * (100 + tr["gain_pct"]) // 100  # supply-1: a held input is worth something (steering 21:32Z)
         return r
 
     def _trade_speed(self, role: str) -> tuple[int, int]:
@@ -1096,6 +1100,9 @@ class Sim:
                 del sk["ill"][aid]
                 sk["immune"][aid] = tick
                 self._note(int(aid), "got over the sickness")
+                if "trade" in self.state.get("stakes", {}):  # supply-1: its input kept while it was sick and made no runs
+                    rec = self.state["agents"][int(aid)]
+                    rec["supplied"] = {n: tick // TICKS_PER_DAY for n in self._trade_needs(rec)}
                 self._emit("recover", "rule", int(aid), {"agent": int(aid)}, [sk["src"][aid]])
         for t, who in cfg["cases"]:
             if t == tick:
@@ -1238,7 +1245,7 @@ class Sim:
         if self._possessed(a):
             return True
         day = self.state["tick"] // TICKS_PER_DAY
-        return all(a.get("supplied", {}).get(n, -2) >= day - 1 for n in self._trade_needs(a))
+        return all(a.get("supplied", {}).get(n, 0) >= day - 1 for n in self._trade_needs(a))  # genesis stocks day 0's
 
     def _in_work_block(self, a: dict) -> bool:
         """Whether what authors a's hour is work: the running intent step, else the plan block, else the habit."""

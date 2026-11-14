@@ -264,11 +264,11 @@ def test_stub_twins_are_full_reruns(monkeypatch):
     # under year-1; family 0 with pay; seed 2, family 1 with the tithe; seed 6 on the map; 11 at engine 8; 3 at engine 7, 9 at engine 6), so stub controls run with serve=False.
     monkeypatch.setattr(sim_mod, "FARM_YIELD", 1)
     monkeypatch.setitem(sim_mod.DEFAULT_STAKES["year"], "yields", [1] * 7)  # the same scarcity under the year (B5)
-    base = Sim(2, 50, StubMind()); base.run(4); base.finish()  # seed 2, family 1 since trade-1 (seed 1 no longer differs)
-    truth = Sim(2, 50, StubMind()); truth.run(4, fire(1)); truth.finish()
-    served, _ = run_twin(base.events, StubMind(), player=fire(1))
+    base = Sim(1, 50, StubMind()); base.run(4); base.finish()  # seed 1, family 5 since supply-1 (seed 2, family 1 at trade-1)
+    truth = Sim(1, 50, StubMind()); truth.run(4, fire(5)); truth.finish()
+    served, _ = run_twin(base.events, StubMind(), player=fire(5))
     assert logs(served.events) != logs(truth.events)
-    rerun, mind = run_twin(base.events, StubMind(), player=fire(1), serve=False)
+    rerun, mind = run_twin(base.events, StubMind(), player=fire(5), serve=False)
     assert logs(rerun.events) == logs(truth.events) and mind.counts["base"] == 0
     s = summary(base.events, rerun.events)
     assert s["agents_diverged"] == len(divergence(base.events, truth.events))
