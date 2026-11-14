@@ -72,10 +72,10 @@ DENY = re.compile(r"\b(" + "|".join([
 ]) + r")\b", re.I)
 GREETINGS = {"morning": ("mornin", "morning"), "afternoon": ("afternoon",), "evening": ("evenin", "evening")}
 # Any greeting form, for "at most one greeting per exchange" (E2d): a reply opening with one of these greets.
-# A bare part-of-day word greets only when a "," "!" "." or the end follows it (review of #71): "Evening,
-# Ari." greets, "Evening comes soon." doesn't.
+# A bare part-of-day word greets only when a "," "!" "." "to you" or the end follows it (review of #71):
+# "Evening, Ari." greets, "Evening comes soon." doesn't.
 OPENERS = re.compile(r"^\W*(?:(?:good (?:mornin|morning|afternoon|evenin|evening|day)|hello|hullo|hi|hey|greetings|"
-                     r"well met)(?:'|\b)(?![a-z'])|(?:mornin|morning|afternoon|evenin|evening)'?\s*(?:[,!.]|$))", re.I)
+                     r"well met)(?:'|\b)(?![a-z'])|(?:mornin|morning|afternoon|evenin|evening)'?\s*(?:[,!.]|$|to you\b))", re.I)
 JUST_TURNED_DOWN = 6  # ticks (an hour): a refusal this recent may color a speaker's tone (E2d)
 # Topic weights (E2d): what touches the other speaker or the listener first, then what stands out, then a
 # purchase, then routine trade (trade-1's inputs), which an exchange gets at most one of.
@@ -96,7 +96,9 @@ def invented(text: str, hour: int) -> list[str]:
         # Only greeting forms (review of #70): "good X", or X opening a sentence or followed by "," or "!".
         # A plain time word ("this morning") is a true topic, not a greeting.
         w = "(?:" + "|".join(words) + ")(?:'|\\b)(?![a-z'])"  # "mornin'" yes, "afternoon's" no
-        if part != right and re.search(r"\bgood " + w + r"|(?:^|[.!?]\s+)" + w + r"|\b" + w + r"\s*[,!]", low):
+        # A bare word opening a sentence greets only before ",", "!", ".", "to you" or the end (review of #71).
+        if part != right and re.search(r"\bgood " + w + r"|(?:^|[.!?]\s+)" + w + r"\s*(?:[,!.]|$|to you\b)|\b" + w
+                                       + r"\s*[,!]", low):
             hits.append(f"{part} greeting")
     return hits
 

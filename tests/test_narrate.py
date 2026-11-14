@@ -213,6 +213,7 @@ def test_the_deny_list_catches_kinds_of_food_stalls_animals_weather_and_wrong_gr
     assert narrate.invented("I will rest this afternoon.", 9) == []
     assert narrate.invented("Well. Evening, Rolu!", 10) == ["evening greeting"]
     assert narrate.invented("Hi. Mornin' to you.", 15) == ["morning greeting"]
+    assert narrate.invented("Evening comes soon.", 14) == [] and narrate.invented("Evening.", 14) == ["evening greeting"]
     assert narrate.invented("Afternoon's been slow.", 9) == [] and narrate.invented("Good mornin'!", 15) == ["morning greeting"]
 
 
@@ -319,6 +320,7 @@ def test_only_the_opener_greets():
     assert narrate.check(it, two("Good afternoon.", "Evening comes soon.")) == []
     assert narrate.check(it, two("Good afternoon.", "Afternoon!")) == ["second greeting"]
     assert narrate.check(it, two("Good afternoon.", "Afternoon, Ari. Busy?")) == ["second greeting"]
+    assert narrate.check(it, two("Good afternoon.", "Afternoon to you.")) == ["second greeting"]
     assert narrate.check(it, [{"who": x, "text": "Hello!"}]) == []
     p = narrate.prompt(it)
     nx, ny = (sim.state["agents"][i]["name"] for i in (x, y))
