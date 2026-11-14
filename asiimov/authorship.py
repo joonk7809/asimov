@@ -9,7 +9,8 @@ log of this engine. Authors (test 7, plan/variety-scorecard-v2.md):
   plan        a block of the agent's morning plan covers the hour             mind
   habit       neither: `Sim._habit`, the no-LLM needs-and-traits layer        code
   forced      the wake tick, which the world sets to "home" before any choice, and  world
-              a bedtime walk home (the map: an agent away from home at bedtime)
+              a bedtime walk home (the map: an agent away from home at bedtime), and a one-off step
+              a rule set (the sick-neighbor channel's answer, trade-1's supply run)
 
 Raw mind share counts every mind-authored tick. Whole-day plans (PR #8) push it to about 1 even when a
 plan only restates the habits, so the instrument also records, on every tick, the activity the habit
@@ -76,6 +77,8 @@ class AuthorshipSim(ProbeSim):
                 block = b
         expected = (self._step_activity(a, step)[0] if step else block["activity"] if block else habit)
         author = ("deliberate" if a["override"] else "intent") if step else "plan" if block else "habit"
+        if a["override"] and self.events[a["override"]["event"]].origin == "rule":
+            author = "forced"  # a rule's one-off step (the neighbor channel, trade-1), not a mind's
         super()._act(a)
         if a["activity"] != expected or (not step and a["habit"] != habit):
             raise AssertionError(f"authorship disagrees with _act at tick {tick}, agent {a['id']}")

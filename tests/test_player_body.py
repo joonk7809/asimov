@@ -175,7 +175,7 @@ def test_an_offered_act_gets_the_receipts_a_minds_identical_deliberation_gets():
         if action in withheld:
             assert ra[0]["why"] == "not offered" and ra[0]["offer"] == [x for x in DELIBERATE_ACTIONS if x not in withheld]
             continue
-        if action in PERSON_STEPS and ra and ra[0]["why"] == "unknown target":
+        if action in PERSON_STEPS and any(r["action"] == action and r["why"] == "unknown target" for r in ra):
             continue  # the mind's schema would not have let it name this person; nothing to compare
         assert ra == rb, (seed, aid, T, out)
         compared += 1

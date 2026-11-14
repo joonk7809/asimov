@@ -44,8 +44,8 @@ def test_the_script_world_is_the_stub_world_and_every_act_aimed_at_the_player_sa
             and len(e["parents"]) < 2))]
     assert aimed, "nothing was aimed at the player"
     for e in aimed:
-        if script.events[e["parents"][0]].origin == "player":
-            continue
+        if script.events[e["parents"][0]].origin == "player" or script.events[e["parents"][0]].kind == "trade_due":
+            continue  # the player's own act, or trade-1's rule buy (no mind reply, so no words)
         assert e["data"].get("says") in ScriptMind.SAYS.values(), e
     said = {e["data"]["says"] for e in sent if "says" in e["data"]}
     assert said <= set(ScriptMind.SAYS.values())

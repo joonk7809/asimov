@@ -5,7 +5,7 @@ unattended run (asiimov/soak.py, which counts them and keeps going). Each check 
 violation strings instead of raising, so a long run can report every one it hits.
 """
 from .events import ORIGINS, Event
-from .sim import PERSON_STEPS, STEP_DOS, Sim
+from .sim import PERSON_STEPS, RULE_STEPS, STEP_DOS, Sim
 from .worldmap import travel_ticks
 
 BOOL_FIELDS = ("asleep", "has_food", "kin")
@@ -102,9 +102,9 @@ def state_violations(sim: Sim) -> list[str]:
                 if not (s is a["override"] and s["target"] is None and s["place"] in sim.map["places"]
                         and sim.state.get("player", {}).get("agent") == aid):
                     out.append(f"agent {aid} go step {s}")
-            elif s["do"] not in STEP_DOS:
+            elif s["do"] not in STEP_DOS and not (s["do"] in RULE_STEPS and s is a["override"]):
                 out.append(f"agent {aid} step {s}")
-            elif s["do"] in PERSON_STEPS:
+            elif s["do"] in PERSON_STEPS + RULE_STEPS:
                 if not (type(s["target"]) is int and 0 <= s["target"] < n and s["target"] != aid):
                     out.append(f"agent {aid} step target {s}")
             elif s["target"] is not None:
