@@ -314,6 +314,11 @@ def test_only_the_opener_greets():
     assert narrate.check(it, two("Good afternoon.", "Hello there.")) == ["second greeting"]
     assert narrate.check(it, two("Good afternoon. Any luck?", "Afternoon's been slow, honestly.")) == []
     assert narrate.check(it, two("Good afternoon. Any luck?", "None. Hit a wall, I did.")) == []
+    # Review of #71: a bare part-of-day word greets only before ",", "!", "." or the end.
+    assert narrate.check(it, two("Good afternoon.", "Afternoon is long today.")) == []
+    assert narrate.check(it, two("Good afternoon.", "Evening comes soon.")) == []
+    assert narrate.check(it, two("Good afternoon.", "Afternoon!")) == ["second greeting"]
+    assert narrate.check(it, two("Good afternoon.", "Afternoon, Ari. Busy?")) == ["second greeting"]
     assert narrate.check(it, [{"who": x, "text": "Hello!"}]) == []
     p = narrate.prompt(it)
     nx, ny = (sim.state["agents"][i]["name"] for i in (x, y))

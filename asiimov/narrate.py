@@ -72,8 +72,10 @@ DENY = re.compile(r"\b(" + "|".join([
 ]) + r")\b", re.I)
 GREETINGS = {"morning": ("mornin", "morning"), "afternoon": ("afternoon",), "evening": ("evenin", "evening")}
 # Any greeting form, for "at most one greeting per exchange" (E2d): a reply opening with one of these greets.
-OPENERS = re.compile(r"^\W*(?:good (?:mornin|morning|afternoon|evenin|evening|day)|mornin|morning|afternoon|evenin|"
-                     r"evening|hello|hullo|hi|hey|greetings|well met)(?:'|\b)(?![a-z'])", re.I)
+# A bare part-of-day word greets only when a "," "!" "." or the end follows it (review of #71): "Evening,
+# Ari." greets, "Evening comes soon." doesn't.
+OPENERS = re.compile(r"^\W*(?:(?:good (?:mornin|morning|afternoon|evenin|evening|day)|hello|hullo|hi|hey|greetings|"
+                     r"well met)(?:'|\b)(?![a-z'])|(?:mornin|morning|afternoon|evenin|evening)'?\s*(?:[,!.]|$))", re.I)
 JUST_TURNED_DOWN = 6  # ticks (an hour): a refusal this recent may color a speaker's tone (E2d)
 # Topic weights (E2d): what touches the other speaker or the listener first, then what stands out, then a
 # purchase, then routine trade (trade-1's inputs), which an exchange gets at most one of.
