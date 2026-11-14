@@ -20,6 +20,11 @@ E2c (Steering, 13:07Z, after dry run 2's lines still named beans, stalls, a cree
 didn't hold at 8B, so the words are grounded in positive facts. The prompt says what the place holds, gives one
 or two topics from the speakers' own real events of the last day (Recent), and names the greeting word for the
 hour. A short deny-list check on the output asks once more on a hit, then falls back to the template.
+E2d (Steering, 13:44Z, after the E2c check read true but stiff: both speakers greeted and recited a trade
+receipt, and the reply never answered): only the opener greets and the reply answers what was said; one topic
+per speaker, chosen for touching the other speaker or the listener or standing out (a refusal, a gift,
+sickness) over routine trade, with at most one routine trade topic per exchange; a speaker who looks starving
+or was just turned down may sound it. A second greeting counts as a hit.
 """
 import json
 import re
@@ -66,6 +71,13 @@ DENY = re.compile(r"\b(" + "|".join([
     r"clouds?", r"cloudy", r"frost", r"fog", r"drought", r"dust(?:y)?",
 ]) + r")\b", re.I)
 GREETINGS = {"morning": ("mornin", "morning"), "afternoon": ("afternoon",), "evening": ("evenin", "evening")}
+# Any greeting form, for "at most one greeting per exchange" (E2d): a reply opening with one of these greets.
+OPENERS = re.compile(r"^\W*(?:good (?:mornin|morning|afternoon|evenin|evening|day)|mornin|morning|afternoon|evenin|"
+                     r"evening|hello|hullo|hi|hey|greetings|well met)(?:'|\b)(?![a-z'])", re.I)
+JUST_TURNED_DOWN = 6  # ticks (an hour): a refusal this recent may color a speaker's tone (E2d)
+# Topic weights (E2d): what touches the other speaker or the listener first, then what stands out, then a
+# purchase, then routine trade (trade-1's inputs), which an exchange gets at most one of.
+TOUCH, STANDOUT, BUY, ROUTINE = 3, 2, 1, 0
 
 
 def greeting(hour: int) -> str:
@@ -81,9 +93,18 @@ def invented(text: str, hour: int) -> list[str]:
     for part, words in GREETINGS.items():
         # Only greeting forms (review of #70): "good X", or X opening a sentence or followed by "," or "!".
         # A plain time word ("this morning") is a true topic, not a greeting.
-        w = "(?:" + "|".join(words) + ")'?"
-        if part != right and re.search(r"\bgood " + w + r"\b|(?:^|[.!?]\s+)" + w + r"(?![a-z])|\b" + w + r"\s*[,!]", low):
+        w = "(?:" + "|".join(words) + ")(?:'|\\b)(?![a-z'])"  # "mornin'" yes, "afternoon's" no
+        if part != right and re.search(r"\bgood " + w + r"|(?:^|[.!?]\s+)" + w + r"|\b" + w + r"\s*[,!]", low):
             hits.append(f"{part} greeting")
+    return hits
+
+
+def check(it: dict, lines: list[dict]) -> list[str]:
+    """Every hit in an answer: invented facts or a wrong greeting in any line, and a greeting after the first
+    line (E2d: only the opener greets)."""
+    hits = invented(" ".join(x["text"] for x in lines), it.get("hour", 12))
+    if any(OPENERS.match(x["text"]) for x in lines[1:]):
+        hits.append("second greeting")
     return hits
 
 
@@ -95,8 +116,9 @@ class Recent:
 
     def __init__(self, window: int = TICKS_PER_DAY):
         self.window = window
-        self.by: dict[int, deque] = {}
+        self.by: dict[int, deque] = {}  # aid -> (tick, text, weight, partner or None)
         self.due: dict[int, tuple[int, int, str]] = {}  # trade-1: aid -> (tick, supplier, input), until supplied
+        self.refused: dict[int, int] = {}  # aid -> tick it was last turned down for food
 
     def feed(self, sim, events):
         agents = sim.state["agents"]
@@ -112,8 +134,12 @@ class Recent:
                 continue
             act, why, to = d.get("action"), d.get("why"), d.get("to")
             who = name(to) if isinstance(to, int) else None
-            t = None
+            t, w = None, STANDOUT
+            if (act in ("ask_kin", "ask_food", "buy_from") and why in
+                    ("kin refused", "kin has nothing to spare", "refused", "nothing to spare")):
+                self.refused[a] = e.tick
             if act == "buy_food" and why == "bought":
+                w = BUY
                 t = f"{name(a)} bought food at the market"
             elif act == "buy_food" and why == "no coin":
                 t = f"{name(a)} hadn't the coin to buy food"
@@ -123,6 +149,7 @@ class Recent:
                 t = f"{name(a)} asked {who or 'their family'} for food and got none"
             elif act in ("ask_food", "buy_from") and who and why in ("gave", "sold"):
                 t = f"{who} gave {name(a)} food when asked" if act == "ask_food" else f"{name(a)} bought food from {who}"
+                w = STANDOUT if act == "ask_food" else BUY
             elif act in ("ask_food", "buy_from") and who and why in ("refused", "nothing to spare"):
                 t = f"{name(a)} asked {who} for food and was turned down"
             elif act == "give_food" and who and why == "gave":
@@ -132,31 +159,45 @@ class Recent:
             elif act == "trade" and who and why == "supplied":
                 self.due.pop(a, None)
                 t = f"{name(a)} got {TRADE_INPUT.get(agents[to]['role'], 'goods')} from {who}, the {agents[to]['role']}"
+                w = ROUTINE
             if t:
                 q = self.by.setdefault(a, deque(maxlen=8))
                 if not q or q[-1][1] != t:
-                    q.append((e.tick, t))
+                    q.append((e.tick, t, w, to if isinstance(to, int) else None))
 
-    def topics(self, sim, aid: int, k: int = 2) -> list[str]:
-        """Up to k of `aid`'s own topics, sickness in the family first, then the newest of the last day."""
+    def candidates(self, sim, aid: int, near=()) -> list[tuple[int, str]]:
+        """`aid`'s own topics of the last day as (weight, text), best first (E2d): one that touches someone in
+        `near` (the other speaker, the listener) first, then what stands out (sickness in the family, a refusal,
+        a gift), then a purchase, then routine trade; newest first within a weight."""
         st, agents = sim.state, sim.state["agents"]
-        now = st["tick"]
-        out = []
+        now, near = st["tick"], set(near)
+        out = []  # (weight, age, text)
         ill = st.get("sick", {}).get("ill", {})
         for m in st["families"][agents[aid]["family"]]["members"]:
             if str(m) in ill:
-                out.append(f"{agents[aid]['name']} is sick" if m == aid
-                           else f"{agents[m]['name']} in {agents[aid]['name']}'s family is sick")
+                out.append((STANDOUT, 0, f"{agents[aid]['name']} is sick" if m == aid
+                            else f"{agents[m]['name']} in {agents[aid]['name']}'s family is sick"))
         due = self.due.get(aid)
         if due and now - due[0] < self.window:
-            out.append(f"{agents[aid]['name']} needs {due[2]} from {agents[due[1]]['name']}, "
-                       f"the {agents[due[1]]['role']}, today")
-        out += [t for tick, t in reversed(self.by.get(aid, ())) if now - tick < self.window]
-        seen = []
-        for t in out:
+            out.append((TOUCH if due[1] in near else ROUTINE, now - due[0],
+                        f"{agents[aid]['name']} needs {due[2]} from {agents[due[1]]['name']}, "
+                        f"the {agents[due[1]]['role']}, today"))
+        for tick, t, w, partner in self.by.get(aid, ()):
+            if now - tick < self.window:
+                out.append((TOUCH if partner in near else w, now - tick, t))
+        best, seen = [], set()
+        for w, _, t in sorted(out, key=lambda x: (-x[0], x[1])):
             if t not in seen:
-                seen.append(t)
-        return seen[:k]
+                seen.add(t)
+                best.append((w, t))
+        return best
+
+    def topics(self, sim, aid: int, k: int = 2, near=()) -> list[str]:
+        return [t for _, t in self.candidates(sim, aid, near)[:k]]
+
+    def just_refused(self, sim, aid: int) -> bool:
+        t = self.refused.get(aid)
+        return t is not None and sim.state["tick"] - t <= JUST_TURNED_DOWN
 
 
 def items(sim, events, aid: int, recent: "Recent | None" = None) -> list[dict]:
@@ -195,17 +236,25 @@ def items(sim, events, aid: int, recent: "Recent | None" = None) -> list[dict]:
         # Only what the player could see of them (review of #61): no memory, no needs but a visible starving.
         it["people"] = {str(p): {"name": agents[p]["name"], "role": agents[p]["role"],
                                  "looks": "starving" if agents[p]["needs"]["hunger"] >= 800 else "",
-                                 "doing": DOING.get(agents[p]["activity"], "")}
+                                 "doing": DOING.get(agents[p]["activity"], ""),
+                                 # E2d: a speaker's own refusal this past hour may color the tone
+                                 "mood": "just turned down for food" if recent is not None and p != aid
+                                 and recent.just_refused(sim, p) else ""}
                         for p in set(it["speakers"]) | {aid}}
         it["player"] = aid
-        # One or two topics from the speakers' own events (E2c): the first speaker's, then the second's.
+        # One topic per speaker from their own events (E2c, E2d): the best for each, with at most one routine
+        # trade topic in the exchange.
         it["topics"] = []
         if recent is not None:
-            per = [recent.topics(sim, p) for p in it["speakers"]]
-            for i in range(2):
-                for ts in per:
-                    if i < len(ts) and len(it["topics"]) < 2:
-                        it["topics"].append(ts[i])
+            routine = False
+            for p in it["speakers"]:
+                near = (set(it["speakers"]) | {aid}) - {p}
+                for w, t in recent.candidates(sim, p, near):
+                    if w == ROUTINE and routine:
+                        continue
+                    routine = routine or w == ROUTINE
+                    it["topics"].append({"who": p, "text": t})
+                    break
     return out
 
 
@@ -244,14 +293,16 @@ def prompt(it: dict) -> str:
     for p, x in sorted(it["people"].items()):
         tag = " (the person listening)" if int(p) == pl and pl not in it["speakers"] else ""
         doing = f", {x['doing']}" if x.get("doing") else ""
-        lines.append(f"- {x['name']}, {x['role']}{doing}{', looks starving' if x['looks'] else ''}{tag}.")
+        mood = f", {x['mood']}" if x.get("mood") else ""
+        lines.append(f"- {x['name']}, {x['role']}{doing}{', looks starving' if x['looks'] else ''}{mood}{tag}.")
     a = _who(it, it["speakers"][0])
     you = _who(it, pl)
     gossip = (" " + "; ".join(it["gossip"]) + ".") if it.get("gossip") else ""
     if it["kind"] == "talk" and not it["to_player"]:
         b = _who(it, it["speakers"][1])
         lines.append(f"{a} starts a short chat with {b}.{gossip}")
-        lines.append(f"Write {a}'s line, then {b}'s reply.")
+        lines.append(f"Write {a}'s line, then {b}'s reply. Only {a} may greet. {b} doesn't greet: {b} answers "
+                     f"what {a} just said, with an answer, a comment, sympathy or a refusal.")
     elif it["kind"] == "talk":
         lines.append((f"{you} starts a short chat with {a}." if it["opener"] == pl else f"{a} starts a short chat with {you}.") + gossip)
         lines.append(f"Write {a}'s one line to {you}.")
@@ -271,9 +322,13 @@ def prompt(it: dict) -> str:
     else:
         lines.append(f"{a} has come to see {_who(it, pl)}.")
         lines.append(f"Write what {a} says on arriving.")
-    if it.get("topics"):
-        lines.append("True things from their day they might mention: " + "; ".join(it["topics"]) + ".")
-    lines.append(f"Speak only of these facts and the people here. If anyone greets, they say \"{greeting(h)}\".")
+    for t in it.get("topics", []):
+        lines.append(f"Something true {_who(it, t['who'])} might bring up: {t['text']}.")
+    if len(it.get("topics", [])) > 1:
+        lines.append(f"Each line uses at most one of these, and {_who(it, it['speakers'][1])} may skip theirs.")
+    if any(x.get("looks") or x.get("mood") for k, x in it["people"].items() if int(k) in it["speakers"]):
+        lines.append("Let how they look or feel color how they speak.")
+    lines.append(f"Speak only of these facts and the people here. Only the first line may greet, with \"{greeting(h)}\".")
     lines.append('Answer as JSON: {"lines": [{"who": NAME, "text": WORDS}]}, at most two lines, each under 100 characters.')
     return "\n".join(lines)
 
@@ -338,12 +393,12 @@ class LLMNarrator:
         p = prompt(it)
         got = self._ask(p, it)
         it["denied"] = []
-        hits = invented(" ".join(x["text"] for x in got), it.get("hour", 12)) if got else []
+        hits = check(it, got) if got else []
         if hits:
             it["denied"].append(hits)
-            got = self._ask(p + "\nNot " + ", ".join(sorted(set(hits))) + ": the village has none of that. "
-                            "Say only what is listed above.", it)
-            again = invented(" ".join(x["text"] for x in got), it.get("hour", 12)) if got else []
+            got = self._ask(p + "\nNot " + ", ".join(sorted(set(hits))) + ": the village has none of that, and only "
+                            "the first line greets. Say only what is listed above.", it)
+            again = check(it, got) if got else []
             if again:
                 it["denied"].append(again)
                 got = None
