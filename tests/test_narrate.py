@@ -155,4 +155,32 @@ def test_the_prompt_holds_nothing_the_player_could_not_see():
         assert "stole" not in p and "Somebody Elsewhere" not in p and "hungry" not in p
     assert "looks starving" in narrate.prompt(its[0])
     for facts in its[0]["people"].values():
-        assert set(facts) == {"name", "role", "looks"}
+        assert set(facts) == {"name", "role", "looks", "doing"}
+
+
+def test_the_prompt_names_the_hour_the_season_and_what_each_speaker_is_doing():
+    """E2b (Steering 10:09Z): the 8B dry run's lines invented rain, corn and prices and said "Mornin'" at noon,
+    because the prompt gave only "a small farming village". It now gives the hour, the part of day, the season,
+    what each speaker is visibly doing, and says to speak only of these facts."""
+    sim, me, (x, y, *_) = world_with_body()
+    it = narrate.items(sim, [Ev(1, "talk", x, {"with": y, "gossip": []})], me)[0]
+    p = narrate.prompt(it)
+    h = (sim.state["tick"] - 1) % TICKS_PER_DAY * 10 // 60
+    assert f"Time: {h:02d}:00, {narrate.part_of_day(h)}" in p
+    assert it["season"] in ("winter", "the growing season", "harvest day, the last before winter") and it["season"] in p
+    for s in (x, y):
+        a = sim.state["agents"][s]
+        assert f"{a['name']}, {a['role']}, {narrate.DOING[a['activity']]}" in p
+    assert "Speak only of these facts and the people here" in p and "weather" in p
+    assert [narrate.part_of_day(h) for h in (3, 6, 10, 14, 19, 22)] == \
+        ["night", "early morning", "morning", "afternoon", "evening", "night"]
+
+
+def test_the_season_follows_the_year():
+    sim, _, _ = world_with_body()
+    y = sim.state["stakes"]["year"]["yields"]
+    names = [narrate.season(sim, d) for d in range(len(y))]
+    for d, n in enumerate(names):
+        nxt = y[(d + 1) % len(y)]
+        assert n == ("winter" if y[d] == 0 else "harvest day, the last before winter" if nxt == 0 else "the growing season")
+    assert "winter" in names and names.count("harvest day, the last before winter") == 1

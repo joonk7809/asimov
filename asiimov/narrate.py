@@ -13,17 +13,23 @@ minds' acts, not acts.
 The narrator is one model for both sessions of a blind pair, over whichever mind ran the acts (Steering:
 otherwise the pair compares narrators). TemplateNarrator is only the fallback when no model is served.
 The prompt holds only what the player could see: names, roles, the place, the gossip passed on in the
-talk, and whether someone looks starving. Never a villager's memory or needs (review of #61).
+talk, and whether someone looks starving. Never a villager's memory or needs (review of #61). E2b (Steering,
+10:09Z, after the 8B dry run's lines invented rain, crops and prices): it also gives the hour and part of day,
+the season from year-1, what each speaker is visibly doing, and says to speak only of these facts.
 """
 import json
 import time
 
 from .inhabitant import present_ids
+from .sim import TICKS_PER_DAY
 
 ASK_ACTS = ("ask_kin", "ask_food", "buy_from")
 REFUSALS = ("refused", "kin refused", "nothing to spare", "kin has nothing to spare")
 MAX_CHARS = 120
 MAX_LINES = 2
+# What a speaker is visibly doing (E2b, Steering 10:09Z): the player sees this anyway.
+DOING = {"work": "at work", "socialize": "passing the time", "home": "at home", "rest": "resting",
+         "explore": "wandering", "shop": "shopping for food", "sleep": "getting ready for bed"}
 
 
 def items(sim, events, aid: int) -> list[dict]:
@@ -52,15 +58,36 @@ def items(sim, events, aid: int) -> list[dict]:
                         "action": d["action"], "why": d["why"]})
         elif e.kind == "meet" and d.get("with") == aid and e.actor != aid:
             out.append({"event": e.id, "kind": "visit", "speakers": [e.actor], "to_player": True})
+    tick = sim.state["tick"] - 1
     for it in out:
-        it["tick"] = sim.state["tick"] - 1
+        it["tick"] = tick
         it["place"] = me["place"]
+        it["hour"] = (tick % TICKS_PER_DAY) * 10 // 60
+        it["season"] = season(sim, tick // TICKS_PER_DAY)
         # Only what the player could see of them (review of #61): no memory, no needs but a visible starving.
         it["people"] = {str(p): {"name": agents[p]["name"], "role": agents[p]["role"],
-                                 "looks": "starving" if agents[p]["needs"]["hunger"] >= 800 else ""}
+                                 "looks": "starving" if agents[p]["needs"]["hunger"] >= 800 else "",
+                                 "doing": DOING.get(agents[p]["activity"], "")}
                         for p in set(it["speakers"]) | {aid}}
         it["player"] = aid
     return out
+
+
+def season(sim, day: int) -> str:
+    """The part of the year a villager would name (year-1): winter, the harvest day before it, or the growing
+    season. A world with no year has none."""
+    y = sim.state.get("stakes", {}).get("year")
+    if not y:
+        return ""
+    n = len(y["yields"])
+    if y["yields"][day % n] == 0:
+        return "winter"
+    return "harvest day, the last before winter" if y["yields"][(day + 1) % n] == 0 else "the growing season"
+
+
+def part_of_day(hour: int) -> str:
+    return ("night" if hour < 5 else "early morning" if hour < 8 else "morning" if hour < 12 else
+            "afternoon" if hour < 17 else "evening" if hour < 21 else "night")
 
 
 def _who(it, p) -> str:
@@ -70,11 +97,14 @@ def _who(it, p) -> str:
 def prompt(it: dict) -> str:
     """One villager's (or two villagers') next words, from the item's facts alone."""
     pl = it["player"]
+    h = it.get("hour", 12)
     lines = ["You write the spoken words of villagers in a small farming village. Plain, short, everyday speech.",
-             f"Place: the {str(it['place']).replace('_', ' ')}."]
+             f"Place: the {str(it['place']).replace('_', ' ')}.",
+             f"Time: {h:02d}:00, {part_of_day(h)}" + (f", {it['season']}." if it.get("season") else ".")]
     for p, x in sorted(it["people"].items()):
         tag = " (the person listening)" if int(p) == pl and pl not in it["speakers"] else ""
-        lines.append(f"- {x['name']}, {x['role']}{', looks starving' if x['looks'] else ''}{tag}.")
+        doing = f", {x['doing']}" if x.get("doing") else ""
+        lines.append(f"- {x['name']}, {x['role']}{doing}{', looks starving' if x['looks'] else ''}{tag}.")
     a = _who(it, it["speakers"][0])
     you = _who(it, pl)
     gossip = (" " + "; ".join(it["gossip"]) + ".") if it.get("gossip") else ""
@@ -101,6 +131,8 @@ def prompt(it: dict) -> str:
     else:
         lines.append(f"{a} has come to see {_who(it, pl)}.")
         lines.append(f"Write what {a} says on arriving.")
+    lines.append("Speak only of these facts and the people here. Don't mention weather, crops, prices, animals or "
+                 "events that aren't listed, and greet as fits the hour.")
     lines.append('Answer as JSON: {"lines": [{"who": NAME, "text": WORDS}]}, at most two lines, each under 100 characters.')
     return "\n".join(lines)
 
