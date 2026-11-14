@@ -343,6 +343,8 @@ def test_a_sick_body_works_at_half_pace_for_its_days_then_is_immune():
     assert sim._work_rate(a) == well // 2 and sim.events[eid].kind == "sick" and sim.events[eid].actor == a["id"]
     assert sim._make_sick(a, []) is None  # already sick
     sim.run_until(sim.state["tick"] + SICK["days"] * TICKS_PER_DAY + 1)
+    # supply-1: a sick villager makes no supply run, so it comes back with its input lapsed; supplied, it is well
+    a["supplied"] = {n: sim.state["tick"] // TICKS_PER_DAY for n in sim._trade_needs(a)}
     assert str(a["id"]) in sim.state["sick"]["immune"] and sim._work_rate(a) == well
     rec = next(e for e in sim.events if e.kind == "recover" and e.actor == a["id"])
     assert rec.parents == [eid]
