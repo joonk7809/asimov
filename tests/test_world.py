@@ -193,7 +193,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "neighbor-2": "1d4c8442506b03c5187f5806aa213b8a88e82a7f76c741a9bf81d0ce7e36c932",  # G3w-b the sick-neighbor channel as a trait rule, on 23, before its number
           "25": "0b305730d87847be5430e52f34ff074a3f2744309513e63d3804fccfea9dc0d3",  # G3w-b; only the engine field differs from neighbor-2
           "trade-1": "52c8b3689e1824890fbd69e0a478edc342072ad899f541e80195bd4351ab359d",  # DEP-a trade needs across families, on 25, before its number
-          "26": "3cef40e24fb78a22fc95c2509ac032e65b04986e6aefbc82ec100012ec01dc86"}  # trade-1; only the engine field differs
+          "26": "3cef40e24fb78a22fc95c2509ac032e65b04986e6aefbc82ec100012ec01dc86",  # trade-1; only the engine field differs
+          "pace-1": "f4101d303a04c7f4db9db4e0b3c6055da9fcfef04edc90a6a7c487c31a9aea9d"}  # E4 player acts at a fixed point, on 26, before its number; no player: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():

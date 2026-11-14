@@ -127,11 +127,19 @@ A client interpolates between views for display only.
 
 `ack`, an intent's outcome, sent to the client that sent it:
 - `{"type": "ack", "id": "c1-0007", "status": "applied", "tick": 211, "event": 6013}`, sent only after
-  the intent's player event is fsynced in `events.jsonl`.
+  the intent's player event is fsynced in `events.jsonl`. **An inhabitant's `act` is the exception (E4):**
+  it is acked at its tick's fixed point, as soon as it applies and before the tick's mind calls return,
+  right after an `early` message with its own events (see Durability for why that is safe).
 - `{"type": "ack", "id": "c1-0007", "status": "rejected", "reason": "bad_args"}`, sent at the next tick
   boundary. A rejected intent changes nothing in the world. Reasons: `bad_message`, `bad_id`,
   `unknown_verb`, `bad_args`, `bad_seen_tick` (missing, or ahead of the view), `stale` (more than a
   day behind the view), `scope`, `inhabited`, `body_taken`, `no_body`.
+
+`early`, to an inhabitant only (E4, Steering 2026-11-14): the events its own `act` made as it applied
+mid-tick, its receipt among them, then its `ack`. That tick's `tick` message leaves these events out.
+`{"type": "early", "tick": 211, "events": [...]}`. An `act` that arrives while a tick runs joins that tick
+(its `act` event carries `"late": true`), unless the body's own mind is being asked (the idle hand-back),
+when it waits for the next tick and is acked as usual.
 
 `heard`, to an inhabitant only, when the runner narrates (readable-world E2; `--narrate`): the spoken words of
 something it just witnessed, sent after the tick, so it can arrive after the next `tick` message:
@@ -174,6 +182,8 @@ every event and ack, and a client reattaches with its own `since`.
 After a crash, persist resumes from the newest snapshot and re-runs the recorded tail, dropping the last
 recorded tick with events (and any empty ticks after it), so the view can move back more than one tick.
 A client whose `since` is past the reopened log gets `bad_since` and reloads with `since: 0`. A
-player action applies at the start of its tick, before any mind is asked, so its event id survives the
-re-run and its ack stands. With a live LLM mind, the rest of a re-run tick can differ from what was
+player action applies at its tick's fixed point (E4): after the agent loop has built the minds' requests,
+before any mind reply applies, those scheduled before the tick first, then late ones in `received` order.
+Nothing it reads is a mind reply of that tick, so its event id and outcome survive the re-run and its
+ack stands, the early one included (tests/test_late_act.py kills a tick after an early ack). With a live LLM mind, the rest of a re-run tick can differ from what was
 streamed before the crash.
