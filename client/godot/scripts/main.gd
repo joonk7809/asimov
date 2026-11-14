@@ -31,7 +31,8 @@ var pending := {}           # inhabitant: the act sent and not yet resolved {id,
 var plan_q := []            # inhabitant: the player's own plan (readable-world C2), head first
 var plan_state := ""        # the head step's state: "" (not sent), "wait", "hold" or "failed: WHY"
 var plan_act := -1          # the act event of the head step, once acked
-var plan_receipts := []     # receipts so far that cite plan_act
+var plan_receipts := []     # receipts (and a seek's meet) so far that cite plan_act
+var plan_sent := 0          # the view tick the head step was sent at
 var map_rects := {}         # inhabitant: place name -> its rect on screen, for clicks
 
 
@@ -284,10 +285,10 @@ func _take_receipts(evs: Array) -> void:
 	if plan_act < 0 or plan_q.is_empty():
 		return
 	for e in evs:
-		if e["kind"] == "receipt" and not e["parents"].is_empty() and int(e["parents"][0]) == plan_act \
+		if e["kind"] in ["receipt", "meet"] and not e["parents"].is_empty() and int(e["parents"][0]) == plan_act \
 				and not plan_receipts.any(func(r): return r["id"] == e["id"]):
 			plan_receipts.append(e)
-	var st := Plan.settle(plan_q[0], plan_receipts)
+	var st := Plan.settle(plan_q[0], plan_receipts, int(client.view.get("tick", 0)) - plan_sent)
 	plan_state = st
 	if st != "wait" and pending.get("step", false):
 		pending = {}
@@ -329,6 +330,7 @@ func _plan_run() -> void:
 	pending = {"id": client.act(s["action"], int(s["target"]), str(s["place"])), "label": s["label"],
 			"tick": int(client.view["tick"]), "step": true}
 	plan_state = "wait"
+	plan_sent = int(client.view["tick"])
 
 
 func _choose(action: String, target: int, place: String, label: String) -> void:
