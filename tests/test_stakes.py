@@ -382,8 +382,10 @@ def test_every_catch_cites_its_source_and_a_chat_its_talk():
     for e in caught:
         src = [by_id[p] for p in e.parents if by_id[p].kind == "sick"]
         assert len(src) == 1 and src[0].actor == e.data["near"] and src[0].tick <= e.tick
-        talk = [by_id[p] for p in e.parents if by_id[p].kind == "talk"]
-        assert len(e.parents) == 1 + len(talk) and all({t.actor, t.data["with"]} == {e.actor, e.data["near"]} for t in talk)
+        # the contact it came through: a chat, or (neighbor-1) a visit's meet or a gift's receipt
+        talk = [by_id[p] for p in e.parents if by_id[p].kind in ("talk", "meet", "receipt")]
+        assert len(e.parents) == 1 + len(talk) and all(
+            {t.actor, t.data.get("with", t.data.get("to"))} == {e.actor, e.data["near"]} for t in talk)
     assert any(by_id[p].kind == "talk" for e in caught for p in e.parents)
     assert any(e.data["place"].startswith("home_") for e in caught)
     asks = [e for e in sim.events if e.kind == "receipt" and e.data.get("sick")]
@@ -474,3 +476,124 @@ def test_alms_keep_the_coin_and_chest_ledgers_and_their_note_is_no_important_wor
     eps = [e for a in sim.state["agents"] for e in a["episodes"] if "village chest for food" in e["text"]]
     assert [e for e in sim.events if e.kind == "alms"] and eps
     assert all(w not in e["text"] for e in eps for w in IMPORTANT_WORDS)
+
+
+# ------------------------------------------------------------------ the sick-neighbor channel (G3w-b, plan/v0-after-g3.md)
+NB = DEFAULT_STAKES["neighbor"]
+
+
+def _two_outsiders(sim):
+    """An awake working adult X and Y from another family, both at the plaza."""
+    ag = [a for a in sim.state["agents"] if a["role"] not in ("child", "elder") and not a["asleep"]]
+    x = ag[0]
+    y = next(a for a in ag if a["family"] != x["family"])
+    for a in (x, y):
+        a["place"], a["route"] = "plaza", None
+    return x, y
+
+
+def test_a_villager_who_knows_a_sick_one_sees_it_and_answers_by_rule_and_family_or_strangers_do_not():
+    sim = _sick_world()
+    x, y = _two_outsiders(sim)
+    sid = sim._make_sick(x, [])
+    sim._rel(y, x["id"])["affinity"] = NB["min_affinity"]
+    kin = next(sim.state["agents"][m] for m in sim.state["families"][x["family"]]["members"] if m != x["id"])
+    stranger = next(a for a in sim.state["agents"] if a["family"] not in (x["family"], y["family"])
+                    and a["role"] not in ("child", "elder") and str(x["id"]) not in a["relationships"])
+    n0 = len(sim.events)
+    sim._seen_sick([x, y, kin, stranger], [x])
+    news = [e for e in sim.events[n0:] if e.kind == "sick_news"]
+    assert [(e.actor, e.data["how"], e.parents) for e in news] == [(y["id"], "seen", [sid])]
+    r = sim.events[news[0].id + 1]  # the rule answers at once, citing the news; no mind is asked
+    assert r.kind == "receipt" and r.origin == "rule" and r.parents == [news[0].id] and r.data["about"] == x["id"]
+    assert not [e for e in sim.events[n0:] if e.kind.startswith("mind_")]
+    sim._seen_sick([x, y], [x])  # once per villager and case
+    assert len([e for e in sim.events if e.kind == "sick_news"]) == 1
+
+
+def test_word_is_told_by_family_and_by_visitors_and_not_by_those_who_only_heard():
+    sim = _sick_world()
+    x, y = _two_outsiders(sim)
+    sid = sim._make_sick(x, [])
+    kin = next(sim.state["agents"][m] for m in sim.state["families"][x["family"]]["members"] if m != x["id"])
+    sim._rel(y, x["id"])["affinity"] = 100
+    tid = sim._emit("talk", "chance", kin["id"], {"with": y["id"], "place": "plaza"}, [])
+    n0 = len(sim.events)
+    sim._tell_sick(sim.events[tid])
+    e = next(e for e in sim.events[n0:] if e.kind == "sick_news")
+    assert e.kind == "sick_news" and e.data == {"about": x["id"], "how": "told", "by": kin["id"]} and e.parents == [tid, sid]
+    assert sim._carried(y) == {}  # hearing alone carries no word
+    sim._close_contact(y, x, tid)
+    assert sim._carried(y) == {x["id"]: tid}  # a visit does
+
+
+def test_the_trait_rule_picks_each_answer_which_starts_its_step_and_help_needs_something_to_take():
+    sim = _sick_world()
+    x, y = _two_outsiders(sim)
+    sim._make_sick(x, [])
+    want = {"help": ((700, 0, 0), "give_food"), "keep_away": ((0, 700, 0), "avoid"),
+            "visit": ((0, 0, 600), "seek"), "carry_on": ((0, 0, 0), None)}
+    for pick, ((ag, em, ex), do) in want.items():
+        y["override"], y["inv"]["food"] = None, 2
+        y["traits"].update(agreeableness=ag, emotionality=em, extraversion=ex)
+        sim._neighbor_resolve(y, 0, x["id"])
+        r = next(e for e in reversed(sim.events) if e.kind == "receipt")
+        assert r.kind == "receipt" and r.data["action"] == pick and r.data["ok"] and r.data["about"] == x["id"]
+        assert (y["override"] or {}).get("do") == do and (do is None or y["override"]["target"] == x["id"])
+    y["traits"].update(agreeableness=700, emotionality=0, extraversion=600)
+    y["inv"]["food"], y["inv"]["coin"] = 0, 0
+    assert sim._neighbor_pick(y) == "visit"  # nothing to take: the next rule decides
+
+
+def test_a_visit_to_a_sick_villager_can_pass_it_and_cites_the_meeting():
+    hot = {**DEFAULT_STAKES, "neighbor": {**NB, "catch_visit_pm": 1000},
+           "sick": {**SICK, "chance_pm": 0}}
+    sim = Sim(2, 40, StubMind(), genesis={**generate_population(2, 40), "stakes": hot})
+    sim.run_until(TICKS_PER_DAY + 40)
+    x, y = _two_outsiders(sim)
+    sid = sim._make_sick(x, [])
+    sim._meet(y, x, 0)
+    meet = next(e for e in reversed(sim.events) if e.kind == "meet")
+    caught = sim.events[-1]
+    assert caught.kind == "sick" and caught.actor == y["id"] and caught.parents == [meet.id, sid]
+
+
+def test_the_channel_keeps_the_ledgers_replays_and_its_notes_carry_no_important_word():
+    sim = Sim(1, 100, StubMind(), genesis={**generate_population(1, 100), "stakes": {
+        **DEFAULT_STAKES, "sick": {**SICK, "chance_pm": 0, "cases": [[TICKS_PER_DAY + 36, 60]]}}})
+    assert checked(sim, 5) == []
+    news = [e for e in sim.events if e.kind == "sick_news"]
+    answers = [e for e in sim.events if e.kind == "receipt" and "about" in e.data]
+    assert news and answers and {e.data["action"] for e in answers} >= {"visit", "help", "carry_on"}
+    by_id = {e.id: e for e in sim.events}
+    for r in answers:  # answer (a rule) -> sick_news
+        assert r.origin == "rule" and by_id[r.parents[0]].kind == "sick_news"
+    eps = [e for a in sim.state["agents"] for e in a["episodes"] if "is sick" in e["text"]]
+    assert eps and all(w not in e["text"] for e in eps for w in IMPORTANT_WORDS)
+    assert replay(sim.events).state_hash() == sim.state_hash()
+
+
+def test_an_answer_that_cuts_a_running_intent_records_it_dropped():
+    sim = _sick_world()
+    x, y = _two_outsiders(sim)
+    sim._make_sick(x, [])
+    iid = sim._emit("intent_set", "rule", y["id"], {"goal": "g", "steps": [{"do": "work", "target": None}], "dropped": 0}, [])
+    y["intent"] = {"steps": [{"do": "work", "target": None}], "i": 0, "event": iid, "goal": "g", "left": 18}
+    y["traits"].update(agreeableness=0, emotionality=0, extraversion=600)
+    n0 = len(sim.events)
+    sim._neighbor_resolve(y, 0, x["id"])
+    d = next(e for e in sim.events[n0:] if e.kind == "intent_dropped")
+    assert d.actor == y["id"] and d.data == {"i": 0, "why": "replaced"} and d.parents == [iid] and y["intent"] is None
+
+
+def test_a_world_with_no_sickness_is_unchanged_by_the_neighbor_channel():
+    quiet = {**DEFAULT_STAKES, "sick": {**SICK, "chance_pm": 0}}
+    on = Sim(4, 40, StubMind(), genesis={**generate_population(4, 40), "stakes": quiet})
+    off = Sim(4, 40, StubMind(), genesis={**generate_population(4, 40),
+                                          "stakes": {k: v for k, v in quiet.items() if k != "neighbor"}})
+    for s in (on, off):
+        s.run(2)
+        s.finish()
+    # every event but genesis (its stakes) and the state hashes (state holds the stakes) is engine 23's
+    same = lambda s: [e.to_json() for e in s.events[1:] if e.kind not in ("checkpoint", "end")]
+    assert same(on) == same(off)

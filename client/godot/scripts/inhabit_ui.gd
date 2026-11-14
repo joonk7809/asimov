@@ -24,6 +24,8 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"bought": "you buy %d food", "had enough": "you have enough food, so you buy none",
 		"not at market": "you aren't at the market", "not kin": "they aren't family",
 		"one act per tick": "only one action counts each tick; the first one did",
+		"going to see them": "you go to see them", "taking them something": "you take them something",
+		"keeping away": "you keep away", "carrying on": "you carry on",
 		"not offered": "it wasn't possible any more by the time it came up",
 		"cooldown": "too soon after your last ask; wait a little", "unknown target": "they aren't here any more",
 		"target not here": "they aren't here any more", "target asleep": "they're asleep",

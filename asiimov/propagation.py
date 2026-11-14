@@ -69,7 +69,7 @@ ACT_FIELDS = {
     "produce": ("food", "coin"),
     "sell": ("food",),
 }
-NOT_ACTS = ("day_rhythm", "plan_receipt", "tithe", "stock", "sick", "recover", "alms")  # B5 rules: tithe takes coin; stock places
+NOT_ACTS = ("day_rhythm", "plan_receipt", "tithe", "stock", "sick", "recover", "alms", "sick_news")  # B5 rules: tithe takes coin; stock places
 # the harvest day's winter order, whose shop trip and buy are the acts; sick, recover and alms happen to the agent
 CHATS = ("talk", "snub")  # chance encounters: whom an agent happens to talk to where it is
 CATEGORIES = ("act", "act_besides_chats", "thought")
