@@ -23,16 +23,35 @@ def client_whys() -> set[str]:
     return set(re.findall(r'"([^"]+)":', block))
 
 
+# The values an f-string `why` can take, by the name it formats (review of #60: sim._give's f"no {what} to give").
+FSTRING_VALUES = {"what": ("food", "coin")}
+
+
+def _strings(w) -> set[str]:
+    """Every string a `why` expression can be, or an AssertionError naming what the scan can't expand."""
+    if isinstance(w, ast.Constant) and isinstance(w.value, str):
+        return {w.value}
+    if isinstance(w, ast.IfExp):
+        return _strings(w.body) | _strings(w.orelse)
+    if isinstance(w, ast.JoinedStr):
+        outs = {""}
+        for part in w.values:
+            if isinstance(part, ast.Constant):
+                outs = {o + part.value for o in outs}
+            else:
+                name = getattr(part.value, "id", None)
+                assert name in FSTRING_VALUES, f"teach the scan the values of {ast.unparse(part.value)!r} (line {w.lineno})"
+                outs = {o + v for o in outs for v in FSTRING_VALUES[name]}
+        return outs
+    return set()  # a variable: its values are literals the scan finds where they're made
+
+
 def source_whys() -> set[str]:
     tree = ast.parse(open(S.__file__).read())
     out = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "_receipt" and len(node.args) >= 5:
-            w = node.args[4]
-            if isinstance(w, ast.Constant) and isinstance(w.value, str):
-                out.add(w.value)
-            elif isinstance(w, ast.IfExp):
-                out |= {x.value for x in (w.body, w.orelse) if isinstance(x, ast.Constant) and isinstance(x.value, str)}
+            out |= _strings(node.args[4])
         if isinstance(node, ast.Tuple) and len(node.elts) == 2 and isinstance(node.elts[0], ast.Constant) \
                 and isinstance(node.elts[0].value, bool) and isinstance(node.elts[1], ast.Constant) \
                 and isinstance(node.elts[1].value, str):
@@ -61,7 +80,8 @@ def session_whys() -> set[str]:
 
 def test_the_scan_finds_the_engines_whys():
     found = source_whys()
-    assert {"refused", "kin refused", "nothing to spare", "target asleep", "not offered", "caught"} <= found
+    assert {"refused", "kin refused", "nothing to spare", "target asleep", "not offered", "caught",
+            "no food to give", "no coin to give"} <= found
 
 
 def test_every_why_a_receipt_can_carry_is_worded_in_the_client():

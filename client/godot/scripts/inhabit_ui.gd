@@ -36,7 +36,7 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"said no": "they're told no", "no ask": "they hadn't asked you anything",
 		"already asked": "they're still waiting for an answer", "asleep": "you were asleep",
 		"bedtime": "it's bedtime, so you head home", "falling asleep": "you're falling asleep",
-		"no food to give": "you have no food to give", "no stock": "the market has no food left",
+		"no food to give": "you have no food to give", "no coin to give": "you have no coin to give", "no stock": "the market has no food left",
 		"unparseable or unknown action": "that isn't something you can do",
 		"heading there": "you set off", "already here": "you're already there", "arrived": "you arrive"}
 const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food", "refused": "you said no",
@@ -49,9 +49,8 @@ const ANSWERS := ["gave", "sold", "refused", "kin gave food", "kin refused"]  # 
 const BY_THEM := {"refused": "%s said no.", "kin refused": "%s said no.", "nothing to spare": "%s had nothing to spare.",
 		"kin has nothing to spare": "%s had nothing to spare.", "kin gave food": "%s gave you food.",
 		"target asleep": "%s is asleep.", "target not here": "%s isn't here any more.",
-		"unknown target": "%s isn't here any more.", "target has no food": "%s has no food.",
-		"caught": "%s caught you stealing.", "stolen": "You stole food from %s and got away with it.",
-		"not kin": "%s isn't family, so you can't ask them as family."}
+		"unknown target": "%s isn't here any more.",
+		"caught": "%s caught you stealing.", "stolen": "You stole food from %s and got away with it."}
 const ASKING := {"ask_kin": "You asked %s for food", "ask_food": "You asked %s for food", "buy_from": "You tried to buy food from %s",
 		"steal": "You tried to steal food from %s", "give_food": "You gave food to %s", "give_coin": "You gave a coin to %s"}
 const ASKED := {"ask_kin": "asked you for food", "ask_food": "asked you for food", "buy_from": "wanted to buy food from you",
@@ -208,7 +207,7 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Di
 			return "You're already at %s, so you stay." % where
 		var mins := (int(d.get("arrive", e["tick"])) - int(e["tick"])) * 10
 		return "You set off for %s; you'll be there in about %d minutes." % [where, mins]
-	var whom = d.get("to")
+	var whom = d.get("to", d.get("victim"))  # a theft's receipt names its victim
 	if whom != null and int(whom) != me_id and why in ["gave", "sold"]:
 		var who := _who(whom, me_id, names)
 		match str(d.get("action", "")):
