@@ -16,12 +16,18 @@ The prompt holds only what the player could see: names, roles, the place, the go
 talk, and whether someone looks starving. Never a villager's memory or needs (review of #61). E2b (Steering,
 10:09Z, after the 8B dry run's lines invented rain, crops and prices): it also gives the hour and part of day,
 the season from year-1, what each speaker is visibly doing, and says to speak only of these facts.
+E2c (Steering, 13:07Z, after dry run 2's lines still named beans, stalls, a creek and a cow): the negative list
+didn't hold at 8B, so the words are grounded in positive facts. The prompt says what the place holds, gives one
+or two topics from the speakers' own real events of the last day (Recent), and names the greeting word for the
+hour. A short deny-list check on the output asks once more on a hit, then falls back to the template.
 """
 import json
+import re
 import time
+from collections import deque
 
 from .inhabitant import present_ids
-from .sim import TICKS_PER_DAY
+from .sim import TICKS_PER_DAY, TRADE_INPUT
 
 ASK_ACTS = ("ask_kin", "ask_food", "buy_from")
 REFUSALS = ("refused", "kin refused", "nothing to spare", "kin has nothing to spare")
@@ -31,10 +37,132 @@ MAX_LINES = 2
 DOING = {"work": "at work", "socialize": "passing the time", "home": "at home", "rest": "resting",
          "explore": "wandering", "shop": "shopping for food", "sleep": "getting ready for bed"}
 
+# What each place holds, said outright (E2c): the world has only "food", one stock at the market, no stalls.
+VILLAGE = ("The village has a market, a field, a workshop, a plaza, the woods and the families' homes. "
+           "Its only food is called just \"food\": no kinds of food are named.")
+PLACE_HOLDS = {
+    "market": "The market sells food, just \"food\", for coin. There are no stalls, goods or animals.",
+    "field": "Farmers work the field, and it yields food, just \"food\". There are no animals and no named crops.",
+    "workshop": "Crafters make tools in the workshop. Nothing else is made or sold there.",
+    "plaza": "The plaza is the open square where people meet; healers and guards work there. Nothing is sold there.",
+    "woods": "The woods are where people go to wander. Nothing in them is named: no animals, water or paths.",
+}
+HOME_HOLDS = "This is a family's home, where they eat and sleep."
+# What kinds of things the 8B lines invented in the dry runs (Steering's E2c list: kinds of food, stall,
+# animals, weather). A hit is asked once more, then falls back to the template.
+DENY = re.compile(r"\b(" + "|".join([
+    # kinds of food
+    r"beans?", r"rice", r"flour", r"corn", r"wheat", r"barley", r"oats?", r"grain", r"bread", r"loaf", r"loaves",
+    r"potato(?:es)?", r"turnips?", r"carrots?", r"cabbages?", r"onions?", r"apples?", r"berr(?:y|ies)", r"fruit",
+    r"vegetables?", r"veg", r"eggs?", r"milk", r"cheese", r"meat", r"fish", r"stew", r"soup", r"pie", r"honey",
+    # stalls and goods
+    r"stalls?", r"booths?", r"carts?", r"wares",
+    # animals
+    r"cows?", r"cattle", r"oxen", r"ox", r"pigs?", r"hogs?", r"sheep", r"lambs?", r"goats?", r"horses?",
+    r"chickens?", r"hens?", r"geese", r"goose", r"ducks?", r"fox(?:es)?", r"wolf", r"wolves", r"deer", r"rabbits?",
+    r"dogs?", r"cats?", r"birds?", r"crows?",
+    # weather
+    r"weather", r"rain(?:s|y|ing|ed)?", r"sun(?:ny|shine)?", r"snow(?:s|y|ing)?", r"storms?", r"wind(?:y)?",
+    r"clouds?", r"cloudy", r"frost", r"fog", r"drought", r"dust(?:y)?",
+]) + r")\b", re.I)
+GREETINGS = {"morning": ("mornin", "morning"), "afternoon": ("afternoon",), "evening": ("evenin", "evening")}
 
-def items(sim, events, aid: int) -> list[dict]:
+
+def greeting(hour: int) -> str:
+    """The greeting word for the hour, given outright (E2c): 5-11 morning, 12-16 afternoon, else evening."""
+    return "Good morning" if 5 <= hour < 12 else "Good afternoon" if 12 <= hour < 17 else "Good evening"
+
+
+def invented(text: str, hour: int) -> list[str]:
+    """What in a line the world doesn't have (the deny list), or a greeting for another part of the day."""
+    hits = [m.group(0).lower() for m in DENY.finditer(text)]
+    right = greeting(hour).split()[1]
+    low = text.lower().strip()
+    for part, words in GREETINGS.items():
+        # Only greeting forms (review of #70): "good X", or X opening a sentence or followed by "," or "!".
+        # A plain time word ("this morning") is a true topic, not a greeting.
+        w = "(?:" + "|".join(words) + ")'?"
+        if part != right and re.search(r"\bgood " + w + r"\b|(?:^|[.!?]\s+)" + w + r"(?![a-z])|\b" + w + r"\s*[,!]", low):
+            hits.append(f"{part} greeting")
+    return hits
+
+
+class Recent:
+    """Each villager's own real events of the last day, as they'd say them aloud (E2c topics): what they
+    bought, asked for, gave or were refused, the trade input they need from another family (trade-1), and,
+    read from the state, sickness in their family. Fed every tick by the runner. Words only: nothing in the
+    world reads it, and a resumed runner starts it empty."""
+
+    def __init__(self, window: int = TICKS_PER_DAY):
+        self.window = window
+        self.by: dict[int, deque] = {}
+        self.due: dict[int, tuple[int, int, str]] = {}  # trade-1: aid -> (tick, supplier, input), until supplied
+
+    def feed(self, sim, events):
+        agents = sim.state["agents"]
+        name = lambda i: agents[i]["name"]
+        for e in events:
+            d, a = e.data, e.actor
+            if a is None:
+                continue
+            if e.kind == "trade_due" and isinstance(d.get("to"), int):
+                self.due[a] = (e.tick, d["to"], TRADE_INPUT.get(agents[d["to"]]["role"], "goods"))
+                continue
+            if e.kind != "receipt":
+                continue
+            act, why, to = d.get("action"), d.get("why"), d.get("to")
+            who = name(to) if isinstance(to, int) else None
+            t = None
+            if act == "buy_food" and why == "bought":
+                t = f"{name(a)} bought food at the market"
+            elif act == "buy_food" and why == "no coin":
+                t = f"{name(a)} hadn't the coin to buy food"
+            elif act == "ask_kin" and why == "kin gave food":
+                t = f"{who} in {name(a)}'s family gave them food" if who else f"{name(a)}'s family gave them food"
+            elif act == "ask_kin" and why in ("kin refused", "kin has nothing to spare"):
+                t = f"{name(a)} asked {who or 'their family'} for food and got none"
+            elif act in ("ask_food", "buy_from") and who and why in ("gave", "sold"):
+                t = f"{who} gave {name(a)} food when asked" if act == "ask_food" else f"{name(a)} bought food from {who}"
+            elif act in ("ask_food", "buy_from") and who and why in ("refused", "nothing to spare"):
+                t = f"{name(a)} asked {who} for food and was turned down"
+            elif act == "give_food" and who and why == "gave":
+                t = f"{name(a)} gave food to {who}"
+            elif act == "give_coin" and who and why == "gave":
+                t = f"{name(a)} gave coin to {who}"
+            elif act == "trade" and who and why == "supplied":
+                self.due.pop(a, None)
+                t = f"{name(a)} got {TRADE_INPUT.get(agents[to]['role'], 'goods')} from {who}, the {agents[to]['role']}"
+            if t:
+                q = self.by.setdefault(a, deque(maxlen=8))
+                if not q or q[-1][1] != t:
+                    q.append((e.tick, t))
+
+    def topics(self, sim, aid: int, k: int = 2) -> list[str]:
+        """Up to k of `aid`'s own topics, sickness in the family first, then the newest of the last day."""
+        st, agents = sim.state, sim.state["agents"]
+        now = st["tick"]
+        out = []
+        ill = st.get("sick", {}).get("ill", {})
+        for m in st["families"][agents[aid]["family"]]["members"]:
+            if str(m) in ill:
+                out.append(f"{agents[aid]['name']} is sick" if m == aid
+                           else f"{agents[m]['name']} in {agents[aid]['name']}'s family is sick")
+        due = self.due.get(aid)
+        if due and now - due[0] < self.window:
+            out.append(f"{agents[aid]['name']} needs {due[2]} from {agents[due[1]]['name']}, "
+                       f"the {agents[due[1]]['role']}, today")
+        out += [t for tick, t in reversed(self.by.get(aid, ())) if now - tick < self.window]
+        seen = []
+        for t in out:
+            if t not in seen:
+                seen.append(t)
+        return seen[:k]
+
+
+def items(sim, events, aid: int, recent: "Recent | None" = None) -> list[dict]:
     """What in this tick's events gets words for the inhabitant `aid`. Read between ticks, from the state the
-    tick left (who is where, hunger, notes), so the words match what the player saw."""
+    tick left (who is where, hunger, notes), so the words match what the player saw. `recent`, if given,
+    supplies each speaker's own topics (E2c)."""
     agents = sim.state["agents"]
     me = agents[aid]
     here = set(present_ids(sim, aid))
@@ -70,6 +198,14 @@ def items(sim, events, aid: int) -> list[dict]:
                                  "doing": DOING.get(agents[p]["activity"], "")}
                         for p in set(it["speakers"]) | {aid}}
         it["player"] = aid
+        # One or two topics from the speakers' own events (E2c): the first speaker's, then the second's.
+        it["topics"] = []
+        if recent is not None:
+            per = [recent.topics(sim, p) for p in it["speakers"]]
+            for i in range(2):
+                for ts in per:
+                    if i < len(ts) and len(it["topics"]) < 2:
+                        it["topics"].append(ts[i])
     return out
 
 
@@ -98,9 +234,13 @@ def prompt(it: dict) -> str:
     """One villager's (or two villagers') next words, from the item's facts alone."""
     pl = it["player"]
     h = it.get("hour", 12)
+    place = str(it["place"])
     lines = ["You write the spoken words of villagers in a small farming village. Plain, short, everyday speech.",
-             f"Place: the {str(it['place']).replace('_', ' ')}.",
-             f"Time: {h:02d}:00, {part_of_day(h)}" + (f", {it['season']}." if it.get("season") else ".")]
+             VILLAGE,
+             f"Place: the {'home' if place.startswith('home') else place.replace('_', ' ')}. "
+             + PLACE_HOLDS.get(place, HOME_HOLDS),
+             f"Time: {h:02d}:00, {part_of_day(h)}" + (f", {it['season']}." if it.get("season") else ".")
+             + f' A greeting now is "{greeting(h)}".']
     for p, x in sorted(it["people"].items()):
         tag = " (the person listening)" if int(p) == pl and pl not in it["speakers"] else ""
         doing = f", {x['doing']}" if x.get("doing") else ""
@@ -131,8 +271,9 @@ def prompt(it: dict) -> str:
     else:
         lines.append(f"{a} has come to see {_who(it, pl)}.")
         lines.append(f"Write what {a} says on arriving.")
-    lines.append("Speak only of these facts and the people here. Don't mention weather, crops, prices, animals or "
-                 "events that aren't listed, and greet as fits the hour.")
+    if it.get("topics"):
+        lines.append("True things from their day they might mention: " + "; ".join(it["topics"]) + ".")
+    lines.append(f"Speak only of these facts and the people here. If anyone greets, they say \"{greeting(h)}\".")
     lines.append('Answer as JSON: {"lines": [{"who": NAME, "text": WORDS}]}, at most two lines, each under 100 characters.')
     return "\n".join(lines)
 
@@ -179,17 +320,33 @@ class LLMNarrator:
         self.model = model
         self.fallback = TemplateNarrator()
 
-    def lines(self, it: dict) -> list[dict]:
-        body = {"model": self.client.model, "messages": [{"role": "user", "content": prompt(it)}],
+    def _ask(self, content: str, it: dict):
+        body = {"model": self.client.model, "messages": [{"role": "user", "content": content}],
                 "temperature": self.client.temperature, "top_p": 0.9, "max_tokens": 160,
                 "chat_template_kwargs": {"enable_thinking": False},
                 "response_format": {"type": "json_object"}}
-        t0 = time.monotonic()
         try:
             text = self.client.post("/v1/chat/completions", body)["choices"][0]["message"].get("content") or ""
-            got = clean(it, json.loads(text))
+            return clean(it, json.loads(text))
         except (RuntimeError, ValueError, KeyError, IndexError, TypeError):
-            got = None
+            return None
+
+    def lines(self, it: dict) -> list[dict]:
+        """One call; on a deny-list hit (E2c) one more, naming what isn't in the village; else the template.
+        it["denied"] keeps each hit asked about, it["fallback"] whether the template was used."""
+        t0 = time.monotonic()
+        p = prompt(it)
+        got = self._ask(p, it)
+        it["denied"] = []
+        hits = invented(" ".join(x["text"] for x in got), it.get("hour", 12)) if got else []
+        if hits:
+            it["denied"].append(hits)
+            got = self._ask(p + "\nNot " + ", ".join(sorted(set(hits))) + ": the village has none of that. "
+                            "Say only what is listed above.", it)
+            again = invented(" ".join(x["text"] for x in got), it.get("hour", 12)) if got else []
+            if again:
+                it["denied"].append(again)
+                got = None
         it["latency_s"] = round(time.monotonic() - t0, 3)
         it["fallback"] = got is None
         return got if got is not None else self.fallback.lines(it)
