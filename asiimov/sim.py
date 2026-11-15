@@ -1308,7 +1308,8 @@ class Sim:
             a.setdefault("supply_failed", {})[need] = 1  # ints: no bools in state
 
     def _trade(self, a: dict, b: dict, eid: int, parents=()) -> int:
-        """trade-1: a buys an input from b, lasting through tomorrow (supply-1),, its supplier, for price coin; they meet (close contact)."""
+        """trade-1: a buys an input from b, its supplier, for price coin; it lasts through tomorrow (supply-1); they
+        meet (close contact)."""
         price, need = self.state["stakes"]["trade"]["price"], b["role"]
         if a["inv"]["coin"] < price:
             return self._receipt(a, eid, "trade", False, "no coin", extra={"to": b["id"]}, parents=parents)
