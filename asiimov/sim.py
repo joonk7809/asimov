@@ -150,7 +150,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "supply-1"  # G1-r: inputs last a day longer, supply runs wait for time off work, none when sick; on 27; its label until merge
+ENGINE_VERSION = "28"  # G1-r supply-1: inputs last a day longer, supply runs wait for time off work, none when sick, a 3% gain held; on 27
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -1039,7 +1039,7 @@ class Sim:
             r //= 2
         tr = self.state.get("stakes", {}).get("trade")
         if tr and not self._supplied(a):
-            r = r * tr["slow_pct"] // 100  # DEP-a trade-1: without today's inputs from its suppliers
+            r = r * tr["slow_pct"] // 100  # DEP-a trade-1: without inputs from its suppliers held (today's or yesterday's, supply-1)
         elif tr and self._trade_needs(a) and not self._possessed(a):
             r = r * (100 + tr["gain_pct"]) // 100  # supply-1: a held input is worth something (steering 21:32Z)
         return r
@@ -1308,7 +1308,7 @@ class Sim:
             a.setdefault("supply_failed", {})[need] = 1  # ints: no bools in state
 
     def _trade(self, a: dict, b: dict, eid: int, parents=()) -> int:
-        """trade-1: a buys today's input from b, its supplier, for price coin; they meet (close contact)."""
+        """trade-1: a buys an input from b, lasting through tomorrow (supply-1),, its supplier, for price coin; they meet (close contact)."""
         price, need = self.state["stakes"]["trade"]["price"], b["role"]
         if a["inv"]["coin"] < price:
             return self._receipt(a, eid, "trade", False, "no coin", extra={"to": b["id"]}, parents=parents)
