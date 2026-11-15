@@ -343,8 +343,10 @@ def test_a_sick_body_works_at_half_pace_for_its_days_then_is_immune():
     assert sim._work_rate(a) == well // 2 and sim.events[eid].kind == "sick" and sim.events[eid].actor == a["id"]
     assert sim._make_sick(a, []) is None  # already sick
     sim.run_until(sim.state["tick"] + SICK["days"] * TICKS_PER_DAY + 1)
-    assert str(a["id"]) in sim.state["sick"]["immune"] and sim._work_rate(a) == well
     rec = next(e for e in sim.events if e.kind == "recover" and e.actor == a["id"])
+    # supply-1: a sick villager makes no supply run, so getting over it gives its inputs back as of that day
+    assert a["supplied"] == {n: rec.tick // TICKS_PER_DAY for n in sim._trade_needs(a)}
+    assert str(a["id"]) in sim.state["sick"]["immune"] and sim._work_rate(a) == well
     assert rec.parents == [eid]
     assert sim._make_sick(a, []) is None  # immune
 
@@ -610,9 +612,14 @@ def test_a_worker_lacking_its_input_works_slow_and_the_rule_sends_it_to_a_suppli
     sim.run_until(TICKS_PER_DAY + 60)  # 10:00: suppliers are up
     day = sim.state["tick"] // TICKS_PER_DAY
     a = next(a for a in sim.state["agents"] if a["role"] == "farmer" and not a["asleep"] and a["override"] is None)
-    full = sim._work_rate({**a, "supplied": {"crafter": day}})
-    assert sim._work_rate({**a, "supplied": {}}) == full * TR["slow_pct"] // 100
-    a.pop("supplied", None), a.pop("trade_try", None)
+    held = sim._work_rate({**a, "supplied": {"crafter": day}})
+    sim.state["stakes"]["trade"]["gain_pct"] = 0
+    base = sim._work_rate({**a, "supplied": {"crafter": day}})
+    sim.state["stakes"]["trade"]["gain_pct"] = TR["gain_pct"]
+    assert held == base * (100 + TR["gain_pct"]) // 100  # supply-1: a held input is worth gain_pct
+    assert sim._work_rate({**a, "supplied": {"crafter": day - 2}}) == base * TR["slow_pct"] // 100  # lapsed
+    a["supplied"] = {"crafter": day - 2}  # supply-1: a lapsed input sends the run even in a work block
+    a.pop("trade_try", None)
     n0 = len(sim.events)
     sim._trade_due(a)
     due = next(e for e in sim.events[n0:] if e.kind == "trade_due")
@@ -627,6 +634,30 @@ def test_a_worker_lacking_its_input_works_slow_and_the_rule_sends_it_to_a_suppli
     assert sim._supplied(a) and a["beliefs"]["supplier:crafter"].endswith(b["name"])
     sim._trade_due(a)  # once supplied, no second run that day
     assert not [e for e in sim.events[rid:] if e.kind == "trade_due"]
+
+
+def test_supply_1_an_input_lasts_a_day_the_run_waits_for_time_off_work_and_none_is_made_when_sick():
+    sim = Sim(1, 100, StubMind())
+    assert all(sim._supplied(a) for a in sim.state["agents"])  # genesis holds day 0's inputs
+    sim.run_until(TICKS_PER_DAY + 60)
+    day = sim.state["tick"] // TICKS_PER_DAY
+    a = next(a for a in sim.state["agents"] if a["role"] == "farmer" and not a["asleep"] and a["override"] is None)
+    a["trade_try"] = {}
+    for held, lasts in ((day, 1), (day - 1, 1), (day - 2, 0)):  # bought today or yesterday lasts; older lapses
+        a["supplied"] = {"crafter": held}
+        assert sim._supplied(a) == lasts
+    work = {"steps": [{"do": "work", "target": None}], "i": 0, "event": 0, "goal": "g", "left": 18}
+    off = {"steps": [{"do": "rest", "target": None}], "i": 0, "event": 0, "goal": "g", "left": 18}
+    for supplied, it, runs in ((day - 1, work, 0), (day - 1, off, 1), (day - 2, work, 1)):
+        a["supplied"], a["intent"], a["override"], a["trade_try"] = {"crafter": supplied}, dict(it), None, {}
+        n0 = len(sim.events)
+        sim._trade_due(a)
+        assert sum(e.kind == "trade_due" and e.actor == a["id"] for e in sim.events[n0:]) == runs, (supplied, it)
+    a["supplied"], a["intent"], a["override"], a["trade_try"] = {"crafter": day - 2}, None, None, {}
+    sim._make_sick(a, [])
+    n0 = len(sim.events)
+    sim._trade_due(a)  # lapsed and off work, but sick: no run
+    assert not [e for e in sim.events[n0:] if e.kind == "trade_due"] and a["override"] is None
 
 
 def test_suppliers_are_kept_balanced_by_customers_and_re_chosen_after_a_failed_try():
@@ -654,7 +685,7 @@ def test_the_players_body_is_exempt_and_a_buy_from_it_waits_for_its_answer():
         a = next(a for a in ag if a["role"] == "farmer" and a["family"] != b["family"] and not a["asleep"])
         a["place"], a["route"] = b["place"], None
         a["inv"]["coin"], a["override"], a["intent"] = 50, None, None
-        a["supplied"], a["trade_try"] = {}, {}
+        a["supplied"], a["trade_try"] = {"crafter": -1}, {}  # lapsed on day 1 (supply-1)
         a.setdefault("suppliers", {})["crafter"] = b["id"]
         a.setdefault("supply_failed", {})["crafter"] = 0
         sim._trade_due(a)
@@ -674,7 +705,7 @@ def test_a_supply_run_pauses_a_running_intent_which_resumes_after():
     a = next(a for a in sim.state["agents"] if a["role"] == "farmer" and not a["asleep"])
     iid = sim._emit("intent_set", "rule", a["id"], {"goal": "g", "steps": [{"do": "work", "target": None}], "dropped": 0}, [])
     it = {"steps": [{"do": "work", "target": None}], "i": 0, "event": iid, "goal": "g", "left": 18}
-    a["intent"], a["override"], a["supplied"], a["trade_try"] = it, None, {}, {}
+    a["intent"], a["override"], a["supplied"], a["trade_try"] = it, None, {"crafter": -1}, {}  # lapsed
     n0 = len(sim.events)
     sim._trade_due(a)
     assert a["override"]["do"] == "trade" and a["intent"] is it
@@ -696,7 +727,7 @@ def test_an_ask_held_by_a_paused_intent_still_ends_its_step_when_answered():
                    "tick": sim.state["tick"], "left": 6}
     sim.step([{"kind": "act", "action": "wait"}])
     assert a["intent"].get("asked") is not None
-    a["supplied"], a["trade_try"] = {}, {}
+    a["supplied"], a["trade_try"] = {"crafter": -1}, {}  # lapsed on day 1 (supply-1)
     sim._trade_due(a)  # the supply run pauses the intent that waits on the ask
     assert a["override"] and a["override"]["do"] == "trade"
     sim.step([{"kind": "act", "action": "agree", "target": a["id"]}])
