@@ -353,3 +353,12 @@ def test_every_line_is_said_to_someone_or_is_thinking_aloud():
     assert [x["to"] for x in narrate.addressed(it, got)] == [2, 1]  # in a chat, each to the other
     one = {**it, "speakers": [1], "to_player": True}
     assert narrate.addressed(one, [{"who": 1, "text": "Hello."}]) == [{"who": 1, "text": "Hello.", "to": 6}]
+    # Steering 11:49Z: a "self" line that speaks to "you" is said to the other speaker (here, the player)
+    assert narrate.addressed(one, [{"who": 1, "text": "I asked for food, but you said no.", "to": "self"},
+                                   {"who": 1, "text": "Your turn, I suppose.", "to": "self"},
+                                   {"who": 1, "text": "Hm. Youth these days.", "to": "self"}]) == [
+        {"who": 1, "text": "I asked for food, but you said no.", "to": 6},
+        {"who": 1, "text": "Your turn, I suppose.", "to": 6},
+        {"who": 1, "text": "Hm. Youth these days.", "to": "self"}]
+    assert [x["to"] for x in narrate.addressed(it, [{"who": 1, "text": "You again?", "to": "self"},
+                                                    {"who": 2, "text": "Me again.", "to": "self"}])] == [2, "self"]

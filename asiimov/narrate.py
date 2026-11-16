@@ -338,6 +338,9 @@ def prompt(it: dict) -> str:
     return "\n".join(lines)
 
 
+YOU = re.compile(r"\byour?\b", re.I)  # a line that speaks to someone isn't thinking aloud (Steering 11:49Z)
+
+
 def addressee(it: dict, i: int, who: int) -> int:
     """Whom line i of an item is said to, by the item's own shape: in a chat between two villagers, each to the
     other; any other line to the player (pt8, joon: "words should be directed to a person")."""
@@ -354,6 +357,8 @@ def addressed(it: dict, lines: list[dict]) -> list[dict]:
     for i, x in enumerate(lines):
         to = x.get("to")
         if not (to == "self" or (isinstance(to, int) and str(to) in it["people"] and to != x["who"])):
+            to = addressee(it, i, x["who"])
+        elif to == "self" and YOU.search(x["text"]):  # E2d recheck: "I asked, but you said no" isn't a thought
             to = addressee(it, i, x["who"])
         out.append({**x, "to": to})
     return out
