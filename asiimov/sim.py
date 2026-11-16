@@ -94,11 +94,20 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 SAY_ACTS = ("say",)
 SAY_MAX = 140
 SPOKEN_CALLS = 8
-# say-3 (pt8, Steering 2026-11-16 10:40Z): the reason stays private; the words said back are their own field.
-# The 8B wrote the reason as reasoning about the speaker ("Mimi asked for food, so I should check"), heard as speech.
-SPOKEN_LINE = (' Also put in "says" the one line you say back to them, aloud, to them, as you would say it.'
-               " Your reason is private: they never hear it. Goods don't change hands in talk:"
-               " if they want food or coin, they must ask you for it.")
+# say-3 (pt8; Steering 2026-11-16 10:40Z, re-scoped 10:57Z/11:04Z): a line said to a villager is answered by its
+# own request kind, `answer`, not the food deliberation: {"says": one line said back, "next": stay|carry_on|leave}.
+# Its menu had drifted answers to food and let plans escalate at the speaker, and its reason was spoken aloud.
+# The tail is the talk pilot's (research/talk/tool/talk_bank.py) minus heard and answer, which talk-1 adds.
+NEXT = ("stay", "carry_on", "leave")
+
+
+def answer_tail(who: str, quoted: str) -> str:
+    return (f' {who} said to you: "{quoted}". You answer them now.'
+            " says is what you say back to them, aloud, in one line."
+            " next is what you do after: stay keeps you here with them, carry_on goes back to what you were doing,"
+            " leave walks away from them.")
+
+
 GIFTS = ("give_food", "give_coin")
 TALK_BARRED = GIFTS + ("steal",)  # say-2 (Steering 08:30Z): in a talk window, neither a gift to the speaker nor a theft
 # The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
@@ -412,6 +421,9 @@ class Sim:
         if actions is not None and actions != self._offer(a, view):  # a crowd cut to nobody shown (rare)
             actions = view["offer"] = self._offer(a, view)
             situation = self._situation(a, view, kind)
+        if kind == "answer":  # say-3: after the situation, as the talk pilot built it
+            occ = view["occasion"]
+            situation += answer_tail(self._who(occ["who"]), occ["detail"])
         prompt, counts = assemble_prompt(a, self.state, kind, situation, actions=actions)
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
@@ -550,9 +562,7 @@ class Sim:
                 rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
                          + ". ".join(SICK_CLAUSES[x] for x in view["offer"]) + ". Leave goal empty and then [].")
             else:
-                rest += self._occasion_text(a, view.get("occasion")) + (
-                    SPOKEN_LINE if (view.get("occasion") or {}).get("why") == "spoken" else "") \
-                    + deliberate_ask(view["offer"], self._price())
+                rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"], self._price())
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
@@ -891,6 +901,8 @@ class Sim:
         do, t = step["do"], step["target"]
         if do == "go":  # the player's go_to: there, and it stays until the step's time is up
             return "visit", step["place"]
+        if do == "stay":  # say-3: an answer's "stay": where it was, doing what it was, for the talk window
+            return a["activity"], step["place"]
         if do in INSTANT_STEPS:  # acts where the agent already is, or is headed
             return a["activity"], self._dest(a)
         if do in REACH_STEPS:  # where the target is, or is walking to
@@ -1613,13 +1625,13 @@ class Sim:
         a["cooldown_until"] = tick + 12
         view = self._view(a, occupancy)
         view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
-        if occ["why"] == "spoken":  # the words first, then the act
-            apply = lambda eid, out, occ=occ: (self._reply(a, occ, eid, out),
-                                               self._resolve(a, out, eid, no_gift=self._talk_guard(a)))
+        parents = [occ["event"]] if occ["event"] is not None else []
+        if occ["why"] == "spoken":  # say-3: its own kind, words and what it does next; no action menu
+            self._request(a, "answer", view, parents, lambda eid, out, occ=occ: self._answer_line(a, occ, eid, out))
         else:
             apply = lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick,
                                                                               no_gift=self._talk_guard(a))
-        self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [], apply)
+            self._request(a, "deliberate", view, parents, apply)
         if spoken:  # an answer to a line said to it counts in its own budget, never the villager's own calls
             a["calls"]["n"] -= 1
             a["calls"]["spoken"] = a["calls"].get("spoken", 0) + 1
@@ -2052,7 +2064,10 @@ class Sim:
         if action in ANSWER_ACTS:  # held to no offer: an ask it can answer is checked in _answer
             self.player_pending[a["id"]] = (eid, action, target, list(ANSWER_ACTS), [target])
             return
-        for q in list(self.state["player"].get("asks", [])):  # it moved on without answering: its nature does
+        # It moved on without answering: its nature does. Not on a line said (say-3, Steering 10:57Z): words
+        # aren't an answer, so a spoken "no" can't be overridden by the roll; the ask waits for agree or decline,
+        # another act, or its hour.
+        for q in (list(self.state["player"].get("asks", [])) if action not in SAY_ACTS else []):
             self._settle_ask(q, None, [eid])
         if action in GO_ACTS or action in SAY_ACTS:  # no offer, cooldown or people: checked when applied
             self.player_pending[a["id"]] = (eid, action, target, [], [])
@@ -2121,12 +2136,24 @@ class Sim:
         tick = self.state["tick"]
         return frozenset(int(k) for k, v in a.get("talk_until", {}).items() if v > tick)
 
+    def _answer_line(self, a: dict, occ: dict, eid: int, out: dict | None):
+        """say-3: the words, then what it does next. stay holds it where it is for the talk window; leave walks it
+        away from the speaker for as long; carry_on goes on as before. Goods never move in an answer."""
+        self._reply(a, occ, eid, out)
+        nxt = (out or {}).get("next")
+        if nxt == "stay":
+            a["override"] = {"do": "stay", "target": None, "place": self._dest(a), "event": eid, "left": OCCASION_TICKS}
+        elif nxt == "leave" and isinstance(occ.get("who"), int):
+            a["override"] = {"do": "avoid", "target": occ["who"], "event": eid, "left": OCCASION_TICKS}
+
     def _reply(self, a: dict, occ: dict, eid: int, out: dict | None):
         """A spoken occasion's answer in words (say-1): the deliberation's reason, as said aloud to the
         speaker. Emitted before the reply's act applies. No words if the reply has none."""
-        said = (out or {}).get("says")  # say-3: its own field, never the private reason; none means no words
+        said = (out or {}).get("says")  # say-3: the answer's own words; none means no words
         says = " ".join(said.split())[:SAY_MAX] if isinstance(said, str) else ""
-        self._emit("reply", "rule", a["id"], {"with": occ["who"], "says": says}, [eid])
+        nxt = (out or {}).get("next")
+        nxt = nxt if nxt in NEXT else "carry_on"
+        self._emit("reply", "rule", a["id"], {"with": occ["who"], "says": says, "next": nxt}, [eid])
         if says:
             quoted = _quotable(says, 200)
             self._note(a["id"], f'I told {self.state["agents"][occ["who"]]["name"]}: "{quoted}"')

@@ -32,8 +32,18 @@ E9_ACTIONS = "buy_food|go_market|ask_kin|steal|give_food|give_coin|seek|avoid|wo
 assert SCHEMA.count(f'"action":"{E9_ACTIONS}"') == 1
 
 
-def schema_text(actions=None) -> str:
-    """The SCHEMA section, with the deliberate line cut to `actions` when given."""
+# say-3: an answer prompt's SCHEMA has this line in the deliberate line's place, as the talk pilot's had
+# (research/talk/tool/talk_bank.py, minus heard and answer).
+ANSWER_LINE = 'For kind=answer: {"says":"...","next":"stay|carry_on|leave"}'
+DELIBERATE_LINE = ('For kind=deliberate: {"action":"' + E9_ACTIONS + '","target":ID_or_null,"reason":"...",'
+                   '"goal":"..." or "","then":[{"do":"...","target":ID_or_null}]}')
+assert SCHEMA.count(DELIBERATE_LINE) == 1
+
+
+def schema_text(actions=None, answer: bool = False) -> str:
+    """The SCHEMA section, with the deliberate line cut to `actions` when given, or swapped for the answer line."""
+    if answer:
+        return SCHEMA.replace(DELIBERATE_LINE, ANSWER_LINE, 1)
     if actions is None:
         return SCHEMA
     return SCHEMA.replace(f'"action":"{E9_ACTIONS}"', '"action":"' + "|".join(actions) + '"', 1)
@@ -257,7 +267,7 @@ def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=No
     files = render_files(agent, state)
     top_episodes = sorted(agent["episodes"], key=lambda e: (-e["importance"], -e["tick"]))[:8]
     sections = {
-        "schema": schema_text(actions),
+        "schema": schema_text(actions, answer=kind == "answer"),
         "soul": files["soul.md"],
         "core": files["core.md"],
         "goals": files["goals.md"],

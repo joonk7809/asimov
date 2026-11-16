@@ -49,6 +49,9 @@ class StubMind:
             out = self._plan(v)
         elif req.kind == "deliberate":
             out = self._deliberate(v)
+        elif req.kind == "answer":  # say-3: a word back, warm or curt by agreeableness; it carries on as it was
+            warm = v["traits"]["agreeableness"] > 500
+            out = {"says": "Good to hear from you." if warm else "I've got things to do.", "next": "carry_on"}
         else:
             out = self._reflect(v)
         return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0}, "stop")
@@ -85,11 +88,6 @@ class StubMind:
         a giver thanked in kind; a conscientious agent who finished or lost an intent sets a working one."""
         t, occ = v["traits"], v.get("occasion") or {}
         why, who = occ.get("why"), occ.get("who")
-        if why == "spoken":  # say-1: a word back, warm or curt by agreeableness; it carries on as it was
-            warm = t["agreeableness"] > 500
-            return {"action": "wait", "target": None, "goal": "", "then": [],  # say-3: the words in says
-                    "reason": "be friendly" if warm else "keep to myself",
-                    "says": "Good to hear from you." if warm else "I've got things to do."}
         if why == "person" and occ.get("detail") in ("like", "are fond of", "care about") and t["extraversion"] > 400:
             return {"action": "seek", "target": who, "reason": "good to see a friend", "goal": "spend time with a friend",
                     "then": [{"do": "socialize", "target": None}]}

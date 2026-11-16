@@ -98,7 +98,10 @@ def state_violations(sim: Sim) -> list[str]:
                        and isinstance(it["goal"], str) and 0 < len(it["goal"]) <= 120):
             out.append(f"agent {aid} intent {it}")
         for s in (it["steps"] if it else []) + ([a["override"]] if a["override"] else []):
-            if s["do"] == "go":  # the player's go_to (go-to-1): an override on the possessed body, to a place
+            if s["do"] == "stay":  # say-3: an answer's stay, an override where the villager was
+                if not (s is a["override"] and s["target"] is None and s["place"] in sim.map["places"]):
+                    out.append(f"agent {aid} stay step {s}")
+            elif s["do"] == "go":  # the player's go_to (go-to-1): an override on the possessed body, to a place
                 if not (s is a["override"] and s["target"] is None and s["place"] in sim.map["places"]
                         and sim.state.get("player", {}).get("agent") == aid):
                     out.append(f"agent {aid} go step {s}")

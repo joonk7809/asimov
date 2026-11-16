@@ -27,6 +27,11 @@ PERSON_ACTIONS = (("ask_kin", "kin_here"), ("ask_food", "present"), ("buy_from",
 # (measured on Qwen3-4B, A6000: reflect 18.5 s vs 1.7 s). max_tokens bounds the reply and the
 # world truncates every stored string, so the cap adds nothing.
 SCHEMAS = {
+    # say-3 (Steering 2026-11-16 10:57Z/11:04Z): the answer to a line said to you, the talk pilot's grammar minus
+    # heard and answer (talk-1 adds them ahead of says). No maxLength: xgrammar decodes ~15x slower with one.
+    "answer": {"type": "object",
+               "properties": {"says": {"type": "string"}, "next": {"type": "string", "enum": ["stay", "carry_on", "leave"]}},
+               "required": ["says", "next"], "additionalProperties": False},
     "plan": {
         "type": "object",
         # minItems: a whole waking day, not one short block (one-block plans were 700/700 at eccd95d).
@@ -81,10 +86,6 @@ def schema_for(req: MindRequest) -> dict:
         ids = _ids(req.view, key)
         if ids and action in offer:
             branches.append(_deliberate_branch([action], {"type": "integer", "enum": ids}, then))
-    if (req.view.get("occasion") or {}).get("why") == "spoken":  # say-3: the words said back, apart from the reason
-        for b in branches:  # no maxLength (xgrammar decodes ~15x slower with one); the engine clips to SAY_MAX
-            b["properties"]["says"] = {"type": "string"}
-            b["required"] = b["required"] + ["says"]
     return {"anyOf": branches}
 
 
