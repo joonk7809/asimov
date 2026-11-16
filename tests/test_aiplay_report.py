@@ -59,6 +59,21 @@ def test_rows_pair_each_line_with_its_reply_and_count_the_lost_ones(tmp_path):
     assert m["replies_repeated"] == 1 and m["replies_third_person"] == 0
 
 
+def test_a_held_reply_is_timed_from_when_it_went_out(tmp_path):
+    """script-voice (#81): ReplyHold sends a reply after its `step` record and logs the wall as `sent`."""
+    out = str(tmp_path / "w")
+    session(out)
+    a, b = rep.rows(out)["exchanges"][:2]
+    evs = [json.loads(line) for line in open(os.path.join(out, "events.jsonl"))]
+    reply = next(e for e in evs if e["kind"] == "reply" and e["tick"] == a["reply_tick"] and e["actor"] == a["to"])
+    side = [json.loads(line) for line in open(os.path.join(out, "runner.jsonl"))]
+    step = next(r["wall"] for r in side if r["kind"] == "step" and r["tick"] == a["reply_tick"])
+    with open(os.path.join(out, "runner.jsonl"), "a") as f:
+        f.write(json.dumps({"kind": "sent", "reply": reply["id"], "tick": reply["tick"], "wall": step + 5.0}) + "\n")
+    a2, b2 = rep.rows(out)["exchanges"][:2]
+    assert abs(a2["lat_s"] - a["lat_s"] - 5.0) < 0.011 and b2["lat_s"] == b["lat_s"]
+
+
 def test_the_report_includes_the_form_and_tallies_the_grades(tmp_path):
     out, rd = str(tmp_path / "w"), str(tmp_path / "report")
     session(out)

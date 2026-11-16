@@ -9,7 +9,7 @@ of rows.json by plan/ai-playtest.md's rubric) is there, the report includes it, 
 It works on a person's session too: nothing here depends on who played.
 
 Lines 6 and 7 use the definitions of results/tools/playtest_lat.py and playtest_reply.py (server-side wall
-times: an act received to applied; a say received to the step that holds its reply). Those tools stay the
+times: an act received to applied; a say received to the step that holds its reply, or to a held reply's `sent` record). Those tools stay the
 G5 reading; this prints the same numbers per exchange.
 """
 import json
@@ -71,10 +71,12 @@ def rows(run_dir: str) -> dict:
     t0, t1 = joins[0]["wall"], (leaves[-1]["wall"] if leaves else side[-1]["wall"])
     names = {a["id"]: a["name"] for a in evs[0]["data"]["population"]["agents"]}
     roles = {a["id"]: a["role"] for a in evs[0]["data"]["population"]["agents"]}
-    step_wall = {}
+    step_wall, sent_wall = {}, {}
     for r in side:
         if r["kind"] == "step":
             step_wall.setdefault(r["tick"], r["wall"])
+        elif r["kind"] == "sent":  # script-voice: a held reply went out at this wall, after its step record
+            sent_wall[r["reply"]] = r["wall"]
 
     # The player's acts: received to applied (line 6), and each act's receipt.
     got = {r["id"]: r for r in side if r["kind"] == "received" and r.get("client") not in (None, "runner")
@@ -122,7 +124,7 @@ def rows(run_dir: str) -> dict:
                 row["why"] = "a newer line replaced it, or it was never answered"
             else:
                 out = _mind_out(by_id.get(rep["parents"][0]) if rep["parents"] else None)
-                w = step_wall.get(rep["tick"])
+                w = sent_wall.get(rep["id"], step_wall.get(rep["tick"]))
                 row.update(reply=rep["data"].get("says", ""), reply_tick=rep["tick"],
                            lat_s=None if w is None else round(w - r["wall"], 2),
                            third_person=third_person(rep["data"].get("says", ""), names[body]),
