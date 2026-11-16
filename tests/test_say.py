@@ -275,3 +275,31 @@ def test_the_neighbor_channel_gives_the_speaker_nothing_in_the_talk_window():
     t["talk_until"] = {}
     sim._neighbor_resolve(t, eid, me)
     assert t["override"]["do"] in S.GIFTS
+
+
+class Thief(StubMind):
+    """Answers a spoken line by stealing from the speaker, now and in its plan (the final recheck's #14/#18/#25)."""
+    def decide(self, req):
+        if S.SPOKEN_LINE.strip() in req.prompt:
+            who = req.view["occasion"]["who"]
+            from asiimov.minds import MindReply
+            out = {"action": "steal", "target": who, "reason": "Let's meet, then.", "goal": "rob them",
+                   "then": [{"do": "seek", "target": who}, {"do": "steal", "target": who}]}
+            return MindReply(json.dumps(out, sort_keys=True), "thief", {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_the_talk_window_bars_a_theft_from_the_speaker_now_or_in_the_plan():
+    """Steering 08:30Z (say-2): a steal at a speaker in the window fails "not in talk", and a steal step is dropped."""
+    mind = Thief()
+    sim, me, to = body_with_company(mind)
+    sim.state["agents"][me]["inv"]["food"] = 5
+    n0 = len(sim.events)
+    say(sim, me, to, "Let's meet at the well this evening.")
+    for _ in range(S.OCCASION_TICKS):
+        sim.step()
+    new = sim.events[n0:]
+    rs = [e for e in new if e.kind == "receipt" and e.actor == to and e.data["action"] == "steal"]
+    assert rs and all(e.data["why"] == "not in talk" for e in rs)
+    sets = [e for e in new if e.kind == "intent_set" and e.actor == to]
+    assert sets and all(not (s["do"] == "steal" and s["target"] == me) for e in sets for s in e.data["steps"])
