@@ -94,7 +94,7 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 SAY_ACTS = ("say",)
 SAY_MAX = 140
 SPOKEN_CALLS = 8
-SPOKEN_LINE = " Your reason is what you say back to them, aloud, in one line."
+SPOKEN_LINE = " Your reason is what you say back to them, aloud, in one line. What you do should match what you say."
 # The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
 SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
