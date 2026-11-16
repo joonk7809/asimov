@@ -638,6 +638,7 @@ class Hub:
         # E3 (plan/readable-world-spec.md): an inhabitant's act pulls the next tick forward, at least
         # pull_min seconds after the last one started, instead of waiting out the pace. None: never.
         self.pull_min, self.pull = pull_min, False
+        self.pull_why = None  # "reply": the pull is for the answer to the player's line (pt8)
         # E2 (plan/readable-world-spec.md): words for what the inhabitant sees, written after each tick into
         # narration.jsonl and sent as `heard`. Never part of the world: the log and replay don't see them.
         self.narrator = narrator
@@ -809,14 +810,21 @@ class Hub:
                     pass
                 continue
             self.step_once, last, pulled = False, loop.time(), self.pull
-            self.pull = False
+            self.pull, why = False, self.pull_why
+            self.pull_why = None
             if pulled:  # logged before the tick: its early ack can end a session before the tick does (E4)
-                self.runner._side("pulled", tick=self.runner.sim.state["tick"])
+                self.runner._side("pulled", tick=self.runner.sim.state["tick"], **({"why": why} if why else {}))
             self.stepping = True
             try:
                 tick, events, acks = await asyncio.to_thread(self.runner.step)
             finally:
                 self.stepping = False
+            p = self.runner.sim.state.get("player")
+            if self.pull_min is not None and p is not None and any(
+                    e.kind == "said" and e.actor == p["agent"] for e in events):
+                # pt8 (Steering 2026-11-16 10:40Z): a line said this tick is answered in the next one, so pull
+                # that tick too; the player's words would otherwise wait out the pace for their answer.
+                self.pull, self.pull_why = True, "reply"
             for m, client, scope, _ in self.runner.leftover_late():  # came as the fixed point closed
                 ack = self.runner.submit(m, client=client, scope=scope)
                 if ack is None:
