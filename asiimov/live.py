@@ -1017,6 +1017,8 @@ def main(argv=None):
             if not isinstance(narrator, narrate.LLMNarrator):
                 raise SystemExit("--script-voice needs a model narrator (--narrate-url and --narrate-model)")
             mind.voice = narrator
+            mind.facts = lambda req: narrate.voice_facts(runner.sim, req.agent_id,
+                                                         (req.view.get("occasion") or {}).get("who"))
             print(f"script voice: {narrator.model}", file=sys.stderr, flush=True)
         if args.reply_delays:
             with open(args.reply_delays) as f:

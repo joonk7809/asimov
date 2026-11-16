@@ -165,6 +165,7 @@ class ScriptMind(StubMind):
 
     def __init__(self, voice=None):
         self.voice = voice  # script-voice: a narrator that words the stub's answer to the player, or None
+        self.facts = None  # script-voice (Steering 12:05Z): req -> the world facts the voice may name (voice_facts)
 
     def decide(self, req: MindRequest) -> MindReply:
         reply = super().decide(req)
@@ -174,10 +175,14 @@ class ScriptMind(StubMind):
             # The line is this mind's output, so the log records it and a replay serves it back: replay stays exact.
             out = json.loads(reply.raw_output)
             occ = req.view.get("occasion") or {}
-            m = re.search(r"You are at ([a-z_0-9]+)\.", req.prompt)
+            if self.facts is not None:
+                facts = self.facts(req)
+            else:
+                m = re.search(r"You are at ([a-z_0-9]+)\.", req.prompt)
+                facts = {"place": m.group(1) if m else None, "hour": req.view.get("hour", 12),
+                         "role": req.view.get("role")}
             said = self.voice.reply(str(occ.get("detail", "")), self.NEXT_WORDS.get(out.get("next"), "carry on"),
-                                    {"place": m.group(1) if m else None, "hour": req.view.get("hour", 12),
-                                     "role": req.view.get("role")})
+                                    facts)
             if said:
                 out["says"] = said
             return MindReply(json.dumps(out, sort_keys=True), f"{self.model}+voice:{self.voice.model}",

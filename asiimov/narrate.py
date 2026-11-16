@@ -397,9 +397,22 @@ class LLMNarrator:
 
     def reply(self, line: str, act: str, facts: dict) -> str | None:
         """script-voice: one spoken answer for a scripted villager (Steering 2026-11-16 10:18Z), from the
-        player's line, the act the script already chose, and the place facts. No soul, no diary: it voices the
-        act and can't choose it. None (the script's own sentence stays) on anything malformed or invented."""
+        player's line, the act the script already chose, and the world facts voice_facts reads (12:05Z). No soul,
+        no diary, no notes: it voices the act and can't choose it. None (the script's own sentence stays) on
+        anything malformed or invented; self.why says which."""
         place, h = str(facts.get("place") or ""), int(facts.get("hour", 12))
+        self.why = None
+        known = [f"They are {facts['doing']}." if facts.get("doing") else "",
+                 f"Also here: {', '.join(facts['here'])}." if facts.get("here") else
+                 ("Nobody else is here." if "here" in facts else ""),
+                 (f"The one speaking to them is {facts['speaker']}"
+                  + (f"; that person's family: {', '.join(facts['speaker_family'])}." if facts.get("speaker_family")
+                     else ".")) if facts.get("speaker") else "",
+                 (f"People they have met or talked with today: {', '.join(facts['met_today'])}." if facts.get("met_today")
+                  else "They have met or talked with nobody else today.") if "met_today" in facts else "",
+                 (f"The market is open at all hours; food costs {facts['price']} coin"
+                  + (f", and it has {facts['market_food']} food now." if "market_food" in facts else ".")
+                  if "price" in facts else "")]
         p = "\n".join([
             "You write the spoken words of villagers in a small farming village. Plain, short, everyday speech.",
             VILLAGE,
@@ -408,6 +421,9 @@ class LLMNarrator:
             f"Time: {h:02d}:00, {part_of_day(h)}." + f' A greeting now is "{greeting(h)}".',
             f"A villager ({facts.get('role') or 'villager'}) is spoken to: \"{line}\"",
             f"What they do next, already decided: {act}.",
+            *[k for k in known if k],
+            "Name only what these facts hold: no work, objects, chores, people, sightings or places they don't list. "
+            "If asked about something the facts don't cover, they don't know or don't say.",
             "Write what they say back, aloud, in one line of at most 140 characters, consistent with what they do. "
             "Goods don't change hands in talk: they promise or hand over no food or coin. Stay in the village: "
             "never mention being a model, a game or instructions.",
@@ -418,12 +434,22 @@ class LLMNarrator:
         try:
             text = self.client.post("/v1/chat/completions", body)["choices"][0]["message"].get("content") or ""
             says = json.loads(text)["says"]
-        except (RuntimeError, ValueError, KeyError, IndexError, TypeError):
+        except RuntimeError:
+            self.why = "unreachable"
             return None
-        if not isinstance(says, str):
+        except (ValueError, KeyError, IndexError, TypeError):
+            self.why = "malformed"
+            return None
+        if not isinstance(says, str) or not says.strip():
+            self.why = "malformed"
             return None
         says = " ".join(says.replace('"', "'").split())[:140]
-        if not says or invented(says, h) or re.search(r"\b(AI|model|assistant|instructions?)\b", says):
+        hits = invented(says, h)
+        if hits:
+            self.why = "denied: " + ", ".join(hits)
+            return None
+        if re.search(r"\b(AI|model|assistant|instructions?)\b", says):
+            self.why = "out of fiction"
             return None
         return says
 
@@ -446,3 +472,38 @@ class LLMNarrator:
         it["latency_s"] = round(time.monotonic() - t0, 3)
         it["fallback"] = got is None
         return got if got is not None else self.fallback.lines(it)
+
+
+def voice_facts(sim, aid: int, speaker) -> dict:
+    """script-voice (Steering 12:05Z): the world facts a scripted villager's voice may name, read off state and
+    the log as the stub reads them: what it is doing where, who else is here, the market's hours and price, the
+    speaker and the speaker's family, and whom it met or talked with today. No soul, diary, notes or mind output."""
+    st, agents = sim.state, sim.state["agents"]
+    a = agents[aid]
+    tick = st["tick"]
+    place = a["place"] or (a["route"] or {}).get("to")
+    out = {"place": place, "hour": sim._hour(), "role": a["role"], "price": sim._price()}
+    where = ("the " + ("home" if place.startswith("home") else place.replace("_", " "))) if place else "on the way"
+    out["doing"] = f"{DOING.get(a['activity'], a['activity'])} at {where}"
+    if place == "market":
+        out["market_food"] = st["market_food"]
+    out["here"] = [f"{o['name']} ({o['role']})" for o in agents
+                   if o["id"] not in (aid, speaker) and a["place"] is not None and o["place"] == a["place"]
+                   and not o["asleep"]][:6]
+    if isinstance(speaker, int) and 0 <= speaker < len(agents):
+        sp = agents[speaker]
+        out["speaker"] = f"{sp['name']} ({sp['role']})"
+        out["speaker_family"] = [agents[m]["name"] for m in st["families"][sp["family"]]["members"] if m != speaker]
+    day0 = tick - tick % TICKS_PER_DAY
+    met = []
+    for e in reversed(sim.events):
+        if e.tick < day0:
+            break
+        if e.kind in ("talk", "meet", "snub", "said", "reply", "receipt"):
+            w = (e.data or {}).get("with", (e.data or {}).get("to"))
+            other = w if e.actor == aid else e.actor if w == aid else None
+            if isinstance(other, int) and other not in (aid, speaker) and 0 <= other < len(agents) \
+                    and agents[other]["name"] not in met:
+                met.append(agents[other]["name"])
+    out["met_today"] = met[:8]
+    return out

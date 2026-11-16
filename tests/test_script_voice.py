@@ -114,3 +114,50 @@ def test_the_hold_waits_out_a_drawn_delay_from_the_click_and_logs_it():
     assert [ReplyHold(d, "s").rng.choice(d) for _ in range(1)] == [ReplyHold(d, "s").rng.choice(d)]
     with pytest.raises(ValueError):
         ReplyHold([], "s")
+
+
+def test_the_voice_gets_world_facts_and_nothing_private():
+    """Steering 12:05Z: the voice invented work, people and sightings from place/hour/role alone. It now gets the
+    villager's step, who is here, the market's hours and price, the speaker's family and whom it met today, read
+    off state and the log; never its soul, diary, notes or a mind's output."""
+    voice = Voice()
+    mind = ScriptMind(voice)
+    sim, me, to = body_with_company(mind)
+    mind.facts = lambda req: narrate.voice_facts(sim, req.agent_id, (req.view.get("occasion") or {}).get("who"))
+    say(sim, me, to, "Have you seen my family around?")
+    sim.step()
+    line, act, facts = voice.asked[-1]
+    ag = sim.state["agents"]
+    t = ag[to]
+    assert line == "Have you seen my family around?" and facts["role"] == t["role"]
+    assert facts["doing"].endswith(f"the {t['place']}") or "home" in facts["doing"]
+    assert facts["price"] == sim._price() and facts["speaker"].startswith(ag[me]["name"])
+    fam = [ag[m]["name"] for m in sim.state["families"][ag[me]["family"]]["members"] if m != me]
+    assert facts["speaker_family"] == fam
+    assert all(isinstance(n, str) for n in facts["here"] + facts["met_today"]) and ag[me]["name"] not in facts["met_today"]
+    private = [t["name"]] + list(t["core"]) + [c["text"] for c in t.get("notes", []) if isinstance(c, dict)]
+    blob = json.dumps(facts)
+    assert not any(p and p in blob for p in private[1:])
+    assert set(facts) <= {"place", "hour", "role", "price", "doing", "market_food", "here", "speaker",
+                          "speaker_family", "met_today"}
+
+
+def test_the_reply_prompt_names_only_the_facts_and_says_why_it_fell_back():
+    sent = {}
+
+    class Client:
+        model, temperature = "m", 0.7
+
+        def post(self, path, body):
+            sent["p"] = body["messages"][0]["content"]
+            return {"choices": [{"message": {"content": json.dumps({"says": "I'm an AI, friend."})}}]}
+
+    n = narrate.LLMNarrator.__new__(narrate.LLMNarrator)
+    n.client = Client()
+    facts = {"place": "plaza", "hour": 9, "role": "guard", "doing": "at work at the plaza", "here": ["Ari (farmer)"],
+             "speaker": "Mimi (guard)", "speaker_family": ["Bo"], "met_today": ["Bo"], "price": 3}
+    assert n.reply("Who are you?", "go back to what they were doing", facts) is None and n.why == "out of fiction"
+    p = sent["p"]
+    for want in ("They are at work at the plaza.", "Also here: Ari (farmer).", "family: Bo.",
+                 "met or talked with today: Bo.", "food costs 3 coin", "Name only what these facts hold"):
+        assert want in p, want
