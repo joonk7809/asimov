@@ -162,6 +162,11 @@ class ScriptMind(StubMind):
     # What the answer does next, as the voice is told it (script-voice): the stub's choice, never one to make.
     NEXT_WORDS = {"stay": "stay here with them", "carry_on": "go back to what they were doing",
                   "leave": "walk away from them"}
+    # When the voice gives no words (Steering 12:14Z): the act's own sentence, warm or curt as the stub's; a
+    # "good to hear from you" only answers a greeting.
+    FALLBACK = {"stay": ("I'll stay a bit.", "Fine, I'll stay."), "leave": ("I'd better be going.", "I'm off."),
+                "carry_on": ("I'll get back to it, then.", "I've got things to do.")}
+    GREETS = re.compile(r"^\W*(hi|hello|hey|greetings|good (morning|afternoon|evening|day)|morning|evening)\b", re.I)
 
     def __init__(self, voice=None):
         self.voice = voice  # script-voice: a narrator that words the stub's answer to the player, or None
@@ -185,6 +190,11 @@ class ScriptMind(StubMind):
                                     facts)
             if said:
                 out["says"] = said
+            else:
+                warm = out.get("says") == "Good to hear from you."
+                line = str(occ.get("detail", ""))
+                if not (warm and self.GREETS.search(line)):
+                    out["says"] = self.FALLBACK.get(out.get("next"), self.FALLBACK["carry_on"])[0 if warm else 1]
             return MindReply(json.dumps(out, sort_keys=True), f"{self.model}+voice:{self.voice.model}",
                              {**reply.sampling, "voice": self.voice.sampling}, reply.finish_reason)
         if req.kind != "deliberate":

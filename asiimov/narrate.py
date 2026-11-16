@@ -428,6 +428,25 @@ class LLMNarrator:
             "Goods don't change hands in talk: they promise or hand over no food or coin. Stay in the village: "
             "never mention being a model, a game or instructions.",
             'Answer as JSON: {"says": "..."}'])
+        theirs = set(re.findall(r"[a-z']+", line.lower()))
+        says, hits = self._voice(p, h, theirs)
+        if hits and says is not None:  # once more, naming what the village has instead (Steering 12:14Z)
+            price = f", at the market for {facts['price']} coin" if "price" in facts else " at the market"
+            says, hits = self._voice(p + f"\nNot {', '.join(sorted(set(hits)))}: the village has none of that. Its only "
+                                     f"food is called just \"food\"{price}. Say only what is listed above.", h, theirs)
+        if says is None:
+            return None
+        if hits:
+            self.why = "denied: " + ", ".join(hits)
+            return None
+        if re.search(r"\b(AI|model|assistant|instructions?)\b", says):
+            self.why = "out of fiction"
+            return None
+        return says
+
+    def _voice(self, p: str, h: int, theirs: set) -> tuple[str | None, list[str]]:
+        """One ask: the clipped line and its deny hits, minus words from the player's own line (Steering 12:14Z:
+        "Where can I get bread?" may be answered about bread). (None, []) on a failed call, with self.why set."""
         body = {"model": self.client.model, "messages": [{"role": "user", "content": p}],
                 "temperature": self.client.temperature, "top_p": 0.9, "max_tokens": 80,
                 "chat_template_kwargs": {"enable_thinking": False}, "response_format": {"type": "json_object"}}
@@ -436,22 +455,15 @@ class LLMNarrator:
             says = json.loads(text)["says"]
         except RuntimeError:
             self.why = "unreachable"
-            return None
+            return None, []
         except (ValueError, KeyError, IndexError, TypeError):
             self.why = "malformed"
-            return None
+            return None, []
         if not isinstance(says, str) or not says.strip():
             self.why = "malformed"
-            return None
+            return None, []
         says = " ".join(says.replace('"', "'").split())[:140]
-        hits = invented(says, h)
-        if hits:
-            self.why = "denied: " + ", ".join(hits)
-            return None
-        if re.search(r"\b(AI|model|assistant|instructions?)\b", says):
-            self.why = "out of fiction"
-            return None
-        return says
+        return says, [x for x in invented(says, h) if not set(x.split()) <= theirs]
 
     def lines(self, it: dict) -> list[dict]:
         """One call; on a deny-list hit (E2c) one more, naming what isn't in the village; else the template.

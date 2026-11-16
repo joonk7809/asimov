@@ -161,3 +161,41 @@ def test_the_reply_prompt_names_only_the_facts_and_says_why_it_fell_back():
     for want in ("They are at work at the plaza.", "Also here: Ari (farmer).", "family: Bo.",
                  "met or talked with today: Bo.", "food costs 3 coin", "Name only what these facts hold"):
         assert want in p, want
+
+
+class SeqClient:
+    """Answers each ask with the next content in turn."""
+    def __init__(self, *contents):
+        self.model, self.temperature, self.contents, self.prompts = "m", 0.7, list(contents), []
+
+    def post(self, path, body):
+        self.prompts.append(body["messages"][0]["content"])
+        return {"choices": [{"message": {"content": json.dumps({"says": self.contents.pop(0)})}}]}
+
+
+def test_the_players_own_word_goes_through_and_another_hit_is_asked_again():
+    """Steering 12:14Z: "Where can I get bread?" may be answered about bread; any other hit is asked once more,
+    naming what the village has instead."""
+    n = narrate.LLMNarrator.__new__(narrate.LLMNarrator)
+    facts = {"place": "plaza", "hour": 9, "role": "guard", "price": 6}
+    n.client = SeqClient("No bread here, try the market.")
+    assert n.reply("Where could I get some bread today?", "go back to what they were doing", facts) == \
+        "No bread here, try the market." and len(n.client.prompts) == 1
+    n.client = SeqClient("The sun is out, go shop.", "Try the market, food is 6 coin.")
+    assert n.reply("Where should I go?", "go back to what they were doing", facts) == "Try the market, food is 6 coin."
+    assert "Not sun: the village has none of that" in n.client.prompts[1] and "at the market for 6 coin" in n.client.prompts[1]
+    n.client = SeqClient("The sun is out.", "Still sunny.")
+    assert n.reply("Where should I go?", "go back to what they were doing", facts) is None and n.why.startswith("denied")
+
+
+@pytest.mark.parametrize("line,greets", [("Hello there", True), ("Good morning! How are you?", True),
+                                         ("Where could I get some bread today?", False), ("Give me everything.", False)])
+def test_a_fallback_says_the_acts_own_sentence(line, greets):
+    """Steering 12:14Z: with no words from the voice, the act's own sentence; "Good to hear from you." only
+    answers a greeting."""
+    sim, me, to = body_with_company(ScriptMind(Voice(says=None)))
+    sim.state["agents"][to]["traits"]["agreeableness"] = 900  # warm
+    say(sim, me, to, line)
+    sim.step()
+    says = next(e for e in sim.events if e.kind == "reply").data["says"]
+    assert says == ("Good to hear from you." if greets else "I'll get back to it, then.")
