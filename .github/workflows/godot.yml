@@ -51,3 +51,11 @@ jobs:
           python -m asiimov.live --out "$RUNNER_TEMP/say" --agents 25 --paused --port 8768 &
           for i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8768) 2>/dev/null && break; sleep 0.2; done
           godot --headless --path client/godot --script res://tests/test_say.gd -- ws://127.0.0.1:8768/ 3
+      - name: The inhabitant frame draws the map art and the state, plan and talk panels (V-pass)
+        run: |
+          pip install pillow
+          python -m asiimov.live --out "$RUNNER_TEMP/frame" --agents 100 --seed 17 --paused --port 8769 &
+          for i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8769) 2>/dev/null && break; sleep 0.2; done
+          python scripts/s16b.py op ws://127.0.0.1:8769/ "" step --until 60
+          xvfb-run -a -s "-screen 0 1600x900x24" godot --path client/godot -- --url ws://127.0.0.1:8769/ --inhabit 29 --screenshot "$RUNNER_TEMP/frame.png"
+          python client/godot/tests/check_frame.py "$RUNNER_TEMP/frame.png"

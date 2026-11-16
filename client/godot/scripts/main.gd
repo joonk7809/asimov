@@ -12,6 +12,7 @@ const WorldModel := preload("res://scripts/world_model.gd")
 const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
 const Plan := preload("res://scripts/plan_queue.gd")
+const Art := preload("res://scripts/art.gd")
 const COLORS := {"sleep": Color(0.35, 0.35, 0.5), "home": Color(0.6, 0.6, 0.7), "work": Color(0.85, 0.6, 0.2),
 		"shop": Color(0.3, 0.7, 0.4), "socialize": Color(0.8, 0.4, 0.7), "rest": Color(0.5, 0.7, 0.9),
 		"explore": Color(0.9, 0.9, 0.5)}  # sim.py ACTIVITIES plus sleep; anything newer is drawn white
@@ -37,6 +38,7 @@ var map_rects := {}         # inhabitant: place name -> its rect on screen, for 
 
 
 func _ready() -> void:
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST  # pixel art stays crisp when scaled (V-pass)
 	var args := _args()
 	_build_ui()
 	if args.has("log"):
@@ -608,21 +610,44 @@ func _draw() -> void:
 	var k := minf((size.x - 40) / (hi.x - lo.x), (size.y - 100) / (hi.y - lo.y))
 	var origin := (size - Vector2(0, 60) - (hi - lo) * k) / 2.0  # centred above the bar
 	var to_screen := func(v: Vector2) -> Vector2: return (v - lo) * k + origin
-	var font := ThemeDB.fallback_font
+	_draw_ground(model.places, to_screen, lo, hi, k)
 	for name in model.places:
 		var r = model.places[name]["rect"]
 		var rect := Rect2(to_screen.call(Vector2(r[0], r[1])), Vector2(r[2], r[3]) * k)
-		draw_rect(rect, Color(0.25, 0.3, 0.25) if name.begins_with("home") else Color(0.3, 0.35, 0.45))
-		draw_string(font, rect.position + Vector2(2, 12), name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10)
+		if not Art.place(self, name, rect, _tile_px(k)):
+			draw_rect(rect, Color(0.25, 0.3, 0.25) if name.begins_with("home") else Color(0.3, 0.35, 0.45))
+		if not name.begins_with("home"):
+			Art.label(self, rect.position + Vector2(2, 12), name, 10)
 	var t := _tick_shown()
-	var at := {}  # several villagers at one anchor: spread them out so they don't stack
+	var at_anchor := {}  # a place's anchor -> its rect on screen: villagers there spread over the place
+	for name in model.places:
+		var r = model.places[name]["rect"]
+		var an = model.places[name]["anchor"]
+		at_anchor[Vector2(an[0], an[1])] = Rect2(to_screen.call(Vector2(r[0], r[1])), Vector2(r[2], r[3]) * k)
+	var vpx := maxf(k * 1.6, 9.0)
 	for a in model.agents:
 		var aid := int(a["id"])
 		var p := model.display_position(aid, t)
-		var n: int = at.get(p, 0)
-		at[p] = n + 1
-		var spot: Vector2 = to_screen.call(p) + Vector2((n % 5) * 5 - 10, (n / 5) * 5 - 5)
-		draw_circle(spot, 3.0, COLORS.get(model.state_at(aid, int(t))[3], Color.WHITE))
+		var spot: Vector2 = Art.spot_in(at_anchor[p], aid, vpx) if at_anchor.has(p) else to_screen.call(p)
+		var st = model.state_at(aid, int(t))
+		Art.villager(self, spot, str(a.get("role", "")), vpx, false, st[3] == "sleep")
+
+
+func _tile_px(k: float) -> float:
+	return maxf(k * 2.5, 8.0)  # one 16 px ground tile covers 2.5 m
+
+
+func _draw_ground(places: Dictionary, to_screen: Callable, lo: Vector2, hi: Vector2, k: float) -> void:
+	## Grass under the whole map, and dirt paths from the plaza to every place (drawing only).
+	var pad := Vector2(4, 4)
+	Art.ground(self, Rect2(to_screen.call(lo - pad), (hi - lo + pad * 2) * k), _tile_px(k))
+	if not places.has("plaza"):
+		return
+	var hub: Vector2 = to_screen.call(Vector2(places["plaza"]["anchor"][0], places["plaza"]["anchor"][1]))
+	for name in places:
+		if name != "plaza" and not name.begins_with("home"):  # homes sit on the grass: their paths were a web
+			var a = places[name]["anchor"]
+			Art.path(self, hub, to_screen.call(Vector2(a[0], a[1])), maxf(k * 1.2, 3.0))
 
 
 func _draw_inhabitant() -> void:
@@ -648,11 +673,14 @@ func _draw_inhabitant() -> void:
 	elif client.view.get("route") != null:
 		going = str(client.view["route"]["to"])
 	map_rects = {}
+	var to_screen := func(p: Vector2) -> Vector2: return (p - lo) * k + origin
+	_draw_ground(client.places, to_screen, lo, hi, k)
 	for name in client.places:
 		var r = client.places[name]["rect"]
 		var rect := Rect2((Vector2(r[0], r[1]) - lo) * k + origin, Vector2(r[2], r[3]) * k)
 		map_rects[name] = rect.grow(2)
-		draw_rect(rect, Color(0.25, 0.3, 0.25) if name.begins_with("home") else Color(0.3, 0.35, 0.45))
+		if not Art.place(self, name, rect, _tile_px(k)):
+			draw_rect(rect, Color(0.25, 0.3, 0.25) if name.begins_with("home") else Color(0.3, 0.35, 0.45))
 		if name == going:
 			draw_rect(rect, Color(0.5, 0.85, 0.6), false, 2.0)
 		var mine: bool = name == str(client.me.get("home", ""))
@@ -662,11 +690,14 @@ func _draw_inhabitant() -> void:
 		# others' labels overlap into noise. Public places keep their names.
 		var label: String = "you" if mine else ("family" if kin_homes.has(name) else ("" if name.begins_with("home") else name.replace("_", " ")))
 		if label != "":
-			draw_string(font, rect.position + Vector2(2, 12), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(rect.size.x - 2, 8.0), 10)
+			Art.label(self, rect.position + Vector2(2, 12), label, 10, Art.LABEL, maxf(rect.size.x - 2, 8.0))
 	draw_string(font, Vector2(origin.x, origin.y + (hi.y - lo.y) * k + 18), "Click a place to walk there.",
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.65, 0.75, 0.9))
 	var v: Dictionary = client.view
 	var at := (Vector2(v["pos"][0], v["pos"][1]) - lo) * k + origin
-	for i in v["present"].size():
-		draw_circle(at + Vector2((i % 5) * 5 - 10, (i / 5) * 5 + 6), 3.0, Color(0.7, 0.7, 0.7))
-	draw_circle(at, 5.0, COLORS.get(v["activity"], Color.WHITE))
+	var px := maxf(k * 2.2, 12.0)
+	var here: Rect2 = map_rects.get(str(v.get("place")), Rect2(at - Vector2(px, px), Vector2(px, px) * 2)).grow(-2)
+	for p in v["present"]:
+		Art.villager(self, Art.spot_in(here, int(p["id"]), px * 0.85), str(p.get("role", "")), px * 0.85, false,
+				bool(p.get("asleep", false)))
+	Art.villager(self, at, str(client.me.get("role", "")), px, true, bool(v["asleep"]))
