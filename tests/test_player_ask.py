@@ -346,3 +346,20 @@ def test_a_step_aimed_at_the_body_shows_its_intent_s_goal_never_the_first_action
     assert gifts, "no gift reached the body"
     assert all(e["data"].get("says") == "feed my friend" for e in gifts), gifts
     assert not any("SECRET" in json.dumps(e) for e in sent)
+
+
+def test_an_answer_after_the_asker_left_is_refused_and_says_so():
+    """aipt1 t66/t120 (Steering 11:49Z): a late agree to an asker who has walked off returned ok "said yes" while
+    nothing changed. Now it fails with the reason in words; the ask settles as before."""
+    sim, a, b, player = scene()
+    sim.step([])
+    ask = next(e for e in sim.events if e.kind == "ask" and e.actor == a)
+    x = sim.state["agents"][a]
+    x["place"] = next(p for p in sim.map["places"] if p != x["place"])  # walked off (a harness move)
+    food = sim.state["agents"][b]["inv"]["food"]
+    sim.step([{"kind": "act", "action": "agree", "target": a}])
+    r = next(e for e in sim.events if e.kind == "receipt" and e.actor == b and e.data["action"] == "agree")
+    assert not r.data["ok"] and r.data["why"] == "asker left"
+    settled = receipt_for(sim, a, ask.id)
+    assert not settled.data["ok"] and settled.data["why"] == "target not here" and r.id in settled.parents
+    assert sim.state["agents"][b]["inv"]["food"] == food and "asks" not in sim.state["player"]
