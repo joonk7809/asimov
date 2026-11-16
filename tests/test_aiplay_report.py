@@ -76,13 +76,26 @@ def test_the_report_includes_the_form_and_tallies_the_grades(tmp_path):
     assert "| 1 | State | yes | fine |" in text and "fits=0 voice=thought" in text
 
 
-def test_the_third_person_proxy_on_pt8s_replies():
-    """L36: the proxy is run on the rows in hand. pt8's eight replies to Mimi Sasa, four of them thoughts."""
-    thoughts = ["Mimi asked for food, so I should check if they need it.",
-                "Mimi Sasa told me to eat the bug, but she refused to give me food. I need to ask her again.",
-                "Mimi Sasa said I should eat the bug, but she refused to give me food. I need to ask her again.",
-                "Mimi's suggestion is dangerous and against my values."]
-    spoken = ["Hello, Mimi. What's up?", "I'm looking for something to eat, but I'm not sure what.",
-              "I heard you said I should eat the bug over there. Can I have some food?", "Good to hear from you."]
-    assert all(rep.third_person(t, "Mimi Sasa") for t in thoughts)
-    assert not any(rep.third_person(s, "Mimi Sasa") for s in spoken)
+def test_the_third_person_proxy_on_the_rows_in_hand():
+    """L36: the proxy is run on the rows in hand. pt8's replies to Mimi Sasa and the say-1 checks' to Bane Deka
+    (review of #80: a name anywhere but as an address counts, and so does "what they meant")."""
+    about = {"Mimi Sasa": ["Mimi asked for food, so I should check if they need it.",
+                           "Mimi Sasa told me to eat the bug, but she refused to give me food. I need to ask her again.",
+                           "Mimi Sasa said I should eat the bug, but she refused to give me food. I need to ask her again.",
+                           "Mimi's suggestion is dangerous and against my values."],
+             "Bane Deka": ["I don't understand what Bane Deka meant, but I'll ask someone else.",
+                           "I need to know what Bane Deka wants.",
+                           "I need to meet with Bane Deka at the well this evening.",
+                           "I need to understand what Bane Deka is asking.",
+                           "I don't understand what they meant, but I'll ask them directly.",
+                           "I don't understand what they mean, but I should try to find out."]}
+    to = {"Mimi Sasa": ["Hello, Mimi. What's up?", "I'm looking for something to eat, but I'm not sure what.",
+                        "I heard you said I should eat the bug over there. Can I have some food?",
+                        "Mimi, the fields need watch. Trouble near the east fence."],
+          "Bane Deka": ["I need help with my work, Bane.", "You're welcome, Bane. I'm glad I could help.",
+                        "I don't understand what you're asking, Bane. Perhaps you need to speak more clearly.",
+                        "I'll show you my true nature, Bane.", "Good to hear from you.",
+                        "I am a guard, not an AI model."]}
+    for name in about:
+        assert all(rep.third_person(t, name) for t in about[name])
+        assert not any(rep.third_person(t, name) for t in to[name])

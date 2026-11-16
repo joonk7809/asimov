@@ -35,12 +35,19 @@ def q(xs: list, p: float):
 
 
 def third_person(says: str, name: str) -> bool:
-    """A proxy for a thought shown as speech: the reply talks about the player by name, as a subject or an
-    owner ("Mimi asked...", "Mimi's suggestion"), not to them ("Hello, Mimi."). On pt8's 8 replies it marks
-    the 4 thoughts and none of the 4 spoken lines; the judge's `voice` grade is the reading."""
+    """A floor for thoughts shown as speech: the reply talks about the player, not to them. It names the
+    player anywhere but as an address ("Mimi asked...", "what Bane Deka meant"; not "Hello, Mimi." or
+    "Bane, come here"), or says "what they meant". A thought that never mentions the player ("I should check
+    the market") is not caught: the judge's `voice` grade is the reading. On pt8's 8 replies and the say-1
+    checks' 84 (results/s16b/say1) it marks the 11 that speak of the player and none of the 9 addresses."""
     first, rest = name.split()[0], " ".join(name.split()[1:])
     who = re.escape(first) + (rf"(?: {re.escape(rest)})?" if rest else "")
-    return re.search(rf"\b{who}(?:'s\b|’s\b| (?:asked|said|told|suggest|wants?|refused|is|was|has|gave|thinks?)\b)", says) is not None
+    for m in re.finditer(rf"\b{who}\b", says):
+        before, after = says[:m.start()].rstrip(), says[m.end():]
+        address = (not before or before[-1] in ",.!?;:") and (not after or after[0] in ",.!?")
+        if not address:
+            return True
+    return re.search(r"\bwhat (?:they|he|she) (?:meant|means?)\b", says) is not None
 
 
 def _mind_out(e: dict | None) -> dict:
@@ -191,7 +198,7 @@ def report(r: dict, m: dict, form: str | None, grades: dict | None) -> str:
            f"- **Line 6, pace:** {'PASS' if l6['pass'] else 'FAIL'}. Received to applied, n {l6['n']}: p50 {l6['p50']} s, p95 {l6['p95']} s, max {l6['max']} s (bar {LINE6_S:g} s at p95).",
            f"- **Line 7, reply time:** {'PASS' if l7['pass'] else 'FAIL'}. Click to reply, n {l7['n']}: p50 {l7['p50']} s, p95 {l7['p95']} s, max {l7['max']} s (bar {LINE7_S:g} s at p95).",
            f"- **Lines said:** {m['says']}; heard by the listener {m['says_heard']}; answered {m['says_replied']}. Lost: {m['says_lost'] or 'none'}.",
-           f"- **Replies that talk about the player, not to them (proxy):** {m['replies_third_person']} of {m['says_replied']}.",
+           f"- **Replies that speak of the player, not to them (a floor for thoughts shown as speech):** {m['replies_third_person']} of {m['says_replied']}.",
            f"- **Replies repeated word for word by the same villager:** {m['replies_repeated']}. Empty replies: {m['replies_empty']}.",
            f"- **Does talk lead anywhere:** in {m['replies_with_act_at_player']} of {m['says_replied']} replies the villager's own next act or plan was aimed at the player; "
            f"after {m['replies_then_acted_at_player']} they did act toward the player within {AFTER_TICKS} ticks (a visit, an ask, a gift or a sale); "

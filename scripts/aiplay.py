@@ -13,17 +13,26 @@ the agent can and can't see or do is the client's own UI (plan/ai-playtest.md).
     python scripts/aiplay.py resize DIR 1440x1100          # make the window bigger or smaller, as a person drags it
     python scripts/aiplay.py stop DIR                      # close the client (the player leaves) and the screen
 
+--relay is for a machine whose outbound TLS passes through a gateway with its own CA (a cloud container):
+Godot trusts only its bundled CAs, so the client connects to a local plain-WebSocket relay and Python, which
+trusts the system store, makes the wss:// leg.
+
 DIR holds session.json, input.jsonl (every command with its wall time), shots/NNNN.png and, with --record,
 session.mp4. Needs Xvfb, godot 4.3, python-xlib and pillow (and ffmpeg for --record).
 """
 import argparse
+import asyncio
 import json
 import os
+import re
 import shutil
 import signal
+import socket
+import ssl
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
 
 REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 SCREEN = (1600, 1600)  # the virtual screen; the client's window sits at its top left and can grow to this
@@ -69,8 +78,18 @@ def start(a):
         if os.path.exists(f"/tmp/.X11-unix/X{n}"):
             break
         time.sleep(0.1)
+    else:
+        raise SystemExit(f"Xvfb did not start; see {a.dir}/client.log")
+    url = a.url
+    if a.relay:
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        pids["relay"] = run([sys.executable, os.path.abspath(__file__), "relay", str(port), a.url])
+        url = f"ws://127.0.0.1:{port}{urlparse(a.url).path or '/'}"
+        time.sleep(0.5)
     cmd = ["godot", "--path", os.path.join(REPO, "client", "godot"), "--resolution", f"{w}x{h}", "--position", "0,0",
-           "--", "--url", a.url, "--inhabit", str(a.inhabit)]
+           "--", "--url", url, "--inhabit", str(a.inhabit)]
     env = {**os.environ, "DISPLAY": f":{n}"}
     pids["godot"] = run(cmd + (["--token", a.token] if a.token else []), env=env)
     if a.record:  # a small film of the whole session: what the agent saw, for a person to check
@@ -87,7 +106,7 @@ def start(a):
 
 def stop(a):
     s = _session(a.dir)
-    for name in ("ffmpeg", "godot", "xvfb"):  # ffmpeg first, so the film is closed properly
+    for name in ("ffmpeg", "godot", "relay", "xvfb"):  # ffmpeg first, so the film is closed properly
         pid = s["pids"].get(name)
         if pid:
             try:
@@ -97,6 +116,38 @@ def stop(a):
                 pass
     _log(a.dir, cmd="stop")
     os.replace(os.path.join(a.dir, "session.json"), os.path.join(a.dir, "session.stopped.json"))
+
+
+async def relay(port: int, url: str):
+    """Plain WebSocket on 127.0.0.1:port to `url`, byte for byte, with the upgrade request's Host rewritten."""
+    u = urlparse(url)
+    tls = u.scheme == "wss"
+
+    async def pipe(r, w):
+        try:
+            while data := await r.read(1 << 16):
+                w.write(data)
+                await w.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            w.close()
+
+    async def handle(r, w):
+        try:
+            ur, uw = await asyncio.open_connection(u.hostname, u.port or (443 if tls else 80),
+                                                   ssl=ssl.create_default_context() if tls else None)
+            head = await r.readuntil(b"\r\n\r\n")
+        except (OSError, asyncio.IncompleteReadError) as e:
+            print(f"relay: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            w.close()
+            return
+        host = u.hostname + (f":{u.port}" if u.port else "")
+        uw.write(re.sub(rb"(?im)^Host:[^\r]*", b"Host: " + host.encode(), head, count=1))
+        await asyncio.gather(pipe(r, uw), pipe(ur, w))
+
+    async with await asyncio.start_server(handle, "127.0.0.1", port, limit=1 << 16) as server:
+        await server.serve_forever()
 
 
 def resize(a):
@@ -226,6 +277,10 @@ def main(argv=None):
     p.add_argument("--size", default="1280x800", help="the client's window; the default is the project's own")
     p.add_argument("--record", action="store_true", help="film the session at 2 fps to DIR/session.mp4 (ffmpeg)")
     p.add_argument("--wait", type=float, default=8.0, help="seconds before the first screenshot")
+    p.add_argument("--relay", action="store_true", help="connect through a local relay (see above); for wss:// from a cloud container")
+    p = sub.add_parser("relay")
+    p.add_argument("port", type=int)
+    p.add_argument("url")
     p = sub.add_parser("shot")
     p.add_argument("dir")
     p.add_argument("--crop", help="X,Y,W,H: only this part of the window")
@@ -260,6 +315,8 @@ def main(argv=None):
         stop(a)
     elif a.cmd == "resize":
         resize(a)
+    elif a.cmd == "relay":
+        asyncio.run(relay(a.port, a.url))
     elif a.cmd == "shot":
         print(shot(a.dir, _session(a.dir), [int(x) for x in a.crop.split(",")] if a.crop else None))
     else:

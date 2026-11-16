@@ -20,7 +20,8 @@ don't depend on how the tester played.
    tick, `results/tools/live/pacer.py`). The pacer starts the world when the tester joins and pauses it
    when it leaves.
 2. **Tester:** `python scripts/aiplay.py start DIR --url wss://POD-8765.proxy.runpod.net/ --inhabit N
-   --token T --size 1440x900 --record`, then an agent that can read images follows the brief below, using
+   --token T --size 1440x900 --record` (add `--relay` from a cloud container, whose TLS gateway Godot doesn't
+   trust; the token is on godot's command line, visible in `ps`, which is fine on a private machine), then an agent that can read images follows the brief below, using
    only `aiplay.py` on DIR. `aiplay.py stop DIR` ends the session (the player leaves).
 3. **Report:** fetch the run directory, then `python scripts/aiplay_report.py RUN_DIR DIR` writes
    `rows.json` and `report.md`. A second agent grades `rows.json` by the rubric below into
