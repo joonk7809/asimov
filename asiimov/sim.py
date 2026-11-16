@@ -97,6 +97,7 @@ SPOKEN_CALLS = 8
 SPOKEN_LINE = (" Your reason is what you say back to them, aloud, in one line. Goods don't change hands in talk:"
                " if they want food or coin, they must ask you for it.")
 GIFTS = ("give_food", "give_coin")
+TALK_BARRED = GIFTS + ("steal",)  # say-2 (Steering 08:30Z): in a talk window, neither a gift to the speaker nor a theft
 # The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
 SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
@@ -161,7 +162,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "29"  # 29 = say-1 (#73): the player says a line to a villager, whose mind answers in words; on 28.
+ENGINE_VERSION = "30"  # 30 = say-2 (#75): a talk window bars a theft from the speaker too, and holds a running gift or theft; on 29.
 # 28 = G1-r supply-1: inputs last a day longer, supply runs wait for time off work, none when sick, a 3% gain held; on 27
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
@@ -933,6 +934,8 @@ class Sim:
     def _progress(self, a: dict, author: str, step: dict, holder: dict):
         """Advance the running step after the agent has acted this tick."""
         do, t = step["do"], step["target"]
+        if do in TALK_BARRED and t in self._talk_guard(a):
+            return  # say-2 (Steering 08:39Z): a gift or theft at a speaker waits out the talk window; no receipt, no time spent
         if do == "go" and a["place"] == step["place"] and not step["arrived"]:
             step["arrived"] = 1
             self._receipt(a, holder["event"], "go_to", True, "arrived", extra={"place": step["place"]})
@@ -1718,7 +1721,7 @@ class Sim:
                 dropped += 1
             elif do in PERSON_STEPS and self._target_error(a, target):
                 dropped += 1
-            elif do in GIFTS and target in no_gift:
+            elif do in TALK_BARRED and target in no_gift:
                 dropped += 1
             else:
                 steps.append({"do": do, "target": target if do in PERSON_STEPS else None})
@@ -1734,7 +1737,7 @@ class Sim:
             return self._sick_resolve(a, out, eid)
         action, target = out.get("action"), out.get("target")
         first = None
-        if action in GIFTS and target in no_gift:
+        if action in TALK_BARRED and target in no_gift:
             self._receipt(a, eid, action, False, "not in talk")
         elif action == "buy_food":
             self._buy(a, eid)

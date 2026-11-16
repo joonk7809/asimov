@@ -275,3 +275,76 @@ def test_the_neighbor_channel_gives_the_speaker_nothing_in_the_talk_window():
     t["talk_until"] = {}
     sim._neighbor_resolve(t, eid, me)
     assert t["override"]["do"] in S.GIFTS
+
+
+class Thief(StubMind):
+    """Answers a spoken line by stealing from the speaker, now and in its plan (the final recheck's #14/#18/#25)."""
+    def decide(self, req):
+        if S.SPOKEN_LINE.strip() in req.prompt:
+            who = req.view["occasion"]["who"]
+            from asiimov.minds import MindReply
+            out = {"action": "steal", "target": who, "reason": "Let's meet, then.", "goal": "rob them",
+                   "then": [{"do": "seek", "target": who}, {"do": "steal", "target": who}]}
+            return MindReply(json.dumps(out, sort_keys=True), "thief", {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_the_talk_window_bars_a_theft_from_the_speaker_now_or_in_the_plan():
+    """Steering 08:30Z (say-2): a steal at a speaker in the window fails "not in talk", and a steal step is dropped."""
+    mind = Thief()
+    sim, me, to = body_with_company(mind)
+    sim.state["agents"][me]["inv"]["food"] = 5
+    n0 = len(sim.events)
+    say(sim, me, to, "Let's meet at the well this evening.")
+    for _ in range(S.OCCASION_TICKS):
+        sim.step()
+    new = sim.events[n0:]
+    rs = [e for e in new if e.kind == "receipt" and e.actor == to and e.data["action"] == "steal"]
+    assert rs and all(e.data["why"] == "not in talk" for e in rs)
+    sets = [e for e in new if e.kind == "intent_set" and e.actor == to]
+    assert sets and all(not (s["do"] == "steal" and s["target"] == me) for e in sets for s in e.data["steps"])
+
+
+def _intent_at(sim, a, do, target):
+    """An intent formed before the talk, its first step a gift or theft at `target` (review of #75's scene)."""
+    eid = sim._emit("intent_set", "rule", a["id"], {"goal": "x", "steps": [{"do": do, "target": target}], "dropped": 0}, [])
+    a["intent"] = {"goal": "x", "steps": [{"do": do, "target": target}], "i": 0, "event": eid,
+                   "tick": sim.state["tick"], "left": S.STEP_TICKS.get(do, S.DEFAULT_STEP_TICKS)}
+
+
+@pytest.mark.parametrize("do", ["steal", "give_food"])
+def test_a_running_step_at_the_speaker_waits_out_the_talk_window_then_runs(do):
+    """Steering 08:39Z: a step already running waits in the window (no receipt, no time spent), then runs; a
+    new line reopens the window and it keeps waiting."""
+    sim, me, to = body_with_company(StubMind())
+    ag = sim.state["agents"]
+    t = ag[to]
+    t["inv"]["food"], ag[me]["inv"]["food"] = 5, 5
+    say(sim, me, to, "hello")
+    t["occasion"] = None
+    _intent_at(sim, t, do, me)
+    left = t["intent"]["left"]
+    until = t["talk_until"][str(me)]
+
+    def held(n):
+        for _ in range(n):
+            sim._progress(t, "intent", t["intent"]["steps"][0], t["intent"])
+            assert t["intent"] is not None and t["intent"]["i"] == 0 and t["intent"]["left"] == left
+
+    n0 = len(sim.events)
+    held(3)
+    assert not any(e.actor == to and e.kind in ("receipt", "intent_failed", "intent_step") for e in sim.events[n0:])
+    # A new line before the window closes reopens it: still waiting past the old end.
+    sim.state["tick"] = until - 1
+    sim._acts, sim._acted = {}, set()
+    eid = sim._player({"kind": "act", "action": "say", "target": to, "text": "still here"})
+    sim._acts.clear()
+    sim._say(ag[me], eid, to)
+    sim.state["tick"] = until + 1
+    held(2)
+    # Once the window closes the step runs as before.
+    sim.state["tick"] = t["talk_until"][str(me)]
+    t["place"] = ag[me]["place"]
+    n1 = len(sim.events)
+    sim._progress(t, "intent", t["intent"]["steps"][0], t["intent"])
+    assert any(e.actor == to and e.kind in ("receipt", "intent_failed", "intent_step") for e in sim.events[n1:])
