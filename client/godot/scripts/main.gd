@@ -733,6 +733,9 @@ func _draw_inhabitant() -> void:
 	var at := (Vector2(v["pos"][0], v["pos"][1]) - lo) * k + origin
 	var px := maxf(k * 2.2, 12.0)
 	var here: Rect2 = map_rects.get(str(v.get("place")), Rect2(at - Vector2(px, px), Vector2(px, px) * 2)).grow(-2)
+	var seen := _map_view(size).grow(-px)
+	if here.intersects(seen):  # zoomed in, a big place runs off the column: spread the people over what shows
+		here = here.intersection(seen)
 	drawn_at = {}
 	for p in v["present"]:
 		var spot := Art.spot_in(here, int(p["id"]), px * 0.85)
@@ -747,6 +750,10 @@ func _draw_inhabitant() -> void:
 	Art.label(self, Vector2(12, size.y - 10), "Click a place to walk there. Scroll the map to zoom.", 13, Color(0.75, 0.82, 0.95))
 
 
+func _map_view(size: Vector2) -> Rect2:
+	return Rect2(0, 0, MAP_W, size.y - 30)  # the map's column above its hint line
+
+
 func _draw_bubbles() -> void:
 	## V3: each line over its speaker for BUBBLE_S seconds, fading out; a line to you is warm yellow.
 	var now := Time.get_ticks_msec() / 1000.0
@@ -754,7 +761,9 @@ func _draw_bubbles() -> void:
 	var font := ThemeDB.fallback_font
 	var fs := 13
 	# At most 4 at once, so a busy plaza stays readable: lines to you first, then yours, then the newest.
-	var shown := bubbles.filter(func(b): return now >= b["born"] and drawn_at.has(b["who"]))
+	var seen := _map_view(get_viewport_rect().size)
+	# Only over a speaker drawn inside the map's column (review of #76): the line is in "Said near you" anyway.
+	var shown := bubbles.filter(func(b): return now >= b["born"] and drawn_at.has(b["who"]) and seen.has_point(drawn_at[b["who"]]))
 	shown.sort_custom(func(x, y): return [int(x["to_me"]), int(x["mine"]), x["born"]] > [int(y["to_me"]), int(y["mine"]), y["born"]])
 	var placed := []
 	for b in shown.slice(0, 4):
