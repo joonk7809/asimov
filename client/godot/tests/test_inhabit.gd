@@ -8,6 +8,7 @@ extends SceneTree
 
 const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
+const Plan := preload("res://scripts/plan_queue.gd")
 const VIEW_KEYS := ["tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan",
 		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent", "asks"]
 
@@ -111,6 +112,18 @@ func _init() -> void:
 	if not ("[b]Ari[/b] \u2192 Bo: \u201cMorning.\u201d" in h3 and "[i]Bo, to themself: Long day.[/i]" in h3
 			and "[b]Ari[/b] \u2192 you:" in h3):
 		printerr("addressees don't read right: %s" % h3)
+		quit(1)
+		return
+	# AI playtest 1: no ids in the player's mind line; a lost line says so; a market trip that bought ends a queued buy.
+	var mind := Words.status({"tick": 50, "place": "plaza", "route": null, "activity": "work", "asleep": false, "hunger": 100,
+			"food": 1, "coin": 3, "role": "guard", "occasion": {"text": "Bane Deka (#0) asked you for food"}}, {"id": 3, "name": "Me"}, 144)
+	var lost := Words.describe({"kind": "receipt", "actor": 3, "origin": "rule", "tick": 50,
+			"data": {"action": "say", "ok": false, "why": "target not here", "to": 4}}, {"id": 3, "name": "Me"}, {4: "Ari"})
+	var trip := [{"kind": "receipt", "data": {"ok": true, "why": "bought", "action": "buy_food"}}]
+	if "(#0)" in mind or not "Bane Deka asked you for food" in mind or not "didn't reach Ari" in lost \
+			or not Plan.bought(Plan.step("go_market"), trip) or Plan.bought(Plan.step("buy_food"), trip) \
+			or Plan.bought(Plan.step("go_market"), [{"kind": "receipt", "data": {"ok": true, "why": "no stock"}}]):
+		printerr("aipt1 words: %s | %s" % [mind, lost])
 		quit(1)
 		return
 	me.heard.connect(func(m): heard_n += 1)
