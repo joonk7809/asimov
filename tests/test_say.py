@@ -406,3 +406,24 @@ def test_a_line_said_does_not_settle_an_ask_waiting_on_the_player():
     assert [q["event"] for q in asks] == [qid]
     sim.step([{"kind": "act", "action": "decline", "target": to}])
     assert qid not in [q["event"] for q in sim.state["player"].get("asks", [])]
+
+
+@pytest.mark.parametrize("nxt", ["stay", "leave"])
+def test_an_answer_never_replaces_a_running_override(nxt):
+    """Review of #78: a villager home sick (or on a trade run, or a rule's step) that answers stay or leave keeps
+    its override; words never send a sick villager back to work."""
+    class Answers(StubMind):
+        def decide(self, req):
+            if req.kind == "answer":
+                return MindReply(json.dumps({"says": "Mm.", "next": nxt}), "t", {}, "stop")
+            return super().decide(req)
+
+    sim, me, to = body_with_company(Answers())
+    t = sim.state["agents"][to]
+    eid = sim._emit("intent_set", "rule", to, {"goal": "x", "steps": [], "dropped": 0}, [])
+    home = {"do": "home", "target": None, "event": eid, "left": 62}
+    say(sim, me, to, "How are you feeling?")
+    t["override"] = dict(home)  # set between the line and its answer: a set-off home walks away before the say lands
+    sim.step()
+    assert next(e for e in sim.events if e.kind == "reply").data["next"] == nxt
+    assert t["override"]["do"] == "home" and t["override"]["event"] == eid

@@ -2141,6 +2141,8 @@ class Sim:
         away from the speaker for as long; carry_on goes on as before. Goods never move in an answer."""
         self._reply(a, occ, eid, out)
         nxt = (out or {}).get("next")
+        if a["override"] is not None:  # review of #78: a running override (a sick day home, a trade, a rule's step)
+            return                     # already holds it; words never undo it
         if nxt == "stay":
             a["override"] = {"do": "stay", "target": None, "place": self._dest(a), "event": eid, "left": OCCASION_TICKS}
         elif nxt == "leave" and isinstance(occ.get("who"), int):
