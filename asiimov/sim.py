@@ -94,7 +94,10 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 SAY_ACTS = ("say",)
 SAY_MAX = 140
 SPOKEN_CALLS = 8
-SPOKEN_LINE = (" Your reason is what you say back to them, aloud, in one line. Goods don't change hands in talk:"
+# say-3 (pt8, Steering 2026-11-16 10:40Z): the reason stays private; the words said back are their own field.
+# The 8B wrote the reason as reasoning about the speaker ("Mimi asked for food, so I should check"), heard as speech.
+SPOKEN_LINE = (' Also put in "says" the one line you say back to them, aloud, to them, as you would say it.'
+               " Your reason is private: they never hear it. Goods don't change hands in talk:"
                " if they want food or coin, they must ask you for it.")
 GIFTS = ("give_food", "give_coin")
 TALK_BARRED = GIFTS + ("steal",)  # say-2 (Steering 08:30Z): in a talk window, neither a gift to the speaker nor a theft
@@ -162,7 +165,8 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "30"  # 30 = say-2 (#75): a talk window bars a theft from the speaker too, and holds a running gift or theft; on 29.
+ENGINE_VERSION = "say-3"  # say-3: a spoken answer's words are its own `says` field, the reason stays private; on 30
+# 30 = say-2 (#75): a talk window bars a theft from the speaker too, and holds a running gift or theft; on 29.
 # 28 = G1-r supply-1: inputs last a day longer, supply runs wait for time off work, none when sick, a 3% gain held; on 27
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
@@ -2120,8 +2124,8 @@ class Sim:
     def _reply(self, a: dict, occ: dict, eid: int, out: dict | None):
         """A spoken occasion's answer in words (say-1): the deliberation's reason, as said aloud to the
         speaker. Emitted before the reply's act applies. No words if the reply has none."""
-        reason = (out or {}).get("reason")
-        says = reason.strip()[:200] if isinstance(reason, str) else ""
+        said = (out or {}).get("says")  # say-3: its own field, never the private reason; none means no words
+        says = " ".join(said.split())[:SAY_MAX] if isinstance(said, str) else ""
         self._emit("reply", "rule", a["id"], {"with": occ["who"], "says": says}, [eid])
         if says:
             quoted = _quotable(says, 200)

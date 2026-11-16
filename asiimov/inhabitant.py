@@ -144,7 +144,8 @@ def says(log, e: dict, aid: int) -> str | None:
         if p.origin == "mind":
             out = _parse(p.mind or {}) or {}
             own = not step and out.get("action") == act and out.get("target") == aid
-            for k in (("reason", "goal") if own else ("goal",)):
+            # say-3: an answer to the player's line keeps its reason private; its own act shows the words said
+            for k in ((("says" if "says" in out else "reason"), "goal") if own else ("goal",)):
                 if isinstance(out.get(k), str) and out[k].strip():
                     return " ".join(out[k].split())[:SAYS_MAX]
             return None

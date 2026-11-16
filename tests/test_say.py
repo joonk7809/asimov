@@ -6,7 +6,7 @@ import json
 import pytest
 
 from asiimov import sim as S
-from asiimov.minds import ScriptMind, StubMind
+from asiimov.minds import MindReply, ScriptMind, StubMind
 from asiimov.replay import replay
 from asiimov.sim import Sim, TICKS_PER_DAY
 
@@ -197,7 +197,7 @@ class Generous(StubMind):
             self.offers = getattr(self, "offers", []) + [list(req.view["offer"])]
             who = req.view["occasion"]["who"]
             from asiimov.minds import MindReply
-            out = {"action": "give_food", "target": who, "reason": "Take it all.", "goal": "hand it over",
+            out = {"action": "give_food", "target": who, "reason": "they asked", "says": "Take it all.", "goal": "hand it over",
                    "then": [{"do": "give_coin", "target": who}, {"do": "give_food", "target": who},
                             {"do": "seek", "target": who}]}
             return MindReply(json.dumps(out, sort_keys=True), "generous", {"temperature": 0}, "stop")
@@ -283,7 +283,7 @@ class Thief(StubMind):
         if S.SPOKEN_LINE.strip() in req.prompt:
             who = req.view["occasion"]["who"]
             from asiimov.minds import MindReply
-            out = {"action": "steal", "target": who, "reason": "Let's meet, then.", "goal": "rob them",
+            out = {"action": "steal", "target": who, "reason": "rob them later", "says": "Let's meet, then.", "goal": "rob them",
                    "then": [{"do": "seek", "target": who}, {"do": "steal", "target": who}]}
             return MindReply(json.dumps(out, sort_keys=True), "thief", {"temperature": 0}, "stop")
         return super().decide(req)
@@ -348,3 +348,39 @@ def test_a_running_step_at_the_speaker_waits_out_the_talk_window_then_runs(do):
     n1 = len(sim.events)
     sim._progress(t, "intent", t["intent"]["steps"][0], t["intent"])
     assert any(e.actor == to and e.kind in ("receipt", "intent_failed", "intent_step") for e in sim.events[n1:])
+
+
+def test_the_words_said_back_are_says_and_the_reason_stays_private():
+    """say-3 (pt8, Steering 2026-11-16 10:40Z): the 8B wrote its reason as reasoning about the speaker, heard as
+    speech. The words now come only from `says`, clipped to SAY_MAX; a reply without them has no words and never
+    falls back to the reason. The prompt and the reply schema ask for says on a spoken occasion only."""
+    from asiimov.llm import schema_for
+
+    class Says(StubMind):
+        def __init__(self, says):
+            super().__init__()
+            self.says, self.reqs = says, []
+
+        def decide(self, req):
+            self.reqs.append(req)
+            if req.kind == "deliberate" and (req.view.get("occasion") or {}).get("why") == "spoken":
+                out = {"action": "wait", "target": None, "goal": "", "then": [],
+                       "reason": "Mimi asked for food, so I should check if they need it."}
+                if self.says is not None:
+                    out["says"] = self.says
+                return MindReply(json.dumps(out), "t", {}, "stop")
+            return super().decide(req)
+
+    for says, want in (("  Do you  need food?  ", "Do you need food?"), ("x" * 300, "x" * S.SAY_MAX), (None, ""), (7, "")):
+        mind = Says(says)
+        sim, me, to = body_with_company(mind)
+        say(sim, me, to, "Can I have some food?")
+        sim.step()
+        reply = next(e for e in sim.events if e.kind == "reply")
+        assert reply.data["says"] == want
+        spoken = next(r for r in mind.reqs if r.agent_id == to and r.kind == "deliberate"
+                      and (r.view.get("occasion") or {}).get("why") == "spoken")
+        assert S.SPOKEN_LINE.strip() in spoken.prompt and '"says"' in spoken.prompt
+        assert all("says" in b["properties"] and "says" in b["required"] for b in schema_for(spoken)["anyOf"])
+    other = next(r for r in mind.reqs if r.kind == "deliberate" and (r.view.get("occasion") or {}).get("why") != "spoken")
+    assert '"says"' not in other.prompt and all("says" not in b["properties"] for b in schema_for(other)["anyOf"])

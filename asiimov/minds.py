@@ -86,8 +86,10 @@ class StubMind:
         t, occ = v["traits"], v.get("occasion") or {}
         why, who = occ.get("why"), occ.get("who")
         if why == "spoken":  # say-1: a word back, warm or curt by agreeableness; it carries on as it was
-            return {"action": "wait", "target": None, "goal": "", "then": [],
-                    "reason": "Good to hear from you." if t["agreeableness"] > 500 else "I've got things to do."}
+            warm = t["agreeableness"] > 500
+            return {"action": "wait", "target": None, "goal": "", "then": [],  # say-3: the words in says
+                    "reason": "be friendly" if warm else "keep to myself",
+                    "says": "Good to hear from you." if warm else "I've got things to do."}
         if why == "person" and occ.get("detail") in ("like", "are fond of", "care about") and t["extraversion"] > 400:
             return {"action": "seek", "target": who, "reason": "good to see a friend", "goal": "spend time with a friend",
                     "then": [{"do": "socialize", "target": None}]}

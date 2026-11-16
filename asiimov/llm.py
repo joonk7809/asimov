@@ -81,6 +81,10 @@ def schema_for(req: MindRequest) -> dict:
         ids = _ids(req.view, key)
         if ids and action in offer:
             branches.append(_deliberate_branch([action], {"type": "integer", "enum": ids}, then))
+    if (req.view.get("occasion") or {}).get("why") == "spoken":  # say-3: the words said back, apart from the reason
+        for b in branches:  # no maxLength (xgrammar decodes ~15x slower with one); the engine clips to SAY_MAX
+            b["properties"]["says"] = {"type": "string"}
+            b["required"] = b["required"] + ["says"]
     return {"anyOf": branches}
 
 

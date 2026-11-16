@@ -201,7 +201,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "say-1": "72f25bb2d64cc327b74bb0611e2b72701b17a7a3b0b4d0e25916dbc8f6448689",  # the player's say, on 28, before its number; no say: only the engine field differs
           "29": "206f21041573c3ea0dfff4f1fe8de21ab90be2ab426077bafd0ab086c0b3952b",  # say-1 (#73), the player says a line; no say: only the engine field differs
           "say-2": "b60c73ac39c36f24162c7a8f4efcb08374d8efe493d6e3c43ae20ed71e20cc49",  # say-2: theft barred in a talk window, on 29, before its number; no say: only the engine field differs
-          "30": "a7e119f7285d75e164aaebef401ed44882fec20e46483bb9069b3b69584f65ac"}  # say-2 (#75), no theft or gift in a talk window; no say: only the engine field differs
+          "30": "a7e119f7285d75e164aaebef401ed44882fec20e46483bb9069b3b69584f65ac",  # say-2 (#75), no theft or gift in a talk window; no say: only the engine field differs
+          "say-3": "ab40deb5b201960554d8c5d8f1d5f13593e2ce20c4231c00cee20c2b73db7955"}  # say-3: a spoken answer's words in `says`, on 30, before its number; no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
