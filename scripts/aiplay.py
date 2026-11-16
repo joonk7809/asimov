@@ -7,6 +7,7 @@ the agent can and can't see or do is the client's own UI (plan/ai-playtest.md).
     python scripts/aiplay.py start DIR --url wss://POD-8765.proxy.runpod.net/ --inhabit 29 --token T
     python scripts/aiplay.py shot DIR                      # save the screen, print the PNG's path
     python scripts/aiplay.py click DIR X Y --shot 1.5      # click, wait 1.5 s, then a screenshot
+    python scripts/aiplay.py click DIR X Y --shot --crop 1030,0,410,900   # the screenshot is only that part
     python scripts/aiplay.py scroll DIR X Y 5              # 5 wheel notches down at X, Y (negative: up)
     python scripts/aiplay.py type DIR "hello there" --shot
     python scripts/aiplay.py key DIR Return
@@ -176,6 +177,11 @@ def resize(a):
     print(shot(a.dir, s))
 
 
+def _crop(text: str | None):
+    """X,Y,W,H in window pixels. A position read off a cropped image is X, Y further right and down."""
+    return [int(x) for x in text.split(",")] if text else None
+
+
 def shot(d: str, s: dict, crop=None) -> str:
     """The client's window, or a crop of it, as the next numbered PNG."""
     from PIL import Image
@@ -270,7 +276,7 @@ def do(a):
     _log(a.dir, **rec)
     if a.shot is not None:
         time.sleep(a.shot)
-        print(shot(a.dir, s))
+        print(shot(a.dir, s, _crop(a.crop)))
 
 
 def main(argv=None):
@@ -312,6 +318,7 @@ def main(argv=None):
             p.add_argument("keys", nargs="+")
         p.add_argument("--shot", type=float, nargs="?", const=1.0, default=None,
                        help="then wait this many seconds (default 1) and take a screenshot")
+        p.add_argument("--crop", help="with --shot: X,Y,W,H, only this part of the window")
     a = ap.parse_args(argv)
     if a.cmd == "start":
         for tool in ("Xvfb", "godot") + (("ffmpeg",) if a.record else ()):
@@ -325,7 +332,7 @@ def main(argv=None):
     elif a.cmd == "relay":
         asyncio.run(relay(a.port, a.url))
     elif a.cmd == "shot":
-        print(shot(a.dir, _session(a.dir), [int(x) for x in a.crop.split(",")] if a.crop else None))
+        print(shot(a.dir, _session(a.dir), _crop(a.crop)))
     else:
         do(a)
 

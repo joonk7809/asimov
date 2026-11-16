@@ -37,6 +37,10 @@ player can't either, and that is a finding. The world moves one tick (10 village
 while you are awake, and you get one action a tick. Keep `DIR/notes.md` as you go: the game clock, what
 you did, what you expected, what happened, and the screenshot number that shows it.
 
+Look at a fresh screenshot before each click: the layout shifts as villagers come and go. A position read
+off a cropped screenshot is the crop's X, Y further right and down in the window. Play the whole time you
+are given; if the game moves you on its own or seems stuck, note it and keep playing.
+
 Do these, in about this order, in the time you are given:
 1. **Orient.** From the screen alone: who are you, what do you need, what do you hold, where are you?
 2. **Move.** Walk to two places by clicking the map.
@@ -95,6 +99,9 @@ For each narrated item (`h…`):
 - `natural`: 1 if it reads like people talking, 0 if recited or stiff.
 
 ## Limits
+- Until the client keeps its buttons on screen at a crowded place, start the window tall (`--size
+  1440x1600`) and have the tester look at crops (`--crop 1030,0,410,1600` is the right-hand column). The
+  stub-world shakedown (2026-11-16) lost its first minutes finding that out.
 - One tester is one world: a world holds one player. Several testers need several worlds.
 - The tester is slower than a person (several seconds a look), so its feel for pace is weak; lines 6 and 7
   come from the log.
