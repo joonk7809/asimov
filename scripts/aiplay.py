@@ -87,7 +87,14 @@ def start(a):
             port = sock.getsockname()[1]
         pids["relay"] = run([sys.executable, os.path.abspath(__file__), "relay", str(port), a.url])
         url = f"ws://127.0.0.1:{port}{urlparse(a.url).path or '/'}"
-        time.sleep(0.5)
+        for _ in range(50):  # the client never retries a refused connect, so wait until the relay listens
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            raise SystemExit(f"the relay did not start; see {a.dir}/client.log")
     cmd = ["godot", "--path", os.path.join(REPO, "client", "godot"), "--resolution", f"{w}x{h}", "--position", "0,0",
            "--", "--url", url, "--inhabit", str(a.inhabit)]
     env = {**os.environ, "DISPLAY": f":{n}"}

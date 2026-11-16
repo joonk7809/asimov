@@ -95,6 +95,7 @@ def test_the_third_person_proxy_on_the_rows_in_hand():
           "Bane Deka": ["I need help with my work, Bane.", "You're welcome, Bane. I'm glad I could help.",
                         "I don't understand what you're asking, Bane. Perhaps you need to speak more clearly.",
                         "I'll show you my true nature, Bane.", "Good to hear from you.",
+                        "Thanks Bane.", "Hi Bane, want bread?", "Good morning Bane Deka!",
                         "I am a guard, not an AI model."]}
     for name in about:
         assert all(rep.third_person(t, name) for t in about[name])

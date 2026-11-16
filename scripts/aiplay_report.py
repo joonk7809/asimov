@@ -44,7 +44,8 @@ def third_person(says: str, name: str) -> bool:
     who = re.escape(first) + (rf"(?: {re.escape(rest)})?" if rest else "")
     for m in re.finditer(rf"\b{who}\b", says):
         before, after = says[:m.start()].rstrip(), says[m.end():]
-        address = (not before or before[-1] in ",.!?;:") and (not after or after[0] in ",.!?")
+        greeted = re.search(r"(?i)\b(?:hi|hello|hey|thanks|thank you|morning|afternoon|evening|night|bye|welcome)$", before)
+        address = (not before or before[-1] in ",.!?;:" or greeted) and (not after or after[0] in ",.!?")
         if not address:
             return True
     return re.search(r"\bwhat (?:they|he|she) (?:meant|means?)\b", says) is not None
