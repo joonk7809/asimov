@@ -27,13 +27,13 @@ def main(path: str) -> int:
     img = Image.open(path).convert("RGB")
     w, h = img.size
     fails = []
-    if colours(img, (0, 0, 340, 580)) < 40:
+    if colours(img, (0, 0, 420, 580)) < 40:
         fails.append("the map has no art (too few colours)")
-    greens = sum(n for n, (r, g, b) in _counts(img, (0, 0, 340, 580)) if g > r + 30 and g > b + 30)
+    greens = sum(n for n, (r, g, b) in _counts(img, (0, 0, 420, 580)) if g > r + 30 and g > b + 30)
     if greens < 20000:
         fails.append(f"the map has no grass ({greens} green pixels)")
     for name, box in {"state (You)": (880, 0, w, 180), "plan (Today's plan)": (880, 180, w, 240),
-                      "feed (What's happening)": (340, 0, 870, 60), "talk (Said near you)": (340, 480, 870, 540)}.items():
+                      "feed (What's happening)": (420, 0, 870, 60), "talk (Said near you)": (420, 480, 870, 560)}.items():
         n = text_pixels(img, box)
         if n < 60:
             fails.append(f"no {name} panel text ({n} light pixels)")
