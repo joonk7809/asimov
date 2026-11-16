@@ -25,6 +25,7 @@ import base64
 import hashlib
 import hmac
 import json
+import random
 import os
 import struct
 import sys
@@ -84,6 +85,7 @@ class LiveRunner:
                 lines = f.read().split(b"\n")[:-1]  # a torn last line was never acted on
             with open(self.side_path, "r+b") as f:
                 f.truncate(sum(len(l) + 1 for l in lines))
+        self.say_wall: dict = {}  # listener id -> wall time of the player's last line to it (script-voice)
         self.side = open(self.side_path, "a")
         self.inhabitant: dict | None = None  # {"client", "agent"} while an inhabitant is connected
         # E4: an inhabitant's act that arrives while a tick runs joins that tick at its fixed point. The server
@@ -105,7 +107,11 @@ class LiveRunner:
 
     # ------------------------------------------------------------------ sidecar
     def _side(self, kind: str, sync: bool = False, **data):
-        self.side.write(json.dumps({"wall": round(time.time(), 3), "kind": kind, **data}, sort_keys=True) + "\n")
+        wall = round(time.time(), 3)
+        act = data.get("act") or {}
+        if kind == "received" and act.get("action") == "say":  # script-voice: the click a held reply counts from
+            self.say_wall[act.get("target")] = wall
+        self.side.write(json.dumps({"wall": wall, "kind": kind, **data}, sort_keys=True) + "\n")
         self.side.flush()
         if sync:
             os.fsync(self.side.fileno())
@@ -639,6 +645,7 @@ class Hub:
         # pull_min seconds after the last one started, instead of waiting out the pace. None: never.
         self.pull_min, self.pull = pull_min, False
         self.pull_why = None  # "reply": the pull is for the answer to the player's line (pt8)
+        self.reply_hold = None  # script-voice: a ReplyHold, so the script's answers come as late as a mind's
         # E2 (plan/readable-world-spec.md): words for what the inhabitant sees, written after each tick into
         # narration.jsonl and sent as `heard`. Never part of the world: the log and replay don't see them.
         self.narrator = narrator
@@ -825,6 +832,8 @@ class Hub:
                 # pt8 (Steering 2026-11-16 10:40Z): a line said this tick is answered in the next one, so pull
                 # that tick too; the player's words would otherwise wait out the pace for their answer.
                 self.pull, self.pull_why = True, "reply"
+            if self.reply_hold is not None:
+                await self.reply_hold.hold(self.runner, events)
             for m, client, scope, _ in self.runner.leftover_late():  # came as the fixed point closed
                 ack = self.runner.submit(m, client=client, scope=scope)
                 if ack is None:
@@ -892,11 +901,42 @@ def _hello_error(m) -> str | None:
     return None
 
 
+
+class ReplyHold:
+    """script-voice (Steering 2026-11-16 10:18Z, plan/test16-live-rule.md): a scripted villager's reply to the
+    player is held until a delay drawn from the minds arm's frozen click-to-reply distribution has passed since
+    the click, so the script's answers don't come back faster than a mind's. Only the tick's fan-out waits;
+    the world log is untouched. Each draw is seeded and logged in runner.jsonl as `held`."""
+
+    def __init__(self, delays: list[float], seed: str):
+        if not delays or any(not (0 <= d <= 60) for d in delays):
+            raise ValueError("reply delays: a non-empty list of seconds in [0, 60]")
+        self.delays, self.rng = sorted(float(d) for d in delays), random.Random(f"reply-hold-{seed}")
+
+    async def hold(self, runner, events):
+        p = runner.sim.state.get("player")
+        if p is None:
+            return
+        for e in events:
+            if e.kind != "reply" or e.data.get("with") != p["agent"] or e.actor not in runner.say_wall:
+                continue
+            click = runner.say_wall.pop(e.actor)
+            drawn = self.rng.choice(self.delays)
+            wait = max(0.0, click + drawn - time.time())
+            runner._side("held", reply=e.id, listener=e.actor, drawn_s=drawn, wait_s=round(wait, 3))
+            if wait > 0:
+                await asyncio.sleep(wait)
+            # Review of #81: the `step` record is written before the hold, so a reader timing the reply from it
+            # would see the unheld time. `sent` is the wall the held reply actually went out; readers prefer it.
+            runner._side("sent", reply=e.id, tick=e.tick)
+
+
 async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, tps: float = 1.0,
                 paused: bool = False, started=None, token: str | None = None, pull_min: float | None = PULL_MIN_S,
-                narrator=None):
+                narrator=None, reply_hold=None):
     """Run the hub until cancelled. `started(port, hub)` is called once the socket listens."""
     hub = Hub(runner, tps, paused, token, pull_min, narrator)
+    hub.reply_hold = reply_hold
     server = await asyncio.start_server(hub.handle, host, port, limit=1 << 16)
     if started:
         started(server.sockets[0].getsockname()[1], hub)
@@ -948,6 +988,10 @@ def main(argv=None):
     ap.add_argument("--paused", action="store_true")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--script-voice", action="store_true",
+                    help="script mind only: the narrator words its answers to the player (script-voice)")
+    ap.add_argument("--reply-delays", help="JSON list of seconds: hold the script's answers to the player "
+                    "for a delay drawn from it (the minds arm's frozen click-to-reply distribution)")
     ap.add_argument("--pull-min", type=float, default=PULL_MIN_S,
                     help="an inhabitant's act runs the next tick this many seconds after the last at the soonest (E3); "
                          "negative: wait out the pace as before")
@@ -976,9 +1020,24 @@ def main(argv=None):
           f"engine {ENGINE_VERSION}, ws://{args.host}:{args.port}/", file=sys.stderr, flush=True)
     narrator = narrator_from_args(args, kind)
     print(f"narrator: {getattr(narrator, 'model', 'off')}", file=sys.stderr, flush=True)
+    hold = None
+    if args.script_voice or args.reply_delays:
+        if kind != "script":
+            raise SystemExit("--script-voice and --reply-delays are for --mind script")
+        if args.script_voice:
+            if not isinstance(narrator, narrate.LLMNarrator):
+                raise SystemExit("--script-voice needs a model narrator (--narrate-url and --narrate-model)")
+            mind.voice = narrator
+            mind.facts = lambda req: narrate.voice_facts(runner.sim, req.agent_id,
+                                                         (req.view.get("occasion") or {}).get("who"))
+            print(f"script voice: {narrator.model}", file=sys.stderr, flush=True)
+        if args.reply_delays:
+            with open(args.reply_delays) as f:
+                hold = ReplyHold(json.load(f), f"{args.seed}-{runner.sim.state['tick']}")
     try:
         asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token,
-                          pull_min=None if args.pull_min < 0 else args.pull_min, narrator=narrator))
+                          pull_min=None if args.pull_min < 0 else args.pull_min, narrator=narrator,
+                          reply_hold=hold))
     except KeyboardInterrupt:
         pass
     finally:
