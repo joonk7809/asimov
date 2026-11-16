@@ -100,13 +100,14 @@ def test_the_hold_waits_out_a_drawn_delay_from_the_click_and_logs_it():
     logged = []
     runner = SimpleNamespace(sim=SimpleNamespace(state={"player": {"agent": 3}}), say_wall={7: time.time()},
                              _side=lambda kind, **d: logged.append((kind, d)))
-    ev = SimpleNamespace(kind="reply", actor=7, id=11, data={"with": 3, "says": "hi"})
-    other = SimpleNamespace(kind="reply", actor=8, id=12, data={"with": 5, "says": "hi"})
+    ev = SimpleNamespace(kind="reply", actor=7, id=11, tick=42, data={"with": 3, "says": "hi"})
+    other = SimpleNamespace(kind="reply", actor=8, id=12, tick=42, data={"with": 5, "says": "hi"})
     h = ReplyHold([0.3], "17-42")
     t0 = time.monotonic()
     asyncio.run(h.hold(runner, [other, ev]))
     assert 0.25 <= time.monotonic() - t0 < 1.0
-    assert logged == [("held", {"reply": 11, "listener": 7, "drawn_s": 0.3, "wait_s": logged[0][1]["wait_s"]})]
+    assert logged == [("held", {"reply": 11, "listener": 7, "drawn_s": 0.3, "wait_s": logged[0][1]["wait_s"]}),
+                      ("sent", {"reply": 11, "tick": 42})]  # review of #81: the wall the held reply went out
     assert runner.say_wall == {}
     # Seeded: the same seed draws the same delays.
     d = [0.5, 1.0, 2.0, 4.0, 8.0]

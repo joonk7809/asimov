@@ -915,6 +915,9 @@ class ReplyHold:
             runner._side("held", reply=e.id, listener=e.actor, drawn_s=drawn, wait_s=round(wait, 3))
             if wait > 0:
                 await asyncio.sleep(wait)
+            # Review of #81: the `step` record is written before the hold, so a reader timing the reply from it
+            # would see the unheld time. `sent` is the wall the held reply actually went out; readers prefer it.
+            runner._side("sent", reply=e.id, tick=e.tick)
 
 
 async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, tps: float = 1.0,
