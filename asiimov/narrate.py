@@ -246,21 +246,15 @@ def items(sim, events, aid: int, recent: "Recent | None" = None) -> list[dict]:
                                  and recent.just_refused(sim, p) else ""}
                         for p in set(it["speakers"]) | {aid}}
         it["player"] = aid
-        # One topic per speaker from their own events (E2c, E2d): the best for each, with at most one routine
-        # trade topic in the exchange.
+        # At most one topic per speaker from their own events (E2c, E2d), and only one that touches the other
+        # speaker or the listener (pt8): family sickness or a bystander's trade is no longer offered.
         it["topics"] = []
         if recent is not None:
-            routine = False
             for p in it["speakers"]:
                 near = (set(it["speakers"]) | {aid}) - {p}
-                for w, t in recent.candidates(sim, p, near):
-                    if w != TOUCH:  # pt8 (joon: speech is to a person): only news that bears on the listener
-                        break
-                    if w == ROUTINE and routine:
-                        continue
-                    routine = routine or w == ROUTINE
-                    it["topics"].append({"who": p, "text": t})
-                    break
+                best = recent.candidates(sim, p, near)[:1]
+                if best and best[0][0] == TOUCH:  # pt8 (joon: speech is to a person): only news bearing on the listener
+                    it["topics"].append({"who": p, "text": best[0][1]})
     return out
 
 
