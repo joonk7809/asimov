@@ -296,7 +296,8 @@ def test_an_answer_never_steals_from_the_speaker_and_leave_walks_away():
     say(sim, me, to, "Let's meet at the well this evening.")
     sim.step()
     t = sim.state["agents"][to]
-    assert t["override"] == {"do": "avoid", "target": me, "event": t["override"]["event"], "left": t["override"]["left"]}
+    assert t["override"] == {"do": "avoid", "target": me, "event": t["override"]["event"], "left": t["override"]["left"],
+                             "talk": True}
     for _ in range(S.OCCASION_TICKS):
         sim.step()
     new = sim.events[n0:]
@@ -427,3 +428,95 @@ def test_an_answer_never_replaces_a_running_override(nxt):
     sim.step()
     assert next(e for e in sim.events if e.kind == "reply").data["next"] == nxt
     assert t["override"]["do"] == "home" and t["override"]["event"] == eid
+
+
+class Next(StubMind):
+    """Answers every spoken line with the given `next`."""
+    def __init__(self, nxt):
+        super().__init__()
+        self.nxt = nxt
+
+    def decide(self, req):
+        if req.kind == "answer":
+            return MindReply(json.dumps({"says": "Mm.", "next": self.nxt}), "t", {}, "stop")
+        return super().decide(req)
+
+
+def going_home(sim, to):
+    """Set after the line lands (player acts apply at the tick's end): the listener's plan sends it home now, so
+    only the hold keeps it where it is."""
+    t = sim.state["agents"][to]
+    assert t["place"] != t["home"] and t["intent"] is None
+    assert t["override"]["do"] == "stay" and t["override"]["talk"] and t["override"]["left"] == S.LISTEN_TICKS
+    t["plan"] = [{"activity": "home", "start_h": 0, "end_h": 24}]
+    sim._trade_due = lambda a: None  # no trade run cuts in outside a work block (a rule's override, not talk)
+    return t
+
+
+def test_a_listener_holds_still_after_a_line_then_carries_on():
+    """Steering 11:32Z: after a player's line lands the listener doesn't start moving for LISTEN_TICKS; carry_on
+    goes back to its plan when the hold ends."""
+    sim, me, to = body_with_company(Next("carry_on"))
+    say(sim, me, to, "Hello there.")
+    t = going_home(sim, to)
+    here = t["place"]
+    for _ in range(S.LISTEN_TICKS):  # the line lands as its tick ends; the next LISTEN_TICKS ticks hold
+        sim.step()
+        assert t["place"] == here and t["route"] is None
+    assert next(e for e in sim.events if e.kind == "reply" and e.actor == to).data["next"] == "carry_on"
+    sim.step()
+    assert t["override"] is None and t["route"] is not None and t["route"]["to"] == t["home"]
+
+
+def test_each_new_line_restarts_the_hold():
+    sim, me, to = body_with_company(Next("carry_on"))
+    say(sim, me, to, "Hello there.")
+    t = going_home(sim, to)
+    here = t["place"]
+    sim.step()
+    say(sim, me, to, "And another thing.")
+    assert t["override"]["left"] == S.LISTEN_TICKS
+    for _ in range(S.LISTEN_TICKS):
+        sim.step()
+        assert t["place"] == here and t["route"] is None
+    sim.step()
+    assert t["route"] is not None
+
+
+def test_leave_ends_the_hold_and_stay_lengthens_it():
+    sim, me, to = body_with_company(Next("leave"))
+    say(sim, me, to, "Hello there.")
+    t = going_home(sim, to)
+    sim.step()  # the answer: leave replaces the hold
+    assert t["override"]["do"] == "avoid" and t["override"]["target"] == me
+    sim, me, to = body_with_company(Next("stay"))
+    say(sim, me, to, "Hello there.")
+    t = going_home(sim, to)
+    here = t["place"]
+    for _ in range(S.OCCASION_TICKS - 1):
+        sim.step()
+        assert t["place"] == here and t["route"] is None
+
+
+def test_a_later_answer_can_turn_a_stay_into_leave():
+    """Review's residual on #78: talk's own holds give way to a later answer."""
+    mind = Next("stay")
+    sim, me, to = body_with_company(mind)
+    t = sim.state["agents"][to]
+    say(sim, me, to, "Hello there.")
+    sim.step()
+    assert t["override"]["do"] == "stay" and t["override"]["left"] > S.LISTEN_TICKS
+    mind.nxt = "leave"
+    say(sim, me, to, "Go away.")
+    sim.step()
+    assert t["override"]["do"] == "avoid" and t["override"]["target"] == me
+
+
+def test_no_hold_over_a_running_override():
+    sim, me, to = body_with_company(Next("carry_on"))
+    t = sim.state["agents"][to]
+    eid = sim._emit("intent_set", "rule", to, {"goal": "x", "steps": [], "dropped": 0}, [])
+    t["override"] = {"do": "work", "target": None, "event": eid, "left": 40}
+    say(sim, me, to, "Hello there.")
+    assert next(e for e in sim.events if e.kind == "said")  # it landed
+    assert t["override"]["do"] == "work" and t["override"]["event"] == eid

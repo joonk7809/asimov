@@ -93,6 +93,7 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 # and get SPOKEN_CALLS more calls a day than the usual cap, so a talk isn't met with silence.
 SAY_ACTS = ("say",)
 SAY_MAX = 140
+LISTEN_TICKS = 3  # say-3 (Steering 11:32Z): a listener stands still this long after a line lands, unless it leaves
 SPOKEN_CALLS = 8
 # say-3 (pt8; Steering 2026-11-16 10:40Z, re-scoped 10:57Z/11:04Z): a line said to a villager is answered by its
 # own request kind, `answer`, not the food deliberation: {"says": one line said back, "next": stay|carry_on|leave}.
@@ -2127,6 +2128,14 @@ class Sim:
         t["talk_until"] = win
         # Always heard: it replaces any pending occasion, at the listener's threshold.
         # The prompt gets the words only as one quoted, clipped field (Steering 05:28Z): no double quotes inside.
+        # The listening hold (Steering 11:32Z): it doesn't walk off for LISTEN_TICKS, and each new line restarts
+        # that. Only when no other override runs: a sick day home or a trade keeps going; an answer's leave walks.
+        ov = t["override"]
+        if ov is None:
+            t["override"] = {"do": "stay", "target": None, "place": t["place"], "event": sid, "left": LISTEN_TICKS,
+                             "talk": True}
+        elif ov.get("talk") and ov["do"] == "stay":
+            ov["left"] = max(ov["left"], LISTEN_TICKS)
         t["occasion"] = {"why": "spoken", "salience": t["cognition"]["deliberation_threshold"], "who": a["id"],
                          "event": sid, "detail": quoted, "tick": self.state["tick"]}
         return self._receipt(a, eid, "say", True, "said", extra={"to": target}, parents=[sid])
@@ -2141,12 +2150,13 @@ class Sim:
         away from the speaker for as long; carry_on goes on as before. Goods never move in an answer."""
         self._reply(a, occ, eid, out)
         nxt = (out or {}).get("next")
-        if a["override"] is not None:  # review of #78: a running override (a sick day home, a trade, a rule's step)
-            return                     # already holds it; words never undo it
+        if a["override"] is not None and not a["override"].get("talk"):  # review of #78: a running override (a sick
+            return  # day home, a trade, a rule's step) holds it; words never undo it. Talk's own holds they replace.
         if nxt == "stay":
-            a["override"] = {"do": "stay", "target": None, "place": self._dest(a), "event": eid, "left": OCCASION_TICKS}
+            a["override"] = {"do": "stay", "target": None, "place": self._dest(a), "event": eid, "left": OCCASION_TICKS,
+                             "talk": True}
         elif nxt == "leave" and isinstance(occ.get("who"), int):
-            a["override"] = {"do": "avoid", "target": occ["who"], "event": eid, "left": OCCASION_TICKS}
+            a["override"] = {"do": "avoid", "target": occ["who"], "event": eid, "left": OCCASION_TICKS, "talk": True}
 
     def _reply(self, a: dict, occ: dict, eid: int, out: dict | None):
         """A spoken occasion's answer in words (say-1): the deliberation's reason, as said aloud to the
