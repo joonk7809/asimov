@@ -14,13 +14,15 @@ const NOW := {"work": "Working", "shop": "Shopping", "socialize": "Seeing people
 		"rest": "Resting", "explore": "Exploring", "visit": "Visiting"}
 const SHORT := {"ask_kin": "ask family for food", "ask_food": "ask for food", "buy_from": "buy food", "steal": "steal food",
 		"give_food": "give food", "give_coin": "give a coin", "seek": "go to them", "avoid": "keep away",
-		"agree": "say yes", "decline": "say no"}
+		"agree": "say yes", "decline": "say no", "say": "say something"}
 const DOING := {"buy_food": "buy food", "go_market": "go to the market", "ask_kin": "ask family for food",
 		"ask_food": "ask for food", "buy_from": "buy food", "steal": "steal", "give_food": "give food",
 		"give_coin": "give a coin", "seek": "find someone", "avoid": "keep away", "work": "go to work",
 		"socialize": "see people", "home": "go home", "rest": "rest", "explore": "explore", "wait": "wait",
-		"agree": "say yes", "decline": "say no"}
+		"agree": "say yes", "decline": "say no", "say": "say something"}
 const WHY := {"heading to market": "you head to the market", "started": "you start", "waited": "you wait",
+		"said": "they heard you",
+		"not in talk": "goods don't change hands in talk",
 		"bought": "you buy %d food", "had enough": "you have enough food, so you buy none",
 		"not at market": "you aren't at the market", "not kin": "they aren't family",
 		"one act per tick": "only one action counts each tick; the first one did",
@@ -114,7 +116,9 @@ static func describe(e: Dictionary, me: Dictionary, names: Dictionary) -> String
 	## One line for an event the villager witnessed, or "" for bookkeeping it needn't read. Another's act aimed
 	## at this villager adds what that villager said of it, its own mind's words (the server's `says`).
 	var line := _line(e, me, names)
-	return line + said(e.get("data", {})) if line != "" else ""
+	if line == "" or e.get("kind") == "reply":  # a reply's `says` is its line already
+		return line
+	return line + said(e.get("data", {}))
 
 
 static func said(d: Dictionary) -> String:
@@ -181,6 +185,17 @@ static func _line(e: Dictionary, me: Dictionary, names: Dictionary) -> String:
 			if d.get("to") != null and int(d["to"]) == me_id:
 				return "%s %s. Say yes or no." % [a, what]
 			return "%s %s." % [a, what.replace("you", _who(d.get("to"), me_id, names))]
+		"said":  # say-1: words spoken aloud, the player's own included
+			return "%s say%s to %s: \u201c%s\u201d" % [a, "" if mine else "s", _who(d.get("with"), me_id, names),
+					str(d.get("text", "")).replace("[", "[lb]")]
+		"reply":  # say-1: a villager's answer to what was said to it
+			var w := str(d.get("says", ""))
+			if w == "":
+				return "%s doesn't answer." % a
+			var to_you: bool = d.get("with") != null and int(d["with"]) == me_id
+			var line := "%s answers%s: \u201c%s\u201d" % [a, "" if to_you else " " + _who(d.get("with"), me_id, names),
+					w.replace("[", "[lb]")]
+			return "[color=#f0c060]%s[/color]" % line if to_you else line
 		"plan_receipt":
 			return "You plan your day." if d.get("ok", false) else ""
 		"receipt":

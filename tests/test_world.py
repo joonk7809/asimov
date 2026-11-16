@@ -197,7 +197,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "pace-1": "f4101d303a04c7f4db9db4e0b3c6055da9fcfef04edc90a6a7c487c31a9aea9d",  # E4 player acts at a fixed point, on 26, before its number; no player: only the engine field differs
           "27": "aee18ad622951b9e03deefbf4067eca691ece557a0ac6377ffbde9fb56235bc2",  # E4 pace-1; only the engine field differs
           "supply-1": "2f70eeac6e909949eb6d35e0e0b0970ca594a35a2f5d215359a433605063348c",  # G1-r: inputs last a day longer, runs off work, none when sick; on 27, before its number
-          "28": "2b49daeed7ca48e16d454511eb400be45b70b844cc19d1f58649b7140f7da9fa"}  # G1-r supply-1; only the engine field differs
+          "28": "2b49daeed7ca48e16d454511eb400be45b70b844cc19d1f58649b7140f7da9fa",  # G1-r supply-1; only the engine field differs
+          "say-1": "72f25bb2d64cc327b74bb0611e2b72701b17a7a3b0b4d0e25916dbc8f6448689"}  # the player's say, on 28, before its number; no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
