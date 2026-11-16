@@ -5,6 +5,7 @@ StubMind is a deterministic, parameter-driven stand-in used until the GPU model 
 It is NOT the product's mind; it exists to exercise the pipeline and as a no-LLM baseline.
 """
 import json
+import re
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -158,6 +159,15 @@ class ScriptMind(StubMind):
             "give_coin": "Here's a coin for you.",
             "seek": "I wanted to see you."}
 
+    # The act as the voice is told it (script-voice): what the stub chose, in words, never a choice to make.
+    ACT_WORDS = {"wait": "do nothing just now", "work": "go back to work", "home": "go home", "eat": "eat",
+                 "seek": "go and find someone", "avoid": "keep away from someone", "buy": "buy food at the market",
+                 "buy_from": "offer to buy food", "ask_food": "ask for food", "ask_kin": "ask family for food",
+                 "socialize": "stay and chat", "rest": "rest", "explore": "wander off for a while"}
+
+    def __init__(self, voice=None):
+        self.voice = voice  # script-voice: a narrator that words the stub's reply to the player, or None
+
     def decide(self, req: MindRequest) -> MindReply:
         reply = super().decide(req)
         if req.kind != "deliberate":
@@ -165,6 +175,19 @@ class ScriptMind(StubMind):
         out = json.loads(reply.raw_output)
         if out.get("action") in self.SAYS:
             out["reason"] = self.SAYS[out["action"]]
+        occ = req.view.get("occasion") or {}
+        if self.voice is not None and occ.get("why") == "spoken":
+            # script-voice (Steering 2026-11-16 10:18Z): the stub's act stays; the narrator words the answer from
+            # the player's line, that act and the place facts only (no soul, no diary). The line is this mind's
+            # output, so the log records it and a replay serves it back: replay stays exact.
+            m = re.search(r"You are at ([a-z_0-9]+)\.", req.prompt)
+            said = self.voice.reply(str(occ.get("detail", "")), self.ACT_WORDS.get(out.get("action"), "carry on"),
+                                    {"place": m.group(1) if m else None, "hour": req.view.get("hour", 12),
+                                     "role": req.view.get("role")})
+            if said:
+                out["reason"] = said
+            return MindReply(json.dumps(out, sort_keys=True), f"{self.model}+voice:{self.voice.model}",
+                             {**reply.sampling, "voice": self.voice.sampling}, reply.finish_reason)
         kinds = [out.get("action")] + [st.get("do") for st in out.get("then") or []]
         lead = next((k for k in kinds if k in self.SAYS), None)
         if out.get("then") and lead is not None:  # an intent's steps aimed at the player show its goal
