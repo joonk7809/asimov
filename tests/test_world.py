@@ -199,8 +199,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "supply-1": "2f70eeac6e909949eb6d35e0e0b0970ca594a35a2f5d215359a433605063348c",  # G1-r: inputs last a day longer, runs off work, none when sick; on 27, before its number
           "28": "2b49daeed7ca48e16d454511eb400be45b70b844cc19d1f58649b7140f7da9fa",  # G1-r supply-1; only the engine field differs
           "say-1": "72f25bb2d64cc327b74bb0611e2b72701b17a7a3b0b4d0e25916dbc8f6448689",  # the player's say, on 28, before its number; no say: only the engine field differs
-          "29": "206f21041573c3ea0dfff4f1fe8de21ab90be2ab426077bafd0ab086c0b3952b",
-          "say-2": "b60c73ac39c36f24162c7a8f4efcb08374d8efe493d6e3c43ae20ed71e20cc49"}  # say-2: theft barred in a talk window, on 29, before its number; no say: only the engine field differs  # say-1 (#73), the player says a line; no say: only the engine field differs
+          "29": "206f21041573c3ea0dfff4f1fe8de21ab90be2ab426077bafd0ab086c0b3952b",  # say-1 (#73), the player says a line; no say: only the engine field differs
+          "say-2": "b60c73ac39c36f24162c7a8f4efcb08374d8efe493d6e3c43ae20ed71e20cc49"}  # say-2: theft barred in a talk window, on 29, before its number; no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
