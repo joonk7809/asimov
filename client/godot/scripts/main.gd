@@ -34,6 +34,9 @@ var plan_state := ""        # the head step's state: "" (not sent), "wait", "hol
 var plan_act := -1          # the act event of the head step, once acked
 var plan_receipts := []     # receipts (and a seek's meet) so far that cite plan_act
 var plan_sent := 0          # the view tick the head step was sent at
+var plan_failed := 0        # the view tick the head step failed at (it is skipped a tick later)
+var last_said := {}         # inhabitant: villager id -> the last line said to them, put back if it didn't reach them
+var heard_recent := []      # inhabitant: keys of the last overheard exchanges, so a word-for-word repeat isn't shown
 var map_rects := {}         # inhabitant: place name -> its rect on screen, for clicks
 const MAP_W := 420          # inhabitant: the map's column; the feed and panels take the rest
 var zoom := 1.8             # inhabitant: map zoom (V4), wheel over the map; past 1 the map follows you
@@ -154,6 +157,16 @@ func _build_inhabit_ui() -> void:
 	side.offset_top = 8
 	side.offset_bottom = -12
 	ui["layer"].add_child(side)
+	# aipt1 (fix 1): a yes/no ask waits on you for a few ticks, then your habits answer. It sat among 25 action rows
+	# and was missed; it now comes first, above everything, with its own buttons.
+	var asked := RichTextLabel.new()
+	asked.bbcode_enabled = true
+	asked.fit_content = true
+	side.add_child(asked)
+	ui["asked"] = asked
+	var answers := VBoxContainer.new()
+	side.add_child(answers)
+	ui["answers"] = answers
 	ui["you"] = _panel(side, "You")
 	ui["plan"] = _panel(side, "Today's plan")
 	ui["here"] = _panel(side, "Here with you")
@@ -181,11 +194,6 @@ func _build_inhabit_ui() -> void:
 	head.text = "What you can do"
 	head.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
 	side.add_child(head)
-	var asked := RichTextLabel.new()
-	asked.bbcode_enabled = true
-	asked.fit_content = true
-	side.add_child(asked)
-	ui["asked"] = asked
 	var wait := Label.new()
 	wait.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	side.add_child(wait)
@@ -272,18 +280,33 @@ func _feed(evs: Array) -> void:
 		var line := Words.describe(e, client.me, names)
 		if line != "":
 			var at := "[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line]
-			ui["feed"].append_text(at)
+			_append(ui["feed"], at)
 			if e["kind"] in ["said", "reply"]:  # say-1: spoken words also go where talk is read
-				ui["said"].append_text(at)
+				_append(ui["said"], at)
 				var words := str(e["data"].get("text" if e["kind"] == "said" else "says", ""))
 				if words != "" and _caught_up:
 					_bubble(int(e["actor"]), words, e["data"].get("with") != null and int(e["data"]["with"]) == int(client.me["id"]), 0.0)
 
 
+func _append(panel: RichTextLabel, text: String) -> void:
+	## aipt1 fix 5: the log panels didn't follow new lines; show the newest after each one.
+	panel.append_text(text)
+	panel.scroll_to_line(maxi(0, panel.get_line_count() - 1))
+
+
 func _on_heard(m: Dictionary) -> void:
+	var said_lines := []
+	for x in m.get("lines", []):
+		said_lines.append([x.get("who"), x.get("text")])
+	var key := JSON.stringify(said_lines)
+	if heard_recent.has(key):
+		return  # aipt1 fix 5: 46 of 181 overheard lines repeated word for word; a repeat isn't shown again
+	heard_recent.append(key)
+	if heard_recent.size() > 40:
+		heard_recent.pop_front()
 	var line := Words.heard(m, client.ticks_per_day())
 	if line != "":
-		ui["said"].append_text(line + "\n")
+		_append(ui["said"], line + "\n")
 	var lines: Array = m.get("lines", [])
 	for i in lines.size():  # one after another, as a conversation is spoken; thinking aloud gets no bubble
 		if str(lines[i].get("to", "")) == "self":
@@ -326,6 +349,8 @@ func _on_inhabit_tick(m: Dictionary) -> void:
 				"sleep":
 					doing[int(e["actor"])] = "asleep"
 	_take_receipts(evs)
+	_plan_skip_failed()
+	_lost_lines(evs)
 	if say_once != "" and not v["asleep"]:
 		for p in v["present"]:
 			if not p.get("asleep", false):
@@ -344,6 +369,7 @@ func _on_early(m: Dictionary) -> void:
 		return  # the catch-up on the first tick reads seen_events, these included
 	_feed(m["events"])
 	_take_receipts(m["events"])
+	_lost_lines(m["events"])
 	_plan_run()
 	_refresh_inhabit()
 
@@ -373,11 +399,26 @@ func _take_receipts(evs: Array) -> void:
 				and not plan_receipts.any(func(r): return r["id"] == e["id"]):
 			plan_receipts.append(e)
 	var st := Plan.settle(plan_q[0], plan_receipts, int(client.view.get("tick", 0)) - plan_sent)
+	if st.begins_with("failed") and not plan_state.begins_with("failed"):
+		plan_failed = int(client.view.get("tick", 0))
 	plan_state = st
 	if st != "wait" and pending.get("step", false):
 		pending = {}
 	if st == "done":
+		var bought := Plan.bought(plan_q[0], plan_receipts)
 		_plan_pop()
+		if bought and not plan_q.is_empty() and plan_q[0]["action"] == "buy_food":
+			_plan_pop()  # aipt1 fix 2: the market trip bought on arrival; a queued buy would only fail "not offered"
+
+
+func _plan_skip_failed() -> void:
+	## aipt1 fix 3: a failed step showed its reason for a tick, then stayed at the head and blocked the plan until
+	## Clear. It now says why in the log and the plan goes on with the next step.
+	if not plan_state.begins_with("failed") or plan_q.is_empty() or int(client.view.get("tick", 0)) <= plan_failed:
+		return
+	var why := plan_state.trim_prefix("failed: ")
+	_append(ui["feed"], "[color=#e07070]Skipped in your plan: %s (%s).[/color]\n" % [plan_q[0]["label"], Words.WHY.get(why, why)])
+	_plan_pop()
 
 
 func _plan_pop() -> void:
@@ -453,13 +494,28 @@ func _say() -> void:
 	var t := who.get_selected_id()
 	pending = {"id": client.act("say", t, "", text), "label": "Say to %s" % names.get(t, "#%d" % t),
 			"tick": int(client.view["tick"])}
+	last_said[t] = text
 	ui["talk_line"].text = ""
 	_refresh_inhabit()
 
 
+func _lost_lines(evs: Array) -> void:
+	## aipt1 fix 4: a line that didn't reach its listener goes back in the box (the log says why).
+	for e in evs:
+		var d: Dictionary = e.get("data", {})
+		if e["kind"] == "receipt" and e.get("actor") != null and int(e["actor"]) == int(client.me["id"]) \
+				and str(d.get("action", "")) == "say" and not d.get("ok", false) and d.get("to") != null:
+			var t := int(d["to"])
+			if last_said.has(t) and str(ui["talk_line"].text) == "":
+				ui["talk_line"].text = last_said[t]
+				_append(ui["feed"], "[color=#8a93a6]Your line is back in the Talk box.[/color]\n")
+			last_said.erase(t)
+
+
 func _choose(action: String, target: int, place: String, label: String) -> void:
-	## A button or a map place: into the plan with "Plan ahead" on, else done now.
-	if ui["ahead"].button_pressed:
+	## A button or a map place: into the plan with "Plan ahead" on, else done now. A yes or no to an ask always
+	## goes now: it has a few ticks before your habits answer (aipt1 fix 3).
+	if ui["ahead"].button_pressed and not action in ["agree", "decline"]:
 		if plan_q.size() < Plan.MAX_STEPS:
 			plan_q.append(Plan.step(action, target, place, label))
 		_plan_run()
@@ -516,6 +572,8 @@ func _rebuild_menu() -> void:
 	var box: VBoxContainer = ui["menu"]
 	for c in box.get_children():
 		c.queue_free()
+	for c in ui["answers"].get_children():
+		c.queue_free()
 	if ahead:  # planning: the acts that name nobody can be lined up from anywhere; the engine checks each when it comes up
 		var row := HFlowContainer.new()
 		var lab := Label.new()
@@ -559,15 +617,15 @@ func _rebuild_menu() -> void:
 			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			box.add_child(b)
 			continue
-		if it["action"] in ["agree", "decline"]:  # the answer to an ask: its own row, first, in the ask's colour
+		if it["action"] in ["agree", "decline"]:  # the answer to an ask: its own row at the top (aipt1 fix 1)
+			b.disabled = not pending.is_empty()  # never queued behind a plan: it goes now (aipt1 fix 3)
 			if not rows.has("answer%d" % t):
 				var who := Label.new()
 				who.text = "Answer %s:" % names.get(t, "#%d" % t)
 				who.add_theme_color_override("font_color", Color(0.94, 0.75, 0.38))
 				rows["answer%d" % t] = HFlowContainer.new()
 				rows["answer%d" % t].add_child(who)
-				box.add_child(rows["answer%d" % t])
-				box.move_child(rows["answer%d" % t], 0)
+				ui["answers"].add_child(rows["answer%d" % t])
 			b.add_theme_color_override("font_color", Color(0.94, 0.75, 0.38))
 			rows["answer%d" % t].add_child(b)
 			continue

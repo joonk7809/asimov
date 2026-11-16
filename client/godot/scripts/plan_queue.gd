@@ -58,6 +58,12 @@ static func settle(s: Dictionary, evs: Array, waited := 0) -> String:
 	return st
 
 
+static func bought(s: Dictionary, evs: Array) -> bool:
+	## A market trip that bought on arrival (aipt1 fix 2): a buy_food queued right after it has nothing left to do.
+	return s["action"] == "go_market" and evs.any(func(e): return e.get("kind", "receipt") == "receipt" \
+			and e["data"].get("ok", false) and str(e["data"].get("why", "")) == "bought")
+
+
 static func lines(plan: Array, state: String, why_words: Dictionary) -> String:
 	## The plan as the player reads it: the step in hand marked, what's left after it, and why it stopped.
 	if plan.is_empty():
@@ -75,7 +81,7 @@ static func lines(plan: Array, state: String, why_words: Dictionary) -> String:
 					out.append("[b]> %s[/b]" % lab)
 				_:
 					var why := state.trim_prefix("failed: ")
-					out.append("[color=#e07070][b]x %s[/b]: %s. Retry or clear.[/color]" % [lab, why_words.get(why, why)])
+					out.append("[color=#e07070][b]x %s[/b]: %s. Skipped next tick; Retry keeps it.[/color]" % [lab, why_words.get(why, why)])
 		else:
 			out.append("   %d. %s" % [i + 1, lab])
 	return "\n".join(out)

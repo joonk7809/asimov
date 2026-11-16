@@ -218,6 +218,13 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Di
 		return line + (": " + answer + "." if answer != "" else ".")
 	if e.get("origin") == "rule" and why in ["heading to market", "started", "waited"] and d.get("ok", false):
 		return ""  # the activity line that follows says it
+	if str(d.get("action", "")) == "say" and not d.get("ok", false):  # aipt1: a lost line is said in the log
+		var gone := _who(d.get("to"), me_id, names) if d.get("to") != null else "them"
+		match why:
+			"target not here":
+				return "[color=#e07070]Your words didn't reach %s: they had left.[/color]" % gone
+			"target asleep":
+				return "[color=#e07070]%s is asleep and didn't hear you.[/color]" % gone.capitalize()
 	if str(d.get("action", "")) == "go_to":  # go-to-1: where you're walking, and when you'll be there
 		var where := place(d.get("place"), me)
 		if why == "arrived":
@@ -267,8 +274,15 @@ static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:
 	if v.has("market_food"):
 		lines.append("The market has %d food." % int(v["market_food"]))
 	if v.get("occasion") != null:
-		lines.append("[color=#f0c060]On your mind: %s.[/color]" % str(v["occasion"]["text"]))
+		lines.append("[color=#f0c060]On your mind: %s.[/color]" % no_ids(str(v["occasion"]["text"])))
 	return "\n".join(lines)
+
+
+static func no_ids(text: String) -> String:
+	## The engine's own " (#12)" after a name is for minds, not for the player (aipt1 0060).
+	var re := RegEx.new()
+	re.compile(" ?\\(#\\d+\\)")
+	return re.sub(text, "", true)
 
 
 static func needs(v: Dictionary) -> String:
