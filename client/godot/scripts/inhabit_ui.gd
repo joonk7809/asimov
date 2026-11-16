@@ -222,9 +222,9 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Di
 		var gone := _who(d.get("to"), me_id, names) if d.get("to") != null else "them"
 		match why:
 			"target not here":
-				return "[color=#e07070]Your words didn't reach %s: they had left. Your line is back in the Talk box.[/color]" % gone
+				return "[color=#e07070]Your words didn't reach %s: they had left.[/color]" % gone
 			"target asleep":
-				return "[color=#e07070]%s is asleep and didn't hear you. Your line is back in the Talk box.[/color]" % gone.capitalize()
+				return "[color=#e07070]%s is asleep and didn't hear you.[/color]" % gone.capitalize()
 	if str(d.get("action", "")) == "go_to":  # go-to-1: where you're walking, and when you'll be there
 		var where := place(d.get("place"), me)
 		if why == "arrived":

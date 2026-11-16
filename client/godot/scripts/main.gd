@@ -417,7 +417,7 @@ func _plan_skip_failed() -> void:
 	if not plan_state.begins_with("failed") or plan_q.is_empty() or int(client.view.get("tick", 0)) <= plan_failed:
 		return
 	var why := plan_state.trim_prefix("failed: ")
-	ui["feed"].append_text("[color=#e07070]Skipped in your plan: %s (%s).[/color]\n" % [plan_q[0]["label"], Words.WHY.get(why, why)])
+	_append(ui["feed"], "[color=#e07070]Skipped in your plan: %s (%s).[/color]\n" % [plan_q[0]["label"], Words.WHY.get(why, why)])
 	_plan_pop()
 
 
@@ -508,6 +508,7 @@ func _lost_lines(evs: Array) -> void:
 			var t := int(d["to"])
 			if last_said.has(t) and str(ui["talk_line"].text) == "":
 				ui["talk_line"].text = last_said[t]
+				_append(ui["feed"], "[color=#8a93a6]Your line is back in the Talk box.[/color]\n")
 			last_said.erase(t)
 
 
