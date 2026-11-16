@@ -22,6 +22,7 @@ const DOING := {"buy_food": "buy food", "go_market": "go to the market", "ask_ki
 		"agree": "say yes", "decline": "say no", "say": "say something"}
 const WHY := {"heading to market": "you head to the market", "started": "you start", "waited": "you wait",
 		"said": "they heard you",
+		"not in talk": "goods don't change hands in talk",
 		"bought": "you buy %d food", "had enough": "you have enough food, so you buy none",
 		"not at market": "you aren't at the market", "not kin": "they aren't family",
 		"one act per tick": "only one action counts each tick; the first one did",

@@ -94,7 +94,9 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 SAY_ACTS = ("say",)
 SAY_MAX = 140
 SPOKEN_CALLS = 8
-SPOKEN_LINE = " Your reason is what you say back to them, aloud, in one line. What you do should match what you say."
+SPOKEN_LINE = (" Your reason is what you say back to them, aloud, in one line. Goods don't change hands in talk:"
+               " if they want food or coin, they must ask you for it.")
+GIFTS = ("give_food", "give_coin")
 # The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
 SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
@@ -621,6 +623,8 @@ class Sim:
             drop.add("ask_kin")
         if "people" in view and not view["people"]:  # set by _situation; _request checks the offer again after it
             drop |= {"give_food", "give_coin", "seek", "avoid"}
+        if (view.get("occasion") or {}).get("why") == "spoken":  # say-1: talk moves no goods (Steering 06:45Z)
+            drop |= set(GIFTS)
         return [x for x in DELIBERATE_ACTIONS if x not in drop]
 
     def _market_belief(self, a: dict) -> str:
@@ -1601,7 +1605,8 @@ class Sim:
         view = self._view(a, occupancy)
         view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
         if occ["why"] == "spoken":  # the words first, then the act
-            apply = lambda eid, out, occ=occ: (self._reply(a, occ, eid, out), self._resolve(a, out, eid))
+            apply = lambda eid, out, occ=occ: (self._reply(a, occ, eid, out),
+                                               self._resolve(a, out, eid, no_gift_to=occ["who"]))
         else:
             apply = lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick)
         self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [], apply)
@@ -1699,8 +1704,9 @@ class Sim:
             return "no such person"
         return None
 
-    def _steps(self, a: dict, raw) -> tuple[list[dict], int]:
-        """The intent steps the world accepts from a reply's `then`, and how many it drops."""
+    def _steps(self, a: dict, raw, no_gift_to: int | None = None) -> tuple[list[dict], int]:
+        """The intent steps the world accepts from a reply's `then`, and how many it drops (a gift to
+        `no_gift_to` among them)."""
         steps, dropped = [], 0
         for st in raw if isinstance(raw, list) else []:
             do = st.get("do") if isinstance(st, dict) else None
@@ -1709,19 +1715,24 @@ class Sim:
                 dropped += 1
             elif do in PERSON_STEPS and self._target_error(a, target):
                 dropped += 1
+            elif no_gift_to is not None and do in GIFTS and target == no_gift_to:
+                dropped += 1
             else:
                 steps.append({"do": do, "target": target if do in PERSON_STEPS else None})
         return steps, dropped
 
-    def _resolve(self, a: dict, out: dict | None, eid: int, sick: bool = False):
+    def _resolve(self, a: dict, out: dict | None, eid: int, sick: bool = False, no_gift_to: int | None = None):
         """Apply a deliberation: the action happens now; with a goal, it and the `then` steps become an
-        intent that persists until done, failed or replaced."""
+        intent that persists until done, failed or replaced. An answer to a line said to it (say-1) never
+        gives to the speaker, now or in its plan (`no_gift_to`): goods change hands only by the player's asks."""
         out = out or {}
         if sick:  # the request's own occasion was the sick ask (sick-1)
             return self._sick_resolve(a, out, eid)
         action, target = out.get("action"), out.get("target")
         first = None
-        if action == "buy_food":
+        if no_gift_to is not None and action in GIFTS and target == no_gift_to:
+            self._receipt(a, eid, action, False, "not in talk")
+        elif action == "buy_food":
             self._buy(a, eid)
         elif action in INSTANT_STEPS:
             err = self._target_error(a, target)
@@ -1742,7 +1753,7 @@ class Sim:
         else:
             self._receipt(a, eid, str(action), False, "unparseable or unknown action")
         goal = out.get("goal").strip()[:120] if isinstance(out.get("goal"), str) else ""
-        then, dropped = self._steps(a, out.get("then"))
+        then, dropped = self._steps(a, out.get("then"), no_gift_to)
         steps = ([first] if first else []) + then
         if goal and steps:
             if a["intent"]:
