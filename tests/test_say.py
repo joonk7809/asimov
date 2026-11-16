@@ -384,3 +384,36 @@ def test_the_words_said_back_are_says_and_the_reason_stays_private():
         assert all("says" in b["properties"] and "says" in b["required"] for b in schema_for(spoken)["anyOf"])
     other = next(r for r in mind.reqs if r.kind == "deliberate" and (r.view.get("occasion") or {}).get("why") != "spoken")
     assert '"says"' not in other.prompt and all("says" not in b["properties"] for b in schema_for(other)["anyOf"])
+
+
+def test_an_answers_act_at_the_player_shows_no_private_reason():
+    """Review of #78: a mind answers the line with ask_food at the speaker and no says. The reply has no words,
+    and the ask shown to the player must not carry the private reason either (nor, with says, repeat it)."""
+    from asiimov import inhabitant
+
+    class Asks(StubMind):
+        def __init__(self, says):
+            super().__init__()
+            self.says = says
+
+        def decide(self, req):
+            occ = req.view.get("occasion") or {}
+            if req.kind == "deliberate" and occ.get("why") == "spoken":
+                out = {"action": "ask_food", "target": occ["who"], "goal": "get food", "then": [],
+                       "reason": "Mimi asked about food, so I should check if she has any to spare."}
+                if self.says is not None:
+                    out["says"] = self.says
+                return MindReply(json.dumps(out), "t", {}, "stop")
+            return super().decide(req)
+
+    for said in (None, "Have you any food to spare?"):
+        sim, me, to = body_with_company(Asks(said))
+        say(sim, me, to, "Do you have food?")
+        sim.step()
+        log = list(sim.events)
+        asks = [e for e in log if e.kind == "ask" and e.actor == to and e.data.get("to") == me]
+        assert asks, [e.kind for e in log if e.actor == to][-5:]
+        for a in asks:
+            seen = inhabitant.scrub(json.loads(a.to_json()), me, log)
+            assert "says" not in seen["data"], seen
+        assert next(e for e in log if e.kind == "reply").data["says"] == (said or "")
