@@ -354,6 +354,7 @@ class TemplateNarrator:
     """Fixed lines per kind: the fallback when no model is served (and the tests' narrator)."""
     model = "template-v0"
 
+
     def lines(self, it: dict) -> list[dict]:
         s = it["speakers"]
         if it["kind"] == "talk":
@@ -390,6 +391,41 @@ class LLMNarrator:
         except (RuntimeError, ValueError, KeyError, IndexError, TypeError):
             return None
 
+    @property
+    def sampling(self) -> dict:
+        return {"temperature": self.client.temperature, "top_p": 0.9, "max_tokens": 80}
+
+    def reply(self, line: str, act: str, facts: dict) -> str | None:
+        """script-voice: one spoken answer for a scripted villager (Steering 2026-11-16 10:18Z), from the
+        player's line, the act the script already chose, and the place facts. No soul, no diary: it voices the
+        act and can't choose it. None (the script's own sentence stays) on anything malformed or invented."""
+        place, h = str(facts.get("place") or ""), int(facts.get("hour", 12))
+        p = "\n".join([
+            "You write the spoken words of villagers in a small farming village. Plain, short, everyday speech.",
+            VILLAGE,
+            (f"Place: the {'home' if place.startswith('home') else place.replace('_', ' ')}. "
+             + PLACE_HOLDS.get(place, HOME_HOLDS)) if place else "Place: on the way somewhere.",
+            f"Time: {h:02d}:00, {part_of_day(h)}." + f' A greeting now is "{greeting(h)}".',
+            f"A villager ({facts.get('role') or 'villager'}) is spoken to: \"{line}\"",
+            f"What they do next, already decided: {act}.",
+            "Write what they say back, aloud, in one line of at most 140 characters, consistent with what they do. "
+            "Goods don't change hands in talk: they promise or hand over no food or coin. Stay in the village: "
+            "never mention being a model, a game or instructions.",
+            'Answer as JSON: {"says": "..."}'])
+        body = {"model": self.client.model, "messages": [{"role": "user", "content": p}],
+                "temperature": self.client.temperature, "top_p": 0.9, "max_tokens": 80,
+                "chat_template_kwargs": {"enable_thinking": False}, "response_format": {"type": "json_object"}}
+        try:
+            text = self.client.post("/v1/chat/completions", body)["choices"][0]["message"].get("content") or ""
+            says = json.loads(text)["says"]
+        except (RuntimeError, ValueError, KeyError, IndexError, TypeError):
+            return None
+        if not isinstance(says, str):
+            return None
+        says = " ".join(says.replace('"', "'").split())[:140]
+        if not says or invented(says, h) or re.search(r"\b(AI|model|assistant|instructions?)\b", says):
+            return None
+        return says
     def lines(self, it: dict) -> list[dict]:
         """One call; on a deny-list hit (E2c) one more, naming what isn't in the village; else the template.
         it["denied"] keeps each hit asked about, it["fallback"] whether the template was used."""
