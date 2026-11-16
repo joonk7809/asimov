@@ -257,6 +257,12 @@ def valid_blocks(out: dict | None) -> tuple[list[dict], int]:
     return blocks, dropped
 
 
+
+def _quotable(text: str, n: int) -> str:
+    """Words for inside one double-quoted prompt field (say-1): double quotes become single, clipped to n."""
+    return text.replace('"', "'")[:n]
+
+
 class Sim:
     def __init__(self, seed: int, n_agents: int, mind, genesis: dict | None = None,
                  expected: list[Event] | None = None, order: str = "id", workers: int = 1):
@@ -1570,12 +1576,15 @@ class Sim:
     def _maybe_deliberate(self, a: dict, occupancy: dict):
         """Ask the mind when there is an occasion: hunger with no food (always), or an appraised one."""
         tick = self.state["tick"]
-        calls = a["calls"]["n"] if a["calls"]["day"] == tick // TICKS_PER_DAY else 0
+        today = a["calls"]["day"] == tick // TICKS_PER_DAY
+        calls = a["calls"]["n"] if today else 0
         pending = a["occasion"] if a["occasion"] and tick - a["occasion"]["tick"] < OCCASION_TICKS else None
-        spoken = pending is not None and pending["why"] == "spoken"  # say-1: answered now, cooldown or not
+        # say-1: a line said to it is answered now, cooldown or not, from its own SPOKEN_CALLS a day. Past
+        # those, it waits like any other occasion.
+        spoken = pending is not None and pending["why"] == "spoken" \
+            and (a["calls"].get("spoken", 0) if today else 0) < SPOKEN_CALLS
         # Room is kept for this day's reflection and, after a late bedtime, a plan the same calendar day.
-        if not spoken and (tick < a["cooldown_until"] or calls >= DAILY_MIND_CALLS - 2) \
-                or spoken and calls >= DAILY_MIND_CALLS - 2 + SPOKEN_CALLS:
+        if not spoken and (tick < a["cooldown_until"] or calls >= DAILY_MIND_CALLS - 2):
             return
         trigger = 550 + a["cognition"]["deliberation_threshold"] // 3
         refused = pending is not None and pending["why"] == "refused"
@@ -1596,6 +1605,9 @@ class Sim:
         else:
             apply = lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick)
         self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [], apply)
+        if spoken:  # an answer to a line said to it counts in its own budget, never the villager's own calls
+            a["calls"]["n"] -= 1
+            a["calls"]["spoken"] = a["calls"].get("spoken", 0) + 1
 
     # ------------------------------------------------------------------ actions -> receipts
     def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None, parents=()):
@@ -2066,12 +2078,15 @@ class Sim:
         sid = self._emit("said", "rule", a["id"], {"with": target, "text": text, "place": a["place"]}, [eid])
         self._met(a, target)
         self._met(t, a["id"])
-        self._note(target, f'{a["name"]} said to me: "{text}"')
-        self._note(a["id"], f'I said to {t["name"]}: "{text}"')
+        # Every prompt that carries the words gets them as one quoted field: no double quotes inside (review
+        # of #73: memory reaches every later prompt that day, so it is swapped there too).
+        quoted = _quotable(text, SAY_MAX)
+        self._note(target, f'{a["name"]} said to me: "{quoted}"')
+        self._note(a["id"], f'I said to {t["name"]}: "{quoted}"')
         # Always heard: it replaces any pending occasion, at the listener's threshold.
         # The prompt gets the words only as one quoted, clipped field (Steering 05:28Z): no double quotes inside.
         t["occasion"] = {"why": "spoken", "salience": t["cognition"]["deliberation_threshold"], "who": a["id"],
-                         "event": sid, "detail": text.replace('"', "'")[:SAY_MAX], "tick": self.state["tick"]}
+                         "event": sid, "detail": quoted, "tick": self.state["tick"]}
         return self._receipt(a, eid, "say", True, "said", extra={"to": target}, parents=[sid])
 
     def _reply(self, a: dict, occ: dict, eid: int, out: dict | None):
@@ -2081,8 +2096,9 @@ class Sim:
         says = reason.strip()[:200] if isinstance(reason, str) else ""
         self._emit("reply", "rule", a["id"], {"with": occ["who"], "says": says}, [eid])
         if says:
-            self._note(a["id"], f'I told {self.state["agents"][occ["who"]]["name"]}: "{says}"')
-            self._note(occ["who"], f'{a["name"]} said to me: "{says}"')
+            quoted = _quotable(says, 200)
+            self._note(a["id"], f'I told {self.state["agents"][occ["who"]]["name"]}: "{quoted}"')
+            self._note(occ["who"], f'{a["name"]} said to me: "{quoted}"')
 
     def _go_to(self, a: dict, eid: int, place: str):
         """The player's go_to: a one-off step that walks the body to `place` and keeps it there for the
