@@ -8,6 +8,7 @@ extends SceneTree
 
 const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
+const Plan := preload("res://scripts/plan_queue.gd")
 const VIEW_KEYS := ["tick", "place", "route", "pos", "activity", "asleep", "hunger", "food", "coin", "plan",
 		"recent", "present", "kin", "market_food", "occasion", "offer", "cooldown_until", "food_price", "intent", "asks"]
 
@@ -101,6 +102,28 @@ func _init() -> void:
 	if not ("10:10" in h1 and "[b]Ari[/b]: \u201cRain [lb]b]soon[lb]/b]?\u201d" in h1 and "[b]Bo[/b]" in h1) \
 			or not ("#f0c060" in h2 and "Not today." in h2) or "#f0c060" in h1:
 		printerr("words said near you don't read right: %s | %s" % [h1, h2])
+		quit(1)
+		return
+	# pt8: every line says whom it is to, and thinking aloud is set apart, in grey.
+	var h3 := Words.heard({"tick": 61, "kind": "talk", "to_player": false, "lines": [
+			{"who": 4, "name": "Ari", "text": "Morning.", "to": 5, "to_name": "Bo", "to_me": false},
+			{"who": 5, "name": "Bo", "text": "Long day.", "to": "self", "to_name": null, "to_me": false},
+			{"who": 4, "name": "Ari", "text": "You too?", "to": 3, "to_name": "Mimi", "to_me": true}]}, 144)
+	if not ("[b]Ari[/b] \u2192 Bo: \u201cMorning.\u201d" in h3 and "[i]Bo, to themself: Long day.[/i]" in h3
+			and "[b]Ari[/b] \u2192 you:" in h3):
+		printerr("addressees don't read right: %s" % h3)
+		quit(1)
+		return
+	# AI playtest 1: no ids in the player's mind line; a lost line says so; a market trip that bought ends a queued buy.
+	var mind := Words.status({"tick": 50, "place": "plaza", "route": null, "activity": "work", "asleep": false, "hunger": 100,
+			"food": 1, "coin": 3, "role": "guard", "occasion": {"text": "Bane Deka (#0) asked you for food"}}, {"id": 3, "name": "Me"}, 144)
+	var lost := Words.describe({"kind": "receipt", "actor": 3, "origin": "rule", "tick": 50,
+			"data": {"action": "say", "ok": false, "why": "target not here", "to": 4}}, {"id": 3, "name": "Me"}, {4: "Ari"})
+	var trip := [{"kind": "receipt", "data": {"ok": true, "why": "bought", "action": "buy_food"}}]
+	if "(#0)" in mind or not "Bane Deka asked you for food" in mind or not "didn't reach Ari" in lost \
+			or not Plan.bought(Plan.step("go_market"), trip) or Plan.bought(Plan.step("buy_food"), trip) \
+			or Plan.bought(Plan.step("go_market"), [{"kind": "receipt", "data": {"ok": true, "why": "no stock"}}]):
+		printerr("aipt1 words: %s | %s" % [mind, lost])
 		quit(1)
 		return
 	me.heard.connect(func(m): heard_n += 1)

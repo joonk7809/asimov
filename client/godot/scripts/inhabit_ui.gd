@@ -218,6 +218,13 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Di
 		return line + (": " + answer + "." if answer != "" else ".")
 	if e.get("origin") == "rule" and why in ["heading to market", "started", "waited"] and d.get("ok", false):
 		return ""  # the activity line that follows says it
+	if str(d.get("action", "")) == "say" and not d.get("ok", false):  # aipt1: a lost line is said in the log
+		var gone := _who(d.get("to"), me_id, names) if d.get("to") != null else "them"
+		match why:
+			"target not here":
+				return "[color=#e07070]Your words didn't reach %s: they had left.[/color]" % gone
+			"target asleep":
+				return "[color=#e07070]%s is asleep and didn't hear you.[/color]" % gone.capitalize()
 	if str(d.get("action", "")) == "go_to":  # go-to-1: where you're walking, and when you'll be there
 		var where := place(d.get("place"), me)
 		if why == "arrived":
@@ -267,8 +274,15 @@ static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:
 	if v.has("market_food"):
 		lines.append("The market has %d food." % int(v["market_food"]))
 	if v.get("occasion") != null:
-		lines.append("[color=#f0c060]On your mind: %s.[/color]" % str(v["occasion"]["text"]))
+		lines.append("[color=#f0c060]On your mind: %s.[/color]" % no_ids(str(v["occasion"]["text"])))
 	return "\n".join(lines)
+
+
+static func no_ids(text: String) -> String:
+	## The engine's own " (#12)" after a name is for minds, not for the player (aipt1 0060).
+	var re := RegEx.new()
+	re.compile(" ?\\(#\\d+\\)")
+	return re.sub(text, "", true)
 
 
 static func needs(v: Dictionary) -> String:
@@ -352,7 +366,15 @@ static func heard(m: Dictionary, per_day: int) -> String:
 	var t := clock(int(m["tick"]), per_day).split(", ")[1]
 	var out := []
 	for x in m.get("lines", []):
-		var line := "[b]%s[/b]: \u201c%s\u201d" % [str(x["name"]).replace("[", "[lb]"), str(x["text"]).replace("[", "[lb]")]
+		var who := str(x["name"]).replace("[", "[lb]")
+		var text := str(x["text"]).replace("[", "[lb]")
+		if str(x.get("to", "")) == "self":  # pt8: thinking aloud, set apart: grey, in italics, no quotes
+			out.append("[color=#8a93a6][i]%s, to themself: %s[/i][/color]" % [who, text])
+			continue
+		var to := ""
+		if x.get("to_name") != null and str(x.get("to_name", "")) != "":  # pt8: every line says whom it is to
+			to = " \u2192 " + ("you" if bool(x.get("to_me", false)) else str(x["to_name"]).replace("[", "[lb]"))
+		var line := "[b]%s[/b]%s: \u201c%s\u201d" % [who, to, text]
 		out.append("[color=#f0c060]%s[/color]" % line if m.get("to_player", false) else line)
 	if out.is_empty():
 		return ""
