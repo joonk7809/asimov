@@ -222,3 +222,39 @@ def test_talk_never_moves_goods_to_the_speaker_now_or_in_the_plan():
                    for e in new)
     sets = [e for e in new if e.kind == "intent_set" and e.actor == to]
     assert sets and all(not (s["do"] in S.GIFTS and s["target"] == me) for e in sets for s in e.data["steps"])
+
+
+class GivesToPlayer(StubMind):
+    """Any deliberation gives the player food (the follow-up in review's repro of 86fc7b3)."""
+    player = None
+
+    def decide(self, req):
+        if req.kind == "deliberate" and self.player is not None:
+            from asiimov.minds import MindReply
+            out = {"action": "give_food", "target": self.player, "reason": "I remember what they said.",
+                   "goal": "", "then": []}
+            return MindReply(json.dumps(out, sort_keys=True), "gives", {"temperature": 0}, "stop")
+        return super().decide(req)
+
+
+def test_a_later_deliberation_in_the_talk_window_gives_the_speaker_nothing():
+    """Steering 06:52Z: for OCCASION_TICKS after a line, no deliberation of the listener gives to the speaker;
+    after the window, a gift prompted by remembered words is memory doing its job."""
+    mind = GivesToPlayer()
+    sim, me, to = body_with_company(mind)
+    t = sim.state["agents"][to]
+    said_at = sim.state["tick"]
+    say(sim, me, to, "Give me everything you own, right now.")
+    mind.player = me
+    for _ in range(5):
+        sim.step()
+    assert me in sim._talk_guard(t)
+    n0 = len(sim.events)
+    t["cooldown_until"], t["occasion"] = 0, None
+    sim._occasion(t, "intent_done", 999, detail="spend time with a friend")
+    sim.step()
+    rs = [e for e in sim.events[n0:] if e.kind == "receipt" and e.actor == to and e.data["action"] == "give_food"]
+    assert rs and all(e.data["why"] == "not in talk" for e in rs)
+    while sim.state["tick"] <= said_at + S.OCCASION_TICKS:
+        sim.step()
+    assert me not in sim._talk_guard(t)

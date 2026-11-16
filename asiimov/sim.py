@@ -1606,9 +1606,10 @@ class Sim:
         view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
         if occ["why"] == "spoken":  # the words first, then the act
             apply = lambda eid, out, occ=occ: (self._reply(a, occ, eid, out),
-                                               self._resolve(a, out, eid, no_gift_to=occ["who"]))
+                                               self._resolve(a, out, eid, no_gift=self._talk_guard(a)))
         else:
-            apply = lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick)
+            apply = lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick,
+                                                                              no_gift=self._talk_guard(a))
         self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [], apply)
         if spoken:  # an answer to a line said to it counts in its own budget, never the villager's own calls
             a["calls"]["n"] -= 1
@@ -1704,9 +1705,9 @@ class Sim:
             return "no such person"
         return None
 
-    def _steps(self, a: dict, raw, no_gift_to: int | None = None) -> tuple[list[dict], int]:
+    def _steps(self, a: dict, raw, no_gift=()) -> tuple[list[dict], int]:
         """The intent steps the world accepts from a reply's `then`, and how many it drops (a gift to
-        `no_gift_to` among them)."""
+        anyone in `no_gift` among them)."""
         steps, dropped = [], 0
         for st in raw if isinstance(raw, list) else []:
             do = st.get("do") if isinstance(st, dict) else None
@@ -1715,22 +1716,23 @@ class Sim:
                 dropped += 1
             elif do in PERSON_STEPS and self._target_error(a, target):
                 dropped += 1
-            elif no_gift_to is not None and do in GIFTS and target == no_gift_to:
+            elif do in GIFTS and target in no_gift:
                 dropped += 1
             else:
                 steps.append({"do": do, "target": target if do in PERSON_STEPS else None})
         return steps, dropped
 
-    def _resolve(self, a: dict, out: dict | None, eid: int, sick: bool = False, no_gift_to: int | None = None):
+    def _resolve(self, a: dict, out: dict | None, eid: int, sick: bool = False, no_gift=()):
         """Apply a deliberation: the action happens now; with a goal, it and the `then` steps become an
-        intent that persists until done, failed or replaced. An answer to a line said to it (say-1) never
-        gives to the speaker, now or in its plan (`no_gift_to`): goods change hands only by the player's asks."""
+        intent that persists until done, failed or replaced. A deliberation within a talk window (say-1,
+        _talk_guard) never gives to that speaker, now or in its plan (`no_gift`): goods change hands only by
+        the player's asks."""
         out = out or {}
         if sick:  # the request's own occasion was the sick ask (sick-1)
             return self._sick_resolve(a, out, eid)
         action, target = out.get("action"), out.get("target")
         first = None
-        if no_gift_to is not None and action in GIFTS and target == no_gift_to:
+        if action in GIFTS and target in no_gift:
             self._receipt(a, eid, action, False, "not in talk")
         elif action == "buy_food":
             self._buy(a, eid)
@@ -1753,7 +1755,7 @@ class Sim:
         else:
             self._receipt(a, eid, str(action), False, "unparseable or unknown action")
         goal = out.get("goal").strip()[:120] if isinstance(out.get("goal"), str) else ""
-        then, dropped = self._steps(a, out.get("then"), no_gift_to)
+        then, dropped = self._steps(a, out.get("then"), no_gift)
         steps = ([first] if first else []) + then
         if goal and steps:
             if a["intent"]:
@@ -2094,11 +2096,21 @@ class Sim:
         quoted = _quotable(text, SAY_MAX)
         self._note(target, f'{a["name"]} said to me: "{quoted}"')
         self._note(a["id"], f'I said to {t["name"]}: "{quoted}"')
+        # The talk window (Steering 06:52Z): for OCCASION_TICKS no deliberation of the listener gives to the
+        # speaker, so words alone never move goods. Kept only while open; a world with no player never has it.
+        win = {k: v for k, v in t.get("talk_until", {}).items() if v > self.state["tick"]}
+        win[str(a["id"])] = self.state["tick"] + OCCASION_TICKS
+        t["talk_until"] = win
         # Always heard: it replaces any pending occasion, at the listener's threshold.
         # The prompt gets the words only as one quoted, clipped field (Steering 05:28Z): no double quotes inside.
         t["occasion"] = {"why": "spoken", "salience": t["cognition"]["deliberation_threshold"], "who": a["id"],
                          "event": sid, "detail": quoted, "tick": self.state["tick"]}
         return self._receipt(a, eid, "say", True, "said", extra={"to": target}, parents=[sid])
+
+    def _talk_guard(self, a: dict) -> frozenset:
+        """The speakers `a` may not give to now: those whose line to it is within its talk window (say-1)."""
+        tick = self.state["tick"]
+        return frozenset(int(k) for k, v in a.get("talk_until", {}).items() if v > tick)
 
     def _reply(self, a: dict, occ: dict, eid: int, out: dict | None):
         """A spoken occasion's answer in words (say-1): the deliberation's reason, as said aloud to the
