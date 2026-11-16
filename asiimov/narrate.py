@@ -254,6 +254,8 @@ def items(sim, events, aid: int, recent: "Recent | None" = None) -> list[dict]:
             for p in it["speakers"]:
                 near = (set(it["speakers"]) | {aid}) - {p}
                 for w, t in recent.candidates(sim, p, near):
+                    if w != TOUCH:  # pt8 (joon: speech is to a person): only news that bears on the listener
+                        break
                     if w == ROUTINE and routine:
                         continue
                     routine = routine or w == ROUTINE
@@ -333,8 +335,32 @@ def prompt(it: dict) -> str:
     if any(x.get("looks") or x.get("mood") for k, x in it["people"].items() if int(k) in it["speakers"]):
         lines.append("Let how they look or feel color how they speak.")
     lines.append(f"Speak only of these facts and the people here. Only the first line may greet, with \"{greeting(h)}\".")
-    lines.append('Answer as JSON: {"lines": [{"who": NAME, "text": WORDS}]}, at most two lines, each under 100 characters.')
+    lines.append("Every line is said to someone here, by name. A line nobody is meant to hear is thinking aloud:"
+                 ' its "to" is "self".')
+    lines.append('Answer as JSON: {"lines": [{"who": NAME, "to": NAME or "self", "text": WORDS}]}, at most two lines,'
+                 " each under 100 characters.")
     return "\n".join(lines)
+
+
+def addressee(it: dict, i: int, who: int) -> int:
+    """Whom line i of an item is said to, by the item's own shape: in a chat between two villagers, each to the
+    other; any other line to the player (pt8, joon: "words should be directed to a person")."""
+    s = it["speakers"]
+    if len(s) > 1:
+        return s[1] if who == s[0] else s[0]
+    return it["player"]
+
+
+def addressed(it: dict, lines: list[dict]) -> list[dict]:
+    """Every line with its `to`: an id of someone in the item, or "self" (thinking aloud). A line that names
+    nobody valid gets the item's own addressee."""
+    out = []
+    for i, x in enumerate(lines):
+        to = x.get("to")
+        if not (to == "self" or (isinstance(to, int) and str(to) in it["people"] and to != x["who"])):
+            to = addressee(it, i, x["who"])
+        out.append({**x, "to": to})
+    return out
 
 
 def clean(it: dict, out) -> list[dict] | None:
@@ -346,7 +372,13 @@ def clean(it: dict, out) -> list[dict] | None:
     for x in out["lines"][:MAX_LINES]:
         if not (isinstance(x, dict) and x.get("who") in names and isinstance(x.get("text"), str) and x["text"].strip()):
             return None
-        lines.append({"who": names[x["who"]], "text": x["text"].strip().strip('"')[:MAX_CHARS]})
+        to = x.get("to")
+        everyone = {_who(it, p): int(p) for p in it["people"]}
+        to = "self" if isinstance(to, str) and to.strip().lower() == "self" else everyone.get(to)
+        line = {"who": names[x["who"]], "text": x["text"].strip().strip('"')[:MAX_CHARS]}
+        if to is not None and to != line["who"]:  # pt8: whom the model says it is to; else `addressed` decides
+            line["to"] = to
+        lines.append(line)
     return lines
 
 

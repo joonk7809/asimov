@@ -270,16 +270,18 @@ def test_topics_come_from_the_speakers_own_events_and_favour_what_stands_out():
                                     (narrate.BUY, f"{nx} bought food from {no}")]
     # A newer routine trade loses to an older gift.
     assert r.topics(sim, y, k=1) == [f"{ny} gave food to {no}"]
+    # pt8 (joon: "words should be directed to a person"): news that touches neither the other speaker nor the
+    # listener is not offered at all, so nobody opens with it to no one in particular.
     it = narrate.items(sim, talk, me, r)[0]
-    assert it["topics"] == [{"who": x, "text": f"{nx} asked {no} for food and was turned down"},
-                            {"who": y, "text": f"{ny} gave food to {no}"}]
+    assert it["topics"] == []
     p = narrate.prompt(it)
-    assert f"Something true {nx} might bring up: {nx} asked {no} for food and was turned down." in p
-    assert f"{ny} may skip theirs" in p and "bought food" not in p  # the old buy, the player's and a bystander's
+    assert "might bring up" not in p and "bought food" not in p
     assert it["people"][str(x)]["mood"] == "" and "color how they speak" not in p  # turned down 20 ticks ago
-    # What touches the listener or the other speaker comes first.
+    # What touches the listener or the other speaker is offered.
     r.feed(sim, [E(8, "receipt", y, {"action": "give_coin", "ok": True, "why": "gave", "to": me}, t - 50)])
-    assert narrate.items(sim, talk, me, r)[0]["topics"][1] == {"who": y, "text": f"{ny} gave coin to {ag[me]['name']}"}
+    assert narrate.items(sim, talk, me, r)[0]["topics"] == [{"who": y, "text": f"{ny} gave coin to {ag[me]['name']}"}]
+    assert f"Something true {ny} might bring up: {ny} gave coin to {ag[me]['name']}." in narrate.prompt(
+        narrate.items(sim, talk, me, r)[0])
     # Sickness in the family stands out; a bystander's doesn't count.
     kin = [m for m in sim.state["families"][ag[x]["family"]]["members"] if m != x][0]
     sim.state["sick"]["ill"] = {str(kin): t + 99, str(other): t + 99}
@@ -303,7 +305,12 @@ def test_an_exchange_gets_at_most_one_routine_trade_topic():
         e.tick = t - 1
     r.feed(sim, evs)
     it = narrate.items(sim, [Ev(9, "talk", x, {"with": y, "gossip": []})], me, r)[0]
-    assert [tp["who"] for tp in it["topics"]] == [x]
+    assert it["topics"] == []  # pt8: a trade with a bystander bears on neither listener ("I got tools from...")
+    e3 = Ev(3, "receipt", x, {"action": "trade", "ok": True, "why": "supplied", "to": y})
+    e3.tick = t - 1
+    r.feed(sim, [e3])
+    it = narrate.items(sim, [Ev(9, "talk", x, {"with": y, "gossip": []})], me, r)[0]
+    assert [tp["who"] for tp in it["topics"]] == [x]  # one with the other speaker does
 
 
 def test_only_the_opener_greets():
@@ -326,3 +333,21 @@ def test_only_the_opener_greets():
     nx, ny = (sim.state["agents"][i]["name"] for i in (x, y))
     assert f"Only {nx} may greet. {ny} doesn't greet: {ny} answers what {nx} just said" in p
     assert 'Only the first line may greet, with "Good afternoon"' in p
+
+
+def test_every_line_is_said_to_someone_or_is_thinking_aloud():
+    """pt8 (joon: "words / dialogues should be directed to a person, unless it is a form of thinking out loud"):
+    the model names whom each line is to, or "self"; a line naming nobody valid gets the item's own addressee."""
+    it = {"speakers": [1, 2], "player": 6, "kind": "talk", "to_player": False, "place": "plaza", "hour": 9,
+          "opener": 1, "people": {"1": {"name": "Ari", "role": "farmer", "looks": "", "doing": "", "mood": ""},
+                                  "2": {"name": "Bo", "role": "guard", "looks": "", "doing": "", "mood": ""},
+                                  "6": {"name": "Mimi", "role": "guard", "looks": "", "doing": "", "mood": ""}}}
+    assert '"to": NAME or "self"' in narrate.prompt(it) and "thinking aloud" in narrate.prompt(it)
+    got = narrate.clean(it, {"lines": [{"who": "Ari", "to": "Mimi", "text": "Morning, Mimi."},
+                                       {"who": "Bo", "to": "self", "text": "Long day ahead."}]})
+    assert [x.get("to") for x in got] == [6, "self"]
+    got = narrate.clean(it, {"lines": [{"who": "Ari", "to": "Nobody", "text": "Morning."},
+                                       {"who": "Bo", "to": "Bo", "text": "Morning."}]})
+    assert [x["to"] for x in narrate.addressed(it, got)] == [2, 1]  # in a chat, each to the other
+    one = {**it, "speakers": [1], "to_player": True}
+    assert narrate.addressed(one, [{"who": 1, "text": "Hello."}]) == [{"who": 1, "text": "Hello.", "to": 6}]

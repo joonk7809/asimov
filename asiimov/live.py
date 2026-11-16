@@ -852,7 +852,10 @@ class Hub:
         async with self.narr_slots:
             lines = await asyncio.to_thread(self.narrator.lines, it)
         agents = self.runner.sim.state["agents"]
-        out = [{"who": x["who"], "name": agents[x["who"]]["name"], "text": x["text"]} for x in lines]
+        # pt8: each line says whom it is to (an id) or that it is thinking aloud ("self", shown apart, no bubble)
+        out = [{"who": x["who"], "name": agents[x["who"]]["name"], "text": x["text"], "to": x["to"],
+                "to_name": None if x["to"] == "self" else agents[x["to"]]["name"], "to_me": x["to"] == it["player"]}
+               for x in narrate.addressed(it, lines)]
         self.narr.write(json.dumps({"wall": round(time.time(), 3), "tick": it["tick"], "event": it["event"],
                                     "kind": it["kind"], "player": it["player"], "to_player": it["to_player"],
                                     "narrator": self.narrator.model, "fallback": it.get("fallback", False),

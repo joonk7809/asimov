@@ -157,6 +157,11 @@ func _build_inhabit_ui() -> void:
 	ui["you"] = _panel(side, "You")
 	ui["plan"] = _panel(side, "Today's plan")
 	ui["here"] = _panel(side, "Here with you")
+	# A crowded place (25+ people) ran the list off the window and pushed the actions and the Talk box out of view
+	# (AI-playtester find, 2026-11-16): the list now scrolls in a capped box.
+	ui["here"].fit_content = false
+	ui["here"].scroll_active = true
+	ui["here"].custom_minimum_size = Vector2(0, 110)
 	ui["myplan"] = _panel(side, "Your plan")
 	var ctl := HFlowContainer.new()
 	side.add_child(ctl)
@@ -280,8 +285,11 @@ func _on_heard(m: Dictionary) -> void:
 	if line != "":
 		ui["said"].append_text(line + "\n")
 	var lines: Array = m.get("lines", [])
-	for i in lines.size():  # one after another, as a conversation is spoken
-		_bubble(int(lines[i]["who"]), str(lines[i]["text"]), bool(m.get("to_player", false)), i * 2.0)
+	for i in lines.size():  # one after another, as a conversation is spoken; thinking aloud gets no bubble
+		if str(lines[i].get("to", "")) == "self":
+			continue
+		var to_me: bool = lines[i].get("to") != null and str(lines[i].get("to")) == str(client.me["id"])
+		_bubble(int(lines[i]["who"]), str(lines[i]["text"]), to_me or (bool(m.get("to_player", false)) and not lines[i].has("to")), i * 2.0)
 
 
 func _bubble(who: int, text: String, to_me: bool, delay: float) -> void:
