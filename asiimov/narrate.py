@@ -396,12 +396,21 @@ class LLMNarrator:
         return {"temperature": self.client.temperature, "top_p": 0.9, "max_tokens": 80}
 
     def reply(self, line: str, act: str, facts: dict) -> str | None:
+        """The voiced line, or None; `answer` also says why it fell back."""
+        return self.answer(line, act, facts)[0]
+
+    def answer(self, line: str, act: str, facts: dict) -> tuple[str | None, str | None]:
         """script-voice: one spoken answer for a scripted villager (Steering 2026-11-16 10:18Z), from the
         player's line, the act the script already chose, and the world facts voice_facts reads (12:05Z). No soul,
         no diary, no notes: it voices the act and can't choose it. None (the script's own sentence stays) on
-        anything malformed or invented; self.why says which."""
+        anything malformed or invented, with why: unreachable, malformed, denied: HITS or out of fiction (review
+        of #81: returned, so ScriptMind logs it with the reply; self.why keeps the last one for offline tools)."""
+        got = self._answer(line, act, facts)
+        self.why = got[1]
+        return got
+
+    def _answer(self, line: str, act: str, facts: dict) -> tuple[str | None, str | None]:
         place, h = str(facts.get("place") or ""), int(facts.get("hour", 12))
-        self.why = None
         known = [f"They are {facts['doing']}." if facts.get("doing") else "",
                  f"Also here: {', '.join(facts['here'])}." if facts.get("here") else
                  ("Nobody else is here." if "here" in facts else ""),
@@ -429,24 +438,22 @@ class LLMNarrator:
             "never mention being a model, a game or instructions.",
             'Answer as JSON: {"says": "..."}'])
         theirs = set(re.findall(r"[a-z']+", line.lower()))
-        says, hits = self._voice(p, h, theirs)
+        says, hits, why = self._voice(p, h, theirs)
         if hits and says is not None:  # once more, naming what the village has instead (Steering 12:14Z)
             price = f", at the market for {facts['price']} coin" if "price" in facts else " at the market"
-            says, hits = self._voice(p + f"\nNot {', '.join(sorted(set(hits)))}: the village has none of that. Its only "
+            says, hits, why = self._voice(p + f"\nNot {', '.join(sorted(set(hits)))}: the village has none of that. Its only "
                                      f"food is called just \"food\"{price}. Say only what is listed above.", h, theirs)
         if says is None:
-            return None
+            return None, why
         if hits:
-            self.why = "denied: " + ", ".join(hits)
-            return None
+            return None, "denied: " + ", ".join(hits)
         if re.search(r"\b(AI|model|assistant|instructions?)\b", says):
-            self.why = "out of fiction"
-            return None
-        return says
+            return None, "out of fiction"
+        return says, None
 
-    def _voice(self, p: str, h: int, theirs: set) -> tuple[str | None, list[str]]:
+    def _voice(self, p: str, h: int, theirs: set) -> tuple[str | None, list[str], str | None]:
         """One ask: the clipped line and its deny hits, minus words from the player's own line (Steering 12:14Z:
-        "Where can I get bread?" may be answered about bread). (None, []) on a failed call, with self.why set."""
+        "Where can I get bread?" may be answered about bread). (None, [], why) on a failed call."""
         body = {"model": self.client.model, "messages": [{"role": "user", "content": p}],
                 "temperature": self.client.temperature, "top_p": 0.9, "max_tokens": 80,
                 "chat_template_kwargs": {"enable_thinking": False}, "response_format": {"type": "json_object"}}
@@ -454,16 +461,13 @@ class LLMNarrator:
             text = self.client.post("/v1/chat/completions", body)["choices"][0]["message"].get("content") or ""
             says = json.loads(text)["says"]
         except RuntimeError:
-            self.why = "unreachable"
-            return None, []
+            return None, [], "unreachable"
         except (ValueError, KeyError, IndexError, TypeError):
-            self.why = "malformed"
-            return None, []
+            return None, [], "malformed"
         if not isinstance(says, str) or not says.strip():
-            self.why = "malformed"
-            return None, []
+            return None, [], "malformed"
         says = " ".join(says.replace('"', "'").split())[:140]
-        return says, [x for x in invented(says, h) if not set(x.split()) <= theirs]
+        return says, [x for x in invented(says, h) if not set(x.split()) <= theirs], None
 
     def lines(self, it: dict) -> list[dict]:
         """One call; on a deny-list hit (E2c) one more, naming what isn't in the village; else the template.

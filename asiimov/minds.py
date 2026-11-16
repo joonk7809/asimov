@@ -186,8 +186,9 @@ class ScriptMind(StubMind):
                 m = re.search(r"You are at ([a-z_0-9]+)\.", req.prompt)
                 facts = {"place": m.group(1) if m else None, "hour": req.view.get("hour", 12),
                          "role": req.view.get("role")}
-            said = self.voice.reply(str(occ.get("detail", "")), self.NEXT_WORDS.get(out.get("next"), "carry on"),
-                                    facts)
+            ask = getattr(self.voice, "answer", None)  # a voice that says why it fell back (review of #81)
+            args = (str(occ.get("detail", "")), self.NEXT_WORDS.get(out.get("next"), "carry on"), facts)
+            said, why = ask(*args) if ask is not None else (self.voice.reply(*args), None)
             if said:
                 out["says"] = said
             else:
@@ -195,8 +196,11 @@ class ScriptMind(StubMind):
                 line = str(occ.get("detail", ""))
                 if not (warm and self.GREETS.search(line)):
                     out["says"] = self.FALLBACK.get(out.get("next"), self.FALLBACK["carry_on"])[0 if warm else 1]
+            sampling = {**reply.sampling, "voice": self.voice.sampling}
+            if not said:  # the cause goes in the log with the reply, so a run counts fallbacks by cause
+                sampling["voice_why"] = why or "no words"
             return MindReply(json.dumps(out, sort_keys=True), f"{self.model}+voice:{self.voice.model}",
-                             {**reply.sampling, "voice": self.voice.sampling}, reply.finish_reason)
+                             sampling, reply.finish_reason)
         if req.kind != "deliberate":
             return reply
         out = json.loads(reply.raw_output)

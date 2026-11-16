@@ -199,3 +199,17 @@ def test_a_fallback_says_the_acts_own_sentence(line, greets):
     sim.step()
     says = next(e for e in sim.events if e.kind == "reply").data["says"]
     assert says == ("Good to hear from you." if greets else "I'll get back to it, then.")
+
+
+def test_a_fallbacks_cause_is_in_the_log():
+    """Review of #81: the cause rides with the reply into the mind event, so a live run counts fallbacks by cause."""
+    class WhyVoice(Voice):
+        def answer(self, line, act, facts):
+            return None, "denied: sun"
+
+    for voice, want in ((WhyVoice(), "denied: sun"), (Voice(says=None), "no words"), (Voice(), None)):
+        sim, me, to = body_with_company(ScriptMind(voice))
+        say(sim, me, to, "Where should I go?")
+        sim.step()
+        rep = next(e for e in sim.events if e.kind == "reply")
+        assert sim.events[rep.parents[0]].mind["sampling"].get("voice_why") == want
