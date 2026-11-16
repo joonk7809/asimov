@@ -426,6 +426,7 @@ class LLMNarrator:
         if not says or invented(says, h) or re.search(r"\b(AI|model|assistant|instructions?)\b", says):
             return None
         return says
+
     def lines(self, it: dict) -> list[dict]:
         """One call; on a deny-list hit (E2c) one more, naming what isn't in the village; else the template.
         it["denied"] keeps each hit asked about, it["fallback"] whether the template was used."""
