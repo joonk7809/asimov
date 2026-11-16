@@ -934,6 +934,8 @@ class Sim:
     def _progress(self, a: dict, author: str, step: dict, holder: dict):
         """Advance the running step after the agent has acted this tick."""
         do, t = step["do"], step["target"]
+        if do in TALK_BARRED and t in self._talk_guard(a):
+            return  # say-2 (Steering 08:39Z): a gift or theft at a speaker waits out the talk window; no receipt, no time spent
         if do == "go" and a["place"] == step["place"] and not step["arrived"]:
             step["arrived"] = 1
             self._receipt(a, holder["event"], "go_to", True, "arrived", extra={"place": step["place"]})

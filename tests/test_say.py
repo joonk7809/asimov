@@ -303,3 +303,48 @@ def test_the_talk_window_bars_a_theft_from_the_speaker_now_or_in_the_plan():
     assert rs and all(e.data["why"] == "not in talk" for e in rs)
     sets = [e for e in new if e.kind == "intent_set" and e.actor == to]
     assert sets and all(not (s["do"] == "steal" and s["target"] == me) for e in sets for s in e.data["steps"])
+
+
+def _intent_at(sim, a, do, target):
+    """An intent formed before the talk, its first step a gift or theft at `target` (review of #75's scene)."""
+    eid = sim._emit("intent_set", "rule", a["id"], {"goal": "x", "steps": [{"do": do, "target": target}], "dropped": 0}, [])
+    a["intent"] = {"goal": "x", "steps": [{"do": do, "target": target}], "i": 0, "event": eid,
+                   "tick": sim.state["tick"], "left": S.STEP_TICKS.get(do, S.DEFAULT_STEP_TICKS)}
+
+
+@pytest.mark.parametrize("do", ["steal", "give_food"])
+def test_a_running_step_at_the_speaker_waits_out_the_talk_window_then_runs(do):
+    """Steering 08:39Z: a step already running waits in the window (no receipt, no time spent), then runs; a
+    new line reopens the window and it keeps waiting."""
+    sim, me, to = body_with_company(StubMind())
+    ag = sim.state["agents"]
+    t = ag[to]
+    t["inv"]["food"], ag[me]["inv"]["food"] = 5, 5
+    say(sim, me, to, "hello")
+    t["occasion"] = None
+    _intent_at(sim, t, do, me)
+    left = t["intent"]["left"]
+    until = t["talk_until"][str(me)]
+
+    def held(n):
+        for _ in range(n):
+            sim._progress(t, "intent", t["intent"]["steps"][0], t["intent"])
+            assert t["intent"] is not None and t["intent"]["i"] == 0 and t["intent"]["left"] == left
+
+    n0 = len(sim.events)
+    held(3)
+    assert not any(e.actor == to and e.kind in ("receipt", "intent_failed", "intent_step") for e in sim.events[n0:])
+    # A new line before the window closes reopens it: still waiting past the old end.
+    sim.state["tick"] = until - 1
+    sim._acts, sim._acted = {}, set()
+    eid = sim._player({"kind": "act", "action": "say", "target": to, "text": "still here"})
+    sim._acts.clear()
+    sim._say(ag[me], eid, to)
+    sim.state["tick"] = until + 1
+    held(2)
+    # Once the window closes the step runs as before.
+    sim.state["tick"] = t["talk_until"][str(me)]
+    t["place"] = ag[me]["place"]
+    n1 = len(sim.events)
+    sim._progress(t, "intent", t["intent"]["steps"][0], t["intent"])
+    assert any(e.actor == to and e.kind in ("receipt", "intent_failed", "intent_step") for e in sim.events[n1:])
