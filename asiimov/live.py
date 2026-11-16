@@ -826,14 +826,14 @@ class Hub:
                 tick, events, acks = await asyncio.to_thread(self.runner.step)
             finally:
                 self.stepping = False
+            if self.reply_hold is not None:
+                await self.reply_hold.hold(self.runner, events)
             p = self.runner.sim.state.get("player")
             if self.pull_min is not None and p is not None and any(
                     e.kind == "said" and e.actor == p["agent"] for e in events):
                 # pt8 (Steering 2026-11-16 10:40Z): a line said this tick is answered in the next one, so pull
                 # that tick too; the player's words would otherwise wait out the pace for their answer.
                 self.pull, self.pull_why = True, "reply"
-            if self.reply_hold is not None:
-                await self.reply_hold.hold(self.runner, events)
             for m, client, scope, _ in self.runner.leftover_late():  # came as the fixed point closed
                 ack = self.runner.submit(m, client=client, scope=scope)
                 if ack is None:
