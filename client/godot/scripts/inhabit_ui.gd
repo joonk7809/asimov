@@ -352,7 +352,15 @@ static func heard(m: Dictionary, per_day: int) -> String:
 	var t := clock(int(m["tick"]), per_day).split(", ")[1]
 	var out := []
 	for x in m.get("lines", []):
-		var line := "[b]%s[/b]: \u201c%s\u201d" % [str(x["name"]).replace("[", "[lb]"), str(x["text"]).replace("[", "[lb]")]
+		var who := str(x["name"]).replace("[", "[lb]")
+		var text := str(x["text"]).replace("[", "[lb]")
+		if str(x.get("to", "")) == "self":  # pt8: thinking aloud, set apart: grey, in italics, no quotes
+			out.append("[color=#8a93a6][i]%s, to themself: %s[/i][/color]" % [who, text])
+			continue
+		var to := ""
+		if x.get("to_name") != null and str(x.get("to_name", "")) != "":  # pt8: every line says whom it is to
+			to = " \u2192 " + ("you" if bool(x.get("to_me", false)) else str(x["to_name"]).replace("[", "[lb]"))
+		var line := "[b]%s[/b]%s: \u201c%s\u201d" % [who, to, text]
 		out.append("[color=#f0c060]%s[/color]" % line if m.get("to_player", false) else line)
 	if out.is_empty():
 		return ""

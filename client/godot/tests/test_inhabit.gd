@@ -103,6 +103,16 @@ func _init() -> void:
 		printerr("words said near you don't read right: %s | %s" % [h1, h2])
 		quit(1)
 		return
+	# pt8: every line says whom it is to, and thinking aloud is set apart, in grey.
+	var h3 := Words.heard({"tick": 61, "kind": "talk", "to_player": false, "lines": [
+			{"who": 4, "name": "Ari", "text": "Morning.", "to": 5, "to_name": "Bo", "to_me": false},
+			{"who": 5, "name": "Bo", "text": "Long day.", "to": "self", "to_name": null, "to_me": false},
+			{"who": 4, "name": "Ari", "text": "You too?", "to": 3, "to_name": "Mimi", "to_me": true}]}, 144)
+	if not ("[b]Ari[/b] \u2192 Bo: \u201cMorning.\u201d" in h3 and "[i]Bo, to themself: Long day.[/i]" in h3
+			and "[b]Ari[/b] \u2192 you:" in h3):
+		printerr("addressees don't read right: %s" % h3)
+		quit(1)
+		return
 	me.heard.connect(func(m): heard_n += 1)
 	var a := OS.get_cmdline_user_args()
 	if a.size() > 2:
