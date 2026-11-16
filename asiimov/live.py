@@ -34,7 +34,7 @@ from collections import defaultdict
 
 from . import inhabitant, narrate, persist
 from .minds import NoisyMind, ScriptMind, StubMind
-from .sim import ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, TICKS_PER_DAY
+from .sim import ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, SAY_ACTS, SAY_MAX, TICKS_PER_DAY
 from .worldmap import position
 
 PROTOCOL = 2               # 2 adds the inhabitant scope (plan/player-body-spec.md)
@@ -246,9 +246,12 @@ class LiveRunner:
         elif verb == "release":
             ok, act = args == {}, {"kind": "release"}
         else:
-            t, place = args.get("target"), args.get("place")
-            go = args.get("action") in GO_ACTS
-            ok = set(args) <= {"action", "target", "place"} and isinstance(args.get("action"), str) \
+            t, place, text = args.get("target"), args.get("place"), args.get("text")
+            go, say = args.get("action") in GO_ACTS, args.get("action") in SAY_ACTS
+            ok = set(args) <= {"action", "target", "place", "text"} and isinstance(args.get("action"), str) \
+                and (text is not None) == say and (not say or (_is_int(t) and isinstance(text, str)
+                                                             and 0 < len(text) <= SAY_MAX and text.strip() != ""
+                                                             and text.isprintable())) \
                 and args["action"] in PLAYER_ACTIONS and (t is None or (_is_int(t) and 0 <= t < n)) \
                 and (place is None) != go and (not go or (t is None and isinstance(place, str)
                                                           and place in self.sim.map["places"]))
@@ -256,6 +259,8 @@ class LiveRunner:
                 {"kind": "act", "action": args.get("action"), "target": t}
             if go:
                 act["place"] = place
+            if say:
+                act["text"] = text
         if not ok:
             return None, "bad_args"
         if not _is_int(seen) or not 0 <= seen <= now:

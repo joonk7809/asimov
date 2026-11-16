@@ -184,6 +184,30 @@ func _build_inhabit_ui() -> void:
 	menu.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(menu)
 	ui["menu"] = menu
+	# say-1: talk to someone here in your own words; their mind answers on the next tick.
+	var talk_head := Label.new()
+	talk_head.text = "Talk"
+	talk_head.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
+	side.add_child(talk_head)
+	var talk := HBoxContainer.new()
+	side.add_child(talk)
+	var who := OptionButton.new()
+	who.custom_minimum_size = Vector2(120, 0)
+	who.clip_text = true
+	talk.add_child(who)
+	ui["talk_who"] = who
+	var line := LineEdit.new()
+	line.max_length = 140
+	line.placeholder_text = "Say something..."
+	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.text_submitted.connect(func(_t): _say())
+	talk.add_child(line)
+	ui["talk_line"] = line
+	var say := Button.new()
+	say.text = "Say"
+	say.pressed.connect(_say)
+	talk.add_child(say)
+	ui["talk_say"] = say
 	var feed_box := VBoxContainer.new()
 	feed_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	feed_box.offset_left = 340  # the map takes the left column
@@ -233,7 +257,10 @@ func _feed(evs: Array) -> void:
 	for e in evs:
 		var line := Words.describe(e, client.me, names)
 		if line != "":
-			ui["feed"].append_text("[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line])
+			var at := "[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line]
+			ui["feed"].append_text(at)
+			if e["kind"] in ["said", "reply"]:  # say-1: spoken words also go where talk is read
+				ui["said"].append_text(at)
 
 
 func _on_heard(m: Dictionary) -> void:
@@ -354,6 +381,46 @@ func _plan_run() -> void:
 	plan_sent = int(client.view["tick"])
 
 
+var _talk_key := ""
+
+
+func _refresh_talk() -> void:
+	## Who you can talk to: the people here and awake (the server checks again when it applies).
+	var v: Dictionary = client.view
+	var ids := []
+	if not v.get("asleep", true):
+		for p in v.get("present", []):
+			if not p.get("asleep", false):
+				ids.append(int(p["id"]))
+	var key := JSON.stringify(ids)
+	var who: OptionButton = ui["talk_who"]
+	if key != _talk_key:
+		_talk_key = key
+		var keep := who.get_selected_id() if who.item_count > 0 else -1
+		who.clear()
+		for i in ids:
+			who.add_item(names.get(i, "#%d" % i), i)
+		var at := who.get_item_index(keep) if keep >= 0 else -1
+		if at >= 0:
+			who.select(at)
+	var none: bool = ids.is_empty()
+	ui["talk_line"].editable = not none
+	ui["talk_line"].placeholder_text = "Nobody here to talk to." if none else "Say something..."
+	ui["talk_say"].disabled = none or not pending.is_empty()
+
+
+func _say() -> void:
+	var who: OptionButton = ui["talk_who"]
+	var text := str(ui["talk_line"].text).strip_edges()
+	if text == "" or who.item_count == 0 or not pending.is_empty():
+		return
+	var t := who.get_selected_id()
+	pending = {"id": client.act("say", t, "", text), "label": "Say to %s" % names.get(t, "#%d" % t),
+			"tick": int(client.view["tick"])}
+	ui["talk_line"].text = ""
+	_refresh_inhabit()
+
+
 func _choose(action: String, target: int, place: String, label: String) -> void:
 	## A button or a map place: into the plan with "Plan ahead" on, else done now.
 	if ui["ahead"].button_pressed:
@@ -390,6 +457,7 @@ func _refresh_inhabit() -> void:
 	ui["plan_retry"].disabled = not plan_state.begins_with("failed")
 	ui["plan_clear"].disabled = plan_q.is_empty()
 	_rebuild_menu()
+	_refresh_talk()
 
 
 func _rebuild_menu() -> void:

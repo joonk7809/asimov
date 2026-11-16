@@ -85,7 +85,16 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
     "intent_done": "you did what you set out to do: {detail}",
     "blocked": "you had to give up on what you set out to do: {detail}",
     "sick": "{detail}",  # B5 sick-1: the piloted ask (_sick_detail)
+    "spoken": '{who} said to you: "{detail}"',  # say-1: the player's own words, aimed at this villager
 }
+# say-1 (joon 2026-11-16: "i should also be able to talk to the npcs"): the player says a line to a villager
+# here and awake; it reaches that villager's memory and its next deliberation, which answers in words (the
+# reply's reason, emitted as a `reply` event) and with an act. Spoken answers skip the deliberation cooldown
+# and get SPOKEN_CALLS more calls a day than the usual cap, so a talk isn't met with silence.
+SAY_ACTS = ("say",)
+SAY_MAX = 140
+SPOKEN_CALLS = 8
+SPOKEN_LINE = " Your reason is what you say back to them, aloud, in one line."
 # The sick ask's own clauses and tail, as piloted (B5, pack sha 163da069...c5b5): rewording needs a new pilot.
 SICK_ACTIONS = ("work", "home")
 SICK_CLAUSES = {"work": "work goes to your work today at half pace", "home": "home keeps you at home today, earning nothing"}
@@ -122,7 +131,7 @@ ACTION_CLAUSES = {
 }
 assert set(ACTION_CLAUSES) == set(DELIBERATE_ACTIONS)
 GO_ACTS = ("go_to",)  # the player walks its body to a named place and stays a while (go-to-1); never a mind's
-PLAYER_ACTIONS = DELIBERATE_ACTIONS + ANSWER_ACTS + GO_ACTS  # what a player's act may name
+PLAYER_ACTIONS = DELIBERATE_ACTIONS + ANSWER_ACTS + GO_ACTS + SAY_ACTS  # what a player's act may name
 
 
 def action_clauses(price: int) -> dict:
@@ -150,7 +159,8 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "28"  # G1-r supply-1: inputs last a day longer, supply runs wait for time off work, none when sick, a 3% gain held; on 27
+ENGINE_VERSION = "say-1"  # say-1: the player says a line to a villager, whose mind answers in words; on 28.
+# 28 = G1-r supply-1: inputs last a day longer, supply runs wait for time off work, none when sick, a 3% gain held; on 27
 ORDERS = ("id", "shuffle")  # id: low ids go first (the original behavior); shuffle: a keyed priority per tick
 # The world's stakes (B5, joon 2026-11-09, plan/b5-build-spec.md). Their parameters live in the population that
 # genesis records (population["stakes"]), so replays, twins and ablations read them from the log; a population
@@ -527,7 +537,9 @@ class Sim:
                 rest += (self._occasion_text(a, view["occasion"]) + " Your action happens now; target is null. "
                          + ". ".join(SICK_CLAUSES[x] for x in view["offer"]) + ". Leave goal empty and then [].")
             else:
-                rest += self._occasion_text(a, view.get("occasion")) + deliberate_ask(view["offer"], self._price())
+                rest += self._occasion_text(a, view.get("occasion")) + (
+                    SPOKEN_LINE if (view.get("occasion") or {}).get("why") == "spoken" else "") \
+                    + deliberate_ask(view["offer"], self._price())
         if kind == "plan":
             day_start = self.state["tick"] - self.state["tick"] % TICKS_PER_DAY
             bed_h = min(24, (a["sleep_tick"] - day_start) * 10 // 60)
@@ -1521,8 +1533,9 @@ class Sim:
             salience, tick = max(salience, a["cognition"]["deliberation_threshold"]), max(tick, a["cooldown_until"])
         if salience < a["cognition"]["deliberation_threshold"]:
             return
-        if cur and self.state["tick"] - cur["tick"] < OCCASION_TICKS and cur["salience"] >= salience:
-            return
+        if cur and self.state["tick"] - cur["tick"] < OCCASION_TICKS and (cur["salience"] >= salience
+                                                                       or cur["why"] == "spoken"):
+            return  # say-1: a line said to you is answered first; only a newer line replaces it (_say)
         a["occasion"] = {"why": why, "salience": salience, "who": who, "event": event, "detail": detail,
                          "tick": tick}
         if self._possessed(a) and self._of_player_act(event):  # about the player's own act (a refusal, a failure)
@@ -1558,13 +1571,15 @@ class Sim:
         """Ask the mind when there is an occasion: hunger with no food (always), or an appraised one."""
         tick = self.state["tick"]
         calls = a["calls"]["n"] if a["calls"]["day"] == tick // TICKS_PER_DAY else 0
+        pending = a["occasion"] if a["occasion"] and tick - a["occasion"]["tick"] < OCCASION_TICKS else None
+        spoken = pending is not None and pending["why"] == "spoken"  # say-1: answered now, cooldown or not
         # Room is kept for this day's reflection and, after a late bedtime, a plan the same calendar day.
-        if tick < a["cooldown_until"] or calls >= DAILY_MIND_CALLS - 2:
+        if not spoken and (tick < a["cooldown_until"] or calls >= DAILY_MIND_CALLS - 2) \
+                or spoken and calls >= DAILY_MIND_CALLS - 2 + SPOKEN_CALLS:
             return
         trigger = 550 + a["cognition"]["deliberation_threshold"] // 3
-        pending = a["occasion"] if a["occasion"] and tick - a["occasion"]["tick"] < OCCASION_TICKS else None
         refused = pending is not None and pending["why"] == "refused"
-        if a["inv"]["food"] == 0 and a["needs"]["hunger"] >= trigger and not refused:
+        if a["inv"]["food"] == 0 and a["needs"]["hunger"] >= trigger and not refused and not spoken:
             occ = {"why": "hungry_coin" if a["inv"]["coin"] >= self._price() else "hungry", "who": None,
                    "event": a["last_food_loss_event"]}
         else:
@@ -1576,8 +1591,11 @@ class Sim:
         a["cooldown_until"] = tick + 12
         view = self._view(a, occupancy)
         view["occasion"] = {k: occ.get(k) for k in ("why", "who", "detail")}
-        self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [],
-                      lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick))
+        if occ["why"] == "spoken":  # the words first, then the act
+            apply = lambda eid, out, occ=occ: (self._reply(a, occ, eid, out), self._resolve(a, out, eid))
+        else:
+            apply = lambda eid, out, sick=occ["why"] == "sick": self._resolve(a, out, eid, sick)
+        self._request(a, "deliberate", view, [occ["event"]] if occ["event"] is not None else [], apply)
 
     # ------------------------------------------------------------------ actions -> receipts
     def _receipt(self, a, eid, action, ok, why, origin="rule", extra=None, parents=()):
@@ -2002,7 +2020,7 @@ class Sim:
             return
         for q in list(self.state["player"].get("asks", [])):  # it moved on without answering: its nature does
             self._settle_ask(q, None, [eid])
-        if action in GO_ACTS:  # any place on the map, always: no offer, cooldown or people
+        if action in GO_ACTS or action in SAY_ACTS:  # no offer, cooldown or people: checked when applied
             self.player_pending[a["id"]] = (eid, action, target, [], [])
             return
         if action in RATED_ACTS and self.state["tick"] < a["cooldown_until"]:
@@ -2024,12 +2042,47 @@ class Sim:
             return self._answer(a, eid, action, target)
         if action in GO_ACTS:
             return self._go_to(a, eid, target)
+        if action in SAY_ACTS:
+            return self._say(a, eid, target)
         if action not in offer:
             self._receipt(a, eid, action, False, "not offered", extra={"offer": offer})
         elif action in PERSON_STEPS and target not in people:
             self._receipt(a, eid, action, False, "unknown target")
         else:
             self._resolve(a, {"action": action, "target": target if action in PERSON_STEPS else None}, eid)
+
+    def _say(self, a: dict, eid: int, target):
+        """The player's line to a villager here and awake (say-1): a `said` event the listener remembers, and
+        a "spoken" occasion that its next deliberation answers, ahead of any other."""
+        agents = self.state["agents"]
+        if not (0 <= target < len(agents)) or target == a["id"]:
+            return self._receipt(a, eid, "say", False, "unknown target")
+        t = agents[target]
+        if t["place"] is None or t["place"] != a["place"]:
+            return self._receipt(a, eid, "say", False, "target not here", extra={"to": target})
+        if t["asleep"]:
+            return self._receipt(a, eid, "say", False, "target asleep", extra={"to": target})
+        text = self.events[eid].data["text"]
+        sid = self._emit("said", "rule", a["id"], {"with": target, "text": text, "place": a["place"]}, [eid])
+        self._met(a, target)
+        self._met(t, a["id"])
+        self._note(target, f'{a["name"]} said to me: "{text}"')
+        self._note(a["id"], f'I said to {t["name"]}: "{text}"')
+        # Always heard: it replaces any pending occasion, at the listener's threshold.
+        # The prompt gets the words only as one quoted, clipped field (Steering 05:28Z): no double quotes inside.
+        t["occasion"] = {"why": "spoken", "salience": t["cognition"]["deliberation_threshold"], "who": a["id"],
+                         "event": sid, "detail": text.replace('"', "'")[:SAY_MAX], "tick": self.state["tick"]}
+        return self._receipt(a, eid, "say", True, "said", extra={"to": target}, parents=[sid])
+
+    def _reply(self, a: dict, occ: dict, eid: int, out: dict | None):
+        """A spoken occasion's answer in words (say-1): the deliberation's reason, as said aloud to the
+        speaker. Emitted before the reply's act applies. No words if the reply has none."""
+        reason = (out or {}).get("reason")
+        says = reason.strip()[:200] if isinstance(reason, str) else ""
+        self._emit("reply", "rule", a["id"], {"with": occ["who"], "says": says}, [eid])
+        if says:
+            self._note(a["id"], f'I told {self.state["agents"][occ["who"]]["name"]}: "{says}"')
+            self._note(occ["who"], f'{a["name"]} said to me: "{says}"')
 
     def _go_to(self, a: dict, eid: int, place: str):
         """The player's go_to: a one-off step that walks the body to `place` and keeps it there for the
@@ -2066,7 +2119,11 @@ class Sim:
             action, target = act["action"], act.get("target")
             if action not in PLAYER_ACTIONS or not (target is None or _is_int(target)):
                 raise ValueError(f"act: bad action {action!r} or target {target!r}")
-            place = act.get("place")
+            place, text = act.get("place"), act.get("text")
+            if (action in SAY_ACTS) != (text is not None) or action in SAY_ACTS and not (
+                    _is_int(target) and isinstance(text, str) and 0 < len(text) <= SAY_MAX and text.strip()
+                    and text.isprintable()):
+                raise ValueError(f"act: say takes a target and 1-{SAY_MAX} printable characters, and only say does")
             if (action in GO_ACTS) != (place is not None) or action in GO_ACTS and \
                     (target is not None or not isinstance(place, str) or place not in self.map["places"]):
                 raise ValueError(f"act: go_to takes a place on the map and only go_to does ({action!r}, {place!r})")
@@ -2074,6 +2131,8 @@ class Sim:
             data = {"action": action} if target is None else {"action": action, "target": target}
             if place is not None:
                 data["place"], target = place, place  # go_to carries its place where a person act's target is
+            if text is not None:
+                data["text"] = text
             if late:
                 data["late"] = True  # it arrived mid-tick and applied at the fixed point (E4); replay keeps it there
             eid = self._emit("act", "player", aid, data, [self.state["player"]["event"]])

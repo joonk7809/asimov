@@ -18,7 +18,8 @@ NAMES = ("with", "to", "target", "household")  # data fields that name the villa
 # is that villager's mind (intent_*, plan_receipt), its body clock (day_rhythm) or its memory (sleep's counts).
 SEEN = {"activity": ("activity", "place", "arrive", "from"), "arrive": ("place",), "wake": ("place",),
         "sleep": (), "talk": ("with", "place", "gossip"), "meet": ("with", "place"), "snub": ("with",),
-        "eat": ("household",), "sell": ("food",), "fire": ("family",), "ask": ("action", "to")}
+        "eat": ("household",), "sell": ("food",), "fire": ("family",), "ask": ("action", "to"),
+        "said": ("with", "text", "place"), "reply": ("with", "says")}  # say-1: spoken words, seen by those there
 SEEN_NAMING = {**SEEN, "receipt": ("action", "ok", "why", "to", "answered")}  # also a receipt for an act aimed at it
 # Another's act aimed at it that failed before reaching it: it saw nothing (and "no coin" would show another's
 # purse). Kept when it settles a held ask (parents beyond the act: the ask), which the villager did see.
@@ -64,7 +65,8 @@ def view(sim, aid: int) -> dict:
            "plan": [{"activity": b["activity"], "start_h": b["start_h"], "end_h": b["end_h"]} for b in a["plan"] or []],
            "recent": list(a["recent"]),
            "present": [{"id": o, "name": agents[o]["name"], "role": agents[o]["role"], "kin": o in fam,
-                        "has_food": agents[o]["inv"]["food"] > 0, "pos": _pos(sim, agents[o])} for o in here],
+                        "has_food": agents[o]["inv"]["food"] > 0, "asleep": agents[o]["asleep"],  # say-1: who can hear you
+                        "pos": _pos(sim, agents[o])} for o in here],
            "kin": [{"id": m, "name": agents[m]["name"], "home": agents[m]["home"]} for m in fam if m != aid],
            "occasion": None, "offer": {}, "cooldown_until": a["cooldown_until"], "food_price": sim._price(),
            "intent": None,
