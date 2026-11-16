@@ -247,14 +247,16 @@ def items(sim, events, aid: int, recent: "Recent | None" = None) -> list[dict]:
                         for p in set(it["speakers"]) | {aid}}
         it["player"] = aid
         # At most one topic per speaker from their own events (E2c, E2d), and only one that touches the other
-        # speaker or the listener (pt8): family sickness or a bystander's trade is no longer offered.
+        # speaker or the listener (pt8), or sickness in the speaker's family; a bystander's trade is not offered.
         it["topics"] = []
         if recent is not None:
             for p in it["speakers"]:
                 near = (set(it["speakers"]) | {aid}) - {p}
-                best = recent.candidates(sim, p, near)[:1]
-                if best and best[0][0] == TOUCH:  # pt8 (joon: speech is to a person): only news bearing on the listener
-                    it["topics"].append({"who": p, "text": best[0][1]})
+                # Steering 11:05Z: sickness in the speaker's own family bears on any neighbour, so it is offered too.
+                pick = next((t for w, t in recent.candidates(sim, p, near)
+                             if w == TOUCH or t.endswith(" is sick")), None)
+                if pick is not None:
+                    it["topics"].append({"who": p, "text": pick})
     return out
 
 

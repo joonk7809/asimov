@@ -286,6 +286,8 @@ def test_topics_come_from_the_speakers_own_events_and_favour_what_stands_out():
     kin = [m for m in sim.state["families"][ag[x]["family"]]["members"] if m != x][0]
     sim.state["sick"]["ill"] = {str(kin): t + 99, str(other): t + 99}
     assert r.candidates(sim, x)[0] == (narrate.STANDOUT, f"{ag[kin]['name']} in {nx}'s family is sick")
+    # Steering 11:05Z: family sickness bears on any neighbour, so it is offered though it touches neither listener.
+    assert {"who": x, "text": f"{ag[kin]['name']} in {nx}'s family is sick"} in narrate.items(sim, talk, me, r)[0]["topics"]
     # Just turned down: the tone may show it.
     r.feed(sim, [E(10, "receipt", x, {"action": "ask_kin", "ok": False, "why": "kin refused", "to": kin})])
     it = narrate.items(sim, talk, me, r)[0]
