@@ -359,7 +359,7 @@ def test_an_answer_after_the_asker_left_is_refused_and_says_so():
     food = sim.state["agents"][b]["inv"]["food"]
     sim.step([{"kind": "act", "action": "agree", "target": a}])
     r = next(e for e in sim.events if e.kind == "receipt" and e.actor == b and e.data["action"] == "agree")
-    assert not r.data["ok"] and r.data["why"] == "asker left"
+    assert not r.data["ok"] and r.data["why"] == "not together"
     settled = receipt_for(sim, a, ask.id)
     assert not settled.data["ok"] and settled.data["why"] == "target not here" and r.id in settled.parents
     assert sim.state["agents"][b]["inv"]["food"] == food and "asks" not in sim.state["player"]

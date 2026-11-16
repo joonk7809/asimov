@@ -2298,8 +2298,8 @@ class Sim:
         q = next((q for q in self.state["player"].get("asks", []) if q["asker"] == target), None)
         if q is None:
             return self._receipt(a, eid, action, False, "no ask")
-        if not self._together(a, self.state["agents"][target]):  # aipt1 t66/t120 (Steering 11:49Z): the asker has
-            rid = self._receipt(a, eid, action, False, "asker left", extra={"to": target})  # gone; nothing was said
+        if not self._together(a, self.state["agents"][target]):  # aipt1 t66/t120 (Steering 11:49Z): one of them has
+            rid = self._receipt(a, eid, action, False, "not together", extra={"to": target})  # gone; nothing was said
         else:
             rid = self._receipt(a, eid, action, True, "said yes" if action == "agree" else "said no",
                                 extra={"to": target})
