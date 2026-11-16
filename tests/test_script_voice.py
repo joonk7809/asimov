@@ -40,7 +40,8 @@ def test_the_voice_words_the_reply_and_the_act_stays_the_stubs():
     rb = next(e for e in b.events if e.kind == "reply")
     assert rb.data["says"] == voiced.voice.says and ra.data["says"] != rb.data["says"]
     line, act, facts = voiced.voice.asked[0]
-    assert line == "Where is the market?" and act and set(facts) == {"place", "hour", "role"}
+    assert line == "Where is the market?" and act == ScriptMind.NEXT_WORDS[rb.data["next"]]
+    assert set(facts) == {"place", "hour", "role"} and ra.data["next"] == rb.data["next"]
     # Only the words differ: the same acts, and the voice was asked only for the spoken occasion.
     acts = lambda s: [(e.kind, e.actor, json.dumps({k: v for k, v in e.data.items() if k not in ("says", "text")}, sort_keys=True))
                       for e in s.events if e.origin == "rule" and e.kind != "reply"]
