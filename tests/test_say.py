@@ -258,3 +258,20 @@ def test_a_later_deliberation_in_the_talk_window_gives_the_speaker_nothing():
     while sim.state["tick"] <= said_at + S.OCCASION_TICKS:
         sim.step()
     assert me not in sim._talk_guard(t)
+
+
+def test_the_neighbor_channel_gives_the_speaker_nothing_in_the_talk_window():
+    """Review of d22b24e: a talked-to villager's sick-news "help" gave the player food inside the window. In it,
+    help becomes a visit; after it, help gives as before."""
+    sim, me, to = body_with_company(StubMind())
+    t = sim.state["agents"][to]
+    t["inv"]["food"], t["inv"]["coin"] = 5, 30
+    say(sim, me, to, "hello")
+    sim._neighbor_pick = lambda y: "help"
+    eid = sim.events[-1].id
+    sim._neighbor_resolve(t, eid, me)
+    assert t["override"]["do"] == "seek" and t["override"]["target"] == me
+    assert sim.events[-1].data["why"] == "going to see them"
+    t["talk_until"] = {}
+    sim._neighbor_resolve(t, eid, me)
+    assert t["override"]["do"] in S.GIFTS

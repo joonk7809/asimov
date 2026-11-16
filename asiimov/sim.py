@@ -1230,6 +1230,8 @@ class Sim:
     def _neighbor_resolve(self, y: dict, eid: int, x: int):
         """The channel's answer, by rule: a receipt that names whom it is about, then the step it starts."""
         pick = self._neighbor_pick(y)
+        if pick == "help" and x in self._talk_guard(y):  # say-1: words alone never move goods (review of d22b24e)
+            pick = "visit"
         self._receipt(y, eid, pick, True, {"visit": "going to see them", "help": "taking them something",
                                            "keep_away": "keeping away", "carry_on": "carrying on"}[pick], extra={"about": x})
         if pick == "carry_on":
