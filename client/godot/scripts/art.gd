@@ -5,7 +5,8 @@
 extends RefCounted
 
 const ROLE_TINT := {"farmer": Color(0.55, 0.78, 0.35), "guard": Color(0.4, 0.55, 0.9), "trader": Color(0.72, 0.5, 0.85),
-		"crafter": Color(0.95, 0.62, 0.3), "child": Color(0.98, 0.85, 0.4), "elder": Color(0.75, 0.75, 0.8)}
+		"crafter": Color(0.95, 0.62, 0.3), "child": Color(0.98, 0.85, 0.4), "elder": Color(0.75, 0.75, 0.8),
+		"healer": Color(0.45, 0.85, 0.8)}
 const LABEL := Color(1, 1, 1)
 const SHADOW := Color(0.08, 0.07, 0.1, 0.85)
 

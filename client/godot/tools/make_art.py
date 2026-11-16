@@ -181,15 +181,6 @@ dDdDdDdDdDdDdDdD""",
 ......kk........
 ................
 ................""",
-    "zz": """
-..kkkk..
-..kzzk..
-...kk...
-..kzzk..
-..kkkk..
-........
-........
-........""",
 }
 
 
@@ -235,7 +226,8 @@ def main():
     for name, img in tiles.items():
         img.save(os.path.join(OUT, name + ".png"))
     for name in SPRITES:
-        grid(name).save(os.path.join(OUT, name + ".png"))
+        if name != "villager":  # written only as its two layers below
+            grid(name).save(os.path.join(OUT, name + ".png"))
     # The villager in two layers, so the client tints only the tunic by role: its w/W pixels, and the rest.
     full = grid("villager")
     tint, base = Image.new("RGBA", full.size), Image.new("RGBA", full.size)
@@ -245,7 +237,7 @@ def main():
             (tint if px[:3] in (PAL["w"], PAL["W"]) else base).putpixel((x, y), px)
     tint.save(os.path.join(OUT, "villager_tint.png"))
     base.save(os.path.join(OUT, "villager_base.png"))
-    print(f"wrote {len(tiles) + len(SPRITES) + 2} images to {OUT}")
+    print(f"wrote {len(tiles) + len(SPRITES) + 1} images to {OUT}")
 
 
 if __name__ == "__main__":
