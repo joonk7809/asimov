@@ -15,8 +15,8 @@ def fake_api(monkeypatch, pods, fail=()):
     deleted = []
 
     def call(method, path, body=None):
-        if method == "GET":
-            return pods
+        if method == "GET":  # REST v2's page shape
+            return {"pods": pods, "pagination": {"hasNextPage": False, "nextCursor": None}}
         pid = path.rsplit("/", 1)[1]
         if pid in fail:
             raise SystemExit(f"RunPod DELETE {path} -> 500")
@@ -38,6 +38,29 @@ def test_down_keeps_going_after_a_failed_delete_and_exits_nonzero(monkeypatch):
     with pytest.raises(SystemExit, match="a"):
         rp.down(SimpleNamespace(all=True, pod=None))
     assert deleted == ["b"]
+
+
+def test_pods_list_follows_the_cursor(monkeypatch):
+    pages = {"/pods": {"pods": [{"id": "a"}], "pagination": {"hasNextPage": True, "nextCursor": "x"}},
+             "/pods?cursor=x": {"pods": [{"id": "b"}], "pagination": {"hasNextPage": False, "nextCursor": None}}}
+    monkeypatch.setattr(rp, "call", lambda method, path, body=None: pages[path])
+    assert [p["id"] for p in rp.pods_list()] == ["a", "b"]
+
+
+def test_up_tries_the_next_gpu_type_when_one_is_refused(monkeypatch, tmp_path):
+    seen = []
+
+    def call(method, path, body=None):
+        seen.append(body["gpu"]["id"])
+        if body["gpu"]["id"] == "G1":
+            raise rp.RunPodError("RunPod POST /pods -> 409: no capacity", 409)
+        return {"id": "p1", "cost": 1.0, "gpu": {"id": body["gpu"]["id"]}}
+
+    monkeypatch.setattr(rp, "call", call)
+    monkeypatch.setattr(rp, "POD_DIR", str(tmp_path))
+    rp.up(SimpleNamespace(model="m/x", gpu=["G1", "G2"], cloud="SECURE", max_len=8192, vllm_args="", name="t",
+                          port=[], ttl_hours=0.1))
+    assert seen == ["G1", "G2"]
 
 
 def test_ttl_cmd_is_a_background_prefix_carrying_the_terminate_script():
