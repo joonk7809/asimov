@@ -160,8 +160,9 @@ class ScriptMind(StubMind):
             "seek": "I wanted to see you."}
 
     # What the answer does next, as the voice is told it (script-voice): the stub's choice, never one to make.
-    NEXT_WORDS = {"stay": "stay here with them", "carry_on": "go back to what they were doing",
-                  "leave": "walk away from them"}
+    # say-3b (Steering 08:28Z): the answer occasion's words, mirrored.
+    NEXT_WORDS = {"stay": "stay here talking with them", "carry_on": "end the talk and go on with their day",
+                  "leave": "get away from them, and avoid them for a while"}
     # When the voice gives no words (Steering 12:14Z): the act's own sentence, warm or curt as the stub's; a
     # "good to hear from you" only answers a greeting.
     FALLBACK = {"stay": ("I'll stay a bit.", "Fine, I'll stay."), "leave": ("I'd better be going.", "I'm off."),

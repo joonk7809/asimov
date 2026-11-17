@@ -17,6 +17,7 @@ whose tick is the first tick not run. `snapshot()`/`restore()` let a world conti
 in another process; asiimov.persist uses them to resume runs after a crash.
 """
 import hashlib
+import re
 import json
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
@@ -102,11 +103,16 @@ SPOKEN_CALLS = 8
 NEXT = ("stay", "carry_on", "leave")
 
 
-def answer_tail(who: str, quoted: str) -> str:
-    return (f' {who} said to you: "{quoted}". You answer them now.'
-            " says is what you say back to them, aloud, in one line."
-            " next is what you do after: stay keeps you here with them, carry_on goes back to what you were doing,"
-            " leave walks away from them.")
+def answer_tail(who: str, quoted: str, family: str = "") -> str:
+    # say-3b (Steering 2026-11-17 08:28Z): 32B read "leave walks away" as "go somewhere" (leave on 9/20 base
+    # lines, once after agreeing to come along), while the engine runs leave as avoiding the speaker.
+    return (f' {who} said to you: "{quoted}".' + (f" {who}'s family: {family}." if family else "")
+            + " You answer them now. says is what you say back to them, aloud, in one line."
+            " next is what you do after: stay keeps you here talking with them; carry_on ends the talk and you go"
+            " on with your day; leave means you want to get away from them, and you avoid them for a while.")
+
+
+ID_REF = re.compile(r"#(\d+)\b")
 
 
 GIFTS = ("give_food", "give_coin")
@@ -425,7 +431,11 @@ class Sim:
             situation = self._situation(a, view, kind)
         if kind == "answer":  # say-3: after the situation, as the talk pilot built it
             occ = view["occasion"]
-            situation += answer_tail(self._who(occ["who"]), occ["detail"])
+            agents = self.state["agents"]
+            sp = agents[occ["who"]]
+            fam = ", ".join(agents[m]["name"] for m in self.state["families"][sp["family"]]["members"]
+                            if m != sp["id"])
+            situation += answer_tail(sp["name"], occ["detail"], fam)
         prompt, counts = assemble_prompt(a, self.state, kind, situation, actions=actions)
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
@@ -551,7 +561,8 @@ class Sim:
         schema offering steal targets the prompt no longer showed (PR #15 review)."""
         m = (self.state["tick"] % TICKS_PER_DAY) * 10
         agents = self.state["agents"]
-        kin = ", ".join(f"{agents[k['id']]['name']} (#{k['id']})" for k in view["kin"])
+        named = kind == "answer"  # say-3b: words said aloud never see an id, so the answer's prompt shows none
+        kin = ", ".join(agents[k["id"]]["name"] + ("" if named else f" (#{k['id']})") for k in view["kin"])
         rest = f" Your family: {kin or 'none'}. " + self._economy(a)
         if kind == "deliberate":
             rest += self._market_belief(a)
@@ -586,15 +597,16 @@ class Sim:
         rel = a["relationships"]
         ranked = sorted(view["present"], key=lambda p: (not p["kin"], -abs(rel.get(str(p["id"]), {}).get("affinity", 0)),
                                                         p["id"]))
+        label = (lambda p: f"{agents[p['id']]['name']} ({p['role']})") if named else (lambda p: f"#{p['id']} ({p['role']})")
         shown, size = [], 0
         for i, p in enumerate(ranked):
             more = len(ranked) - i - 1
-            size += len(f"#{p['id']} ({p['role']})") + (2 if shown else 0)
+            size += len(label(p)) + (2 if shown else 0)
             if size + (len(f" and {more} others") if more else 0) > room:
                 break
             shown.append(p)
         shown.sort(key=lambda p: p["id"])  # listed in id order, as before
-        text = ", ".join(f"#{p['id']} ({p['role']})" for p in shown)
+        text = ", ".join(label(p) for p in shown)
         omitted = len(ranked) - len(shown)
         if omitted:
             text += f" and {omitted} others" if shown else f"{omitted} people"
@@ -2163,7 +2175,11 @@ class Sim:
         """A spoken occasion's answer in words (say-1): the deliberation's reason, as said aloud to the
         speaker. Emitted before the reply's act applies. No words if the reply has none."""
         said = (out or {}).get("says")  # say-3: the answer's own words; none means no words
-        says = " ".join(said.split())[:SAY_MAX] if isinstance(said, str) else ""
+        says = " ".join(said.split()) if isinstance(said, str) else ""
+        agents = self.state["agents"]  # say-3b: an engine id said aloud ("Take a joke, #0.") becomes the name
+        says = ID_REF.sub(lambda m: agents[int(m.group(1))]["name"] if int(m.group(1)) < len(agents) else "someone",
+                          says)
+        says = " ".join(says.split())[:SAY_MAX]
         nxt = (out or {}).get("next")
         nxt = nxt if nxt in NEXT else "carry_on"
         self._emit("reply", "rule", a["id"], {"with": occ["who"], "says": says, "next": nxt}, [eid])
