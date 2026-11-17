@@ -5,6 +5,7 @@ StubMind is a deterministic, parameter-driven stand-in used until the GPU model 
 It is NOT the product's mind; it exists to exercise the pipeline and as a no-LLM baseline.
 """
 import json
+import re
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -49,6 +50,9 @@ class StubMind:
             out = self._plan(v)
         elif req.kind == "deliberate":
             out = self._deliberate(v)
+        elif req.kind == "answer":  # say-3: a word back, warm or curt by agreeableness; it carries on as it was
+            warm = v["traits"]["agreeableness"] > 500
+            out = {"says": "Good to hear from you." if warm else "I've got things to do.", "next": "carry_on"}
         else:
             out = self._reflect(v)
         return MindReply(json.dumps(out, sort_keys=True), self.model, {"temperature": 0}, "stop")
@@ -85,9 +89,6 @@ class StubMind:
         a giver thanked in kind; a conscientious agent who finished or lost an intent sets a working one."""
         t, occ = v["traits"], v.get("occasion") or {}
         why, who = occ.get("why"), occ.get("who")
-        if why == "spoken":  # say-1: a word back, warm or curt by agreeableness; it carries on as it was
-            return {"action": "wait", "target": None, "goal": "", "then": [],
-                    "reason": "Good to hear from you." if t["agreeableness"] > 500 else "I've got things to do."}
         if why == "person" and occ.get("detail") in ("like", "are fond of", "care about") and t["extraversion"] > 400:
             return {"action": "seek", "target": who, "reason": "good to see a friend", "goal": "spend time with a friend",
                     "then": [{"do": "socialize", "target": None}]}
@@ -158,8 +159,48 @@ class ScriptMind(StubMind):
             "give_coin": "Here's a coin for you.",
             "seek": "I wanted to see you."}
 
+    # What the answer does next, as the voice is told it (script-voice): the stub's choice, never one to make.
+    NEXT_WORDS = {"stay": "stay here with them", "carry_on": "go back to what they were doing",
+                  "leave": "walk away from them"}
+    # When the voice gives no words (Steering 12:14Z): the act's own sentence, warm or curt as the stub's; a
+    # "good to hear from you" only answers a greeting.
+    FALLBACK = {"stay": ("I'll stay a bit.", "Fine, I'll stay."), "leave": ("I'd better be going.", "I'm off."),
+                "carry_on": ("I'll get back to it, then.", "I've got things to do.")}
+    GREETS = re.compile(r"^\W*(hi|hello|hey|greetings|good (morning|afternoon|evening|day)|morning|evening)\b", re.I)
+
+    def __init__(self, voice=None):
+        self.voice = voice  # script-voice: a narrator that words the stub's answer to the player, or None
+        self.facts = None  # script-voice (Steering 12:05Z): req -> the world facts the voice may name (voice_facts)
+
     def decide(self, req: MindRequest) -> MindReply:
         reply = super().decide(req)
+        if req.kind == "answer" and self.voice is not None:
+            # script-voice (Steering 2026-11-16 10:18Z/11:17Z, joon's choice 11:16Z): the stub's `next` stays; the
+            # narrator writes `says` from the player's line, that next and the place facts only (no soul, no diary).
+            # The line is this mind's output, so the log records it and a replay serves it back: replay stays exact.
+            out = json.loads(reply.raw_output)
+            occ = req.view.get("occasion") or {}
+            if self.facts is not None:
+                facts = self.facts(req)
+            else:
+                m = re.search(r"You are at ([a-z_0-9]+)\.", req.prompt)
+                facts = {"place": m.group(1) if m else None, "hour": req.view.get("hour", 12),
+                         "role": req.view.get("role")}
+            ask = getattr(self.voice, "answer", None)  # a voice that says why it fell back (review of #81)
+            args = (str(occ.get("detail", "")), self.NEXT_WORDS.get(out.get("next"), "carry on"), facts)
+            said, why = ask(*args) if ask is not None else (self.voice.reply(*args), None)
+            if said:
+                out["says"] = said
+            else:
+                warm = out.get("says") == "Good to hear from you."
+                line = str(occ.get("detail", ""))
+                if not (warm and self.GREETS.search(line)):
+                    out["says"] = self.FALLBACK.get(out.get("next"), self.FALLBACK["carry_on"])[0 if warm else 1]
+            sampling = {**reply.sampling, "voice": self.voice.sampling}
+            if not said:  # the cause goes in the log with the reply, so a run counts fallbacks by cause
+                sampling["voice_why"] = why or "no words"
+            return MindReply(json.dumps(out, sort_keys=True), f"{self.model}+voice:{self.voice.model}",
+                             sampling, reply.finish_reason)
         if req.kind != "deliberate":
             return reply
         out = json.loads(reply.raw_output)

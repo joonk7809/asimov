@@ -142,6 +142,10 @@ def says(log, e: dict, aid: int) -> str | None:
             return None
         p = log[i]
         if p.origin == "mind":
+            if any(0 <= j < len(log) and log[j].kind == "said" for j in p.parents):
+                # say-3 (review of #78): an answer to the player's line keeps its reason and goal private, and its
+                # words are already on the `reply` event, so its acts carry none of their own.
+                return None
             out = _parse(p.mind or {}) or {}
             own = not step and out.get("action") == act and out.get("target") == aid
             for k in (("reason", "goal") if own else ("goal",)):

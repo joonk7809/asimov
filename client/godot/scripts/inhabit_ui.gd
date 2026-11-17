@@ -38,7 +38,7 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"gave": "done", "stolen": "you got away with it", "caught": "you were caught",
 		"released": "you let go of the villager first", "stays home sick": "you stay home sick",
 		"works sick": "you work while sick", "said yes": "they get what they asked for",
-		"said no": "they're told no", "no ask": "they hadn't asked you anything",
+		"said no": "they're told no", "no ask": "they have no ask of you now", "not together": "you're no longer together",
 		"already asked": "they're still waiting for an answer", "asleep": "you were asleep",
 		"bedtime": "it's bedtime, so you head home", "falling asleep": "you're falling asleep",
 		"no food to give": "you have no food to give", "no coin to give": "you have no coin to give", "no stock": "the market has no food left",
