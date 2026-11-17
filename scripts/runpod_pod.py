@@ -149,6 +149,8 @@ def pods_list() -> list:
     out, cursor = [], None
     while True:
         page = call("GET", "/pods" + (f"?cursor={cursor}" if cursor else "")) or {}
+        if isinstance(page, list):  # a bare list, as v1 gave: the whole account in one page
+            return out + page
         out += page.get("pods") or []
         cursor = (page.get("pagination") or {}).get("nextCursor")
         if not (page.get("pagination") or {}).get("hasNextPage") or not cursor:
