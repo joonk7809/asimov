@@ -19,13 +19,19 @@ import time
 import urllib.error
 import urllib.request
 
-API = "https://rest.runpod.io/v1"
+API = "https://api.runpod.io/v2"  # REST v1 (rest.runpod.io/v1) was retired 2026-11-15
 IMAGE = "vllm/vllm-openai:v0.11.0"
 NAME_PREFIX = "asiimov-"  # every pod this script starts; `down --all` touches only these
 GPU_TYPES = ["NVIDIA H100 80GB HBM3", "NVIDIA H100 PCIe", "NVIDIA H100 NVL", "NVIDIA A100 80GB PCIe",
              "NVIDIA A100-SXM4-80GB"]
 POD_DIR = os.path.join(os.path.dirname(__file__), "..", "runs", "pods")
 AGENT_PORT = 8001  # scripts/pod_agent.py: runs jobs on the pod itself (scripts/podjob.py)
+
+
+class RunPodError(SystemExit):
+    def __init__(self, msg: str, code: int):
+        super().__init__(msg)
+        self.code = code
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict | list | None:
@@ -39,7 +45,7 @@ def call(method: str, path: str, body: dict | None = None) -> dict | list | None
             raw = r.read()
             return json.loads(raw) if raw.strip() else None
     except urllib.error.HTTPError as e:
-        sys.exit(f"RunPod {method} {path} -> {e.code}: {e.read()[:800].decode(errors='replace')}")
+        raise RunPodError(f"RunPod {method} {path} -> {e.code}: {e.read()[:800].decode(errors='replace')}", e.code)
 
 
 # In-pod dead man's switch: the pod terminates itself after --ttl-hours even if the operator
@@ -48,9 +54,17 @@ def call(method: str, path: str, body: dict | None = None) -> dict | list | None
 # 2026-11-03: a pod running this terminated itself). Retries every 5 min until the pod is gone.
 TTL_SCRIPT = """import json, os, urllib.request as u
 q = 'mutation { podTerminate(input: {podId: "%s"}) }' % os.environ["RUNPOD_POD_ID"]
-u.urlopen(u.Request("https://api.runpod.io/graphql?api_key=" + os.environ["RUNPOD_API_KEY"],
-                    data=json.dumps({"query": q}).encode(),
-                    headers={"Content-Type": "application/json", "User-Agent": "asiimov-ttl"}), timeout=60)
+k, pid = os.environ["RUNPOD_API_KEY"], os.environ["RUNPOD_POD_ID"]
+try:
+    u.urlopen(u.Request("https://api.runpod.io/graphql?api_key=" + k, data=json.dumps({"query": q}).encode(),
+                        headers={"Content-Type": "application/json", "User-Agent": "asiimov-ttl"}), timeout=60)
+except Exception:
+    pass
+try:  # REST v2 as a second route, in case GraphQL goes the way of REST v1
+    u.urlopen(u.Request("https://api.runpod.io/v2/pods/" + pid, method="DELETE",
+                        headers={"Authorization": "Bearer " + k, "User-Agent": "asiimov-ttl"}), timeout=60)
+except Exception:
+    pass
 """
 
 
@@ -80,24 +94,33 @@ def up(args):
     cmd = ttl_cmd(expires) + agent_cmd(key, args.model) + serve
     body = {
         "name": f"{NAME_PREFIX}{args.name or args.model.split('/')[-1].lower()}"[:60],
-        "imageName": IMAGE,
-        "gpuTypeIds": args.gpu or GPU_TYPES,
-        "gpuTypePriority": "custom",
-        "gpuCount": 1,
-        "cloudType": args.cloud,
-        "containerDiskInGb": 80,
-        "volumeInGb": 0,
+        "image": IMAGE,
+        "cloud": args.cloud,
+        "disk": 80,
         "ports": ["8000/http", f"{AGENT_PORT}/http"] + [f"{p}/http" for p in args.port],
-        "dockerEntrypoint": ["bash", "-c"],
-        "dockerStartCmd": [cmd],
+        "entrypoint": ["bash", "-c"],
+        "cmd": [cmd],
         "env": {"HF_HUB_ENABLE_HF_TRANSFER": "1"},
     }
-    pod = call("POST", "/pods", body)
+    # v2 takes one GPU type per create, so the old priority list becomes a loop: the next type on any refusal
+    # (no capacity), and the last refusal ends it.
+    pod, tried = None, []
+    for gpu in args.gpu or GPU_TYPES:
+        try:
+            pod = call("POST", "/pods", {**body, "gpu": {"id": gpu, "count": 1}})
+            break
+        except RunPodError as e:
+            if e.code in (401, 403):
+                raise
+            tried.append(str(e)[:200])
+            print(f"{gpu}: {str(e)[:200]}", file=sys.stderr)
+    if pod is None:
+        sys.exit("no GPU type could be placed:\n" + "\n".join(tried))
     os.makedirs(POD_DIR, exist_ok=True)
     rec = {"id": pod["id"], "model": args.model, "vllm_args": args.vllm_args, "api_key": key, "created": time.time(),
            "url": f"https://{pod['id']}-8000.proxy.runpod.net",
-           "jobs_url": f"https://{pod['id']}-{AGENT_PORT}.proxy.runpod.net", "cost_per_hr": pod.get("costPerHr"),
-           "gpu": (pod.get("machine") or {}).get("gpuTypeId") or pod.get("gpu"),
+           "jobs_url": f"https://{pod['id']}-{AGENT_PORT}.proxy.runpod.net", "cost_per_hr": pod.get("cost"),
+           "gpu": (pod.get("gpu") or {}).get("id"),
            "expires": expires}
     with open(os.path.join(POD_DIR, f"{pod['id']}.json"), "w") as f:
         json.dump(rec, f, indent=2)
@@ -121,10 +144,21 @@ def wait(args):
     sys.exit("timed out waiting for the server; check the pod logs, and terminate it if stuck")
 
 
+def pods_list() -> list:
+    """Every pod on the account; v2 returns {"pods": [...], "pagination": {...}} and takes no filters."""
+    out, cursor = [], None
+    while True:
+        page = call("GET", "/pods" + (f"?cursor={cursor}" if cursor else "")) or {}
+        out += page.get("pods") or []
+        cursor = (page.get("pagination") or {}).get("nextCursor")
+        if not (page.get("pagination") or {}).get("hasNextPage") or not cursor:
+            return out
+
+
 def ls(_args):
-    pods = call("GET", "/pods") or []
+    pods = pods_list()
     for p in pods:
-        print(p["id"], p.get("name"), p.get("desiredStatus"), p.get("costPerHr"), p.get("imageName"))
+        print(p["id"], p.get("name"), p.get("status"), p.get("cost"), p.get("image"))
     if not pods:
         print("no pods")
 
@@ -132,7 +166,7 @@ def ls(_args):
 def down(args):
     # --all means every pod this script started (name prefix), never other pods on the account.
     if args.all:
-        ids = [p["id"] for p in call("GET", "/pods") or [] if (p.get("name") or "").startswith(NAME_PREFIX)]
+        ids = [p["id"] for p in pods_list() if (p.get("name") or "").startswith(NAME_PREFIX)]
     elif args.pod:
         ids = [args.pod]
     else:
