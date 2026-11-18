@@ -55,8 +55,11 @@ func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST  # pixel art stays crisp when scaled (V-pass)
 	var args := _args()
 	ui_scale = clampf(float(args.get("ui-scale", str(ui_scale))), 0.5, 4.0)
-	_apply_scale(not "--resolution" in OS.get_cmdline_args())
-	get_viewport().size_changed.connect(_layout)
+	# A Retina screen gets a window sized to it; at scale 1 (CI, aiplay, most monitors) the window keeps its
+	# size, from the project or --resolution (Godot strips engine flags from the args, so they can't be read).
+	_apply_scale(DisplayServer.screen_get_scale() > 1.0)
+	get_window().size_changed.connect(_layout)  # the window, not the viewport: in canvas_items mode the viewport keeps its units
+	get_window().dpi_changed.connect(_layout)  # moved to a screen of another scale (review of #92)
 	_build_ui()
 	if args.has("log"):
 		model = WorldModel.new()
@@ -108,7 +111,7 @@ func _apply_scale(fit_window: bool) -> void:
 	var s := maxf(DisplayServer.screen_get_scale(w.current_screen), 1.0) * ui_scale
 	w.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
 	w.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
-	if fit_window:  # an explicit --resolution (CI, aiplay) is kept
+	if fit_window:
 		var room := DisplayServer.screen_get_usable_rect(w.current_screen)
 		var want := Vector2(1280, 860) * s
 		var got := Vector2i(mini(int(want.x), int(room.size.x * 0.94)), mini(int(want.y), int(room.size.y * 0.92)))
@@ -889,7 +892,7 @@ func _draw_inhabitant() -> void:
 	# The map's column ends at map_w: cover what a zoomed map draws beyond it, under the panels, and its foot.
 	draw_rect(Rect2(map_w, 0, size.x - map_w, size.y), RenderingServer.get_default_clear_color())
 	draw_rect(Rect2(0, size.y - 30, map_w, 30), RenderingServer.get_default_clear_color())
-	Art.label(self, Vector2(12, size.y - 10), "Click a place to walk there. Scroll the map to zoom.", 14, Color(0.75, 0.82, 0.95))
+	Art.label(self, Vector2(12, size.y - 10), "Click a place to walk there; scroll to zoom.", 14, Color(0.75, 0.82, 0.95))
 
 
 static func night_shade(hour: float) -> float:

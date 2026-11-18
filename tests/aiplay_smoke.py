@@ -6,8 +6,8 @@ Against a paused stub world it inhabits a villager who has company, types a line
 through the virtual keyboard, and checks the server received exactly that line as a `say`, that the
 screenshot shows the client, and that stopping the session reads as the player leaving.
 
-The Talk line's place is the client's layout (the bottom of the right-hand panel). If the layout moves it,
-move TALK here."""
+The Talk line's place is the client's layout: since the P-pass (#92) the foot of the middle column, drawn at
+the default --ui-scale 1.25 (the 1280x800 window is 1024x640 units). If the layout moves it, move TALK here."""
 import asyncio
 import json
 import os
@@ -20,7 +20,7 @@ import s16b  # noqa: E402
 
 AIPLAY = os.path.join(HERE, "..", "scripts", "aiplay.py")
 W, H = 1280, 800
-TALK = (W - 162, H - 28)  # the "Say something..." line
+TALK = (int(W * 0.53), H - 34)  # the "Say something..." line
 TEXT = "Hello there, it's a fine day (isn't it?)"
 
 
