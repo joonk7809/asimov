@@ -102,11 +102,13 @@ func _apply_scale(fit_window: bool) -> void:
 	## P-pass: the UI is drawn at the screen's scale times ui_scale. A Retina Mac reports 2: without it, a window
 	## of 1280x800 pixels is a quarter of the screen and its 16 px text reads as 8 pt. The layout is in these
 	## scaled units, so a bigger scale gives fewer, larger units, and _layout sizes the columns to them.
+	if DisplayServer.get_name() == "headless":  # no screen: a 100x100 window, nothing to scale for
+		return
 	var w := get_window()
 	var s := maxf(DisplayServer.screen_get_scale(w.current_screen), 1.0) * ui_scale
 	w.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
 	w.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
-	if fit_window and DisplayServer.get_name() != "headless":  # an explicit --resolution (CI, aiplay) is kept
+	if fit_window:  # an explicit --resolution (CI, aiplay) is kept
 		var room := DisplayServer.screen_get_usable_rect(w.current_screen)
 		var want := Vector2(1280, 860) * s
 		var got := Vector2i(mini(int(want.x), int(room.size.x * 0.94)), mini(int(want.y), int(room.size.y * 0.92)))
@@ -123,7 +125,7 @@ func _layout() -> void:
 	var w := get_window()
 	var s := maxf(DisplayServer.screen_get_scale(w.current_screen), 1.0) * ui_scale
 	var want := Vector2i(Vector2(w.size) / s)
-	if w.content_scale_size != want:
+	if DisplayServer.get_name() != "headless" and w.content_scale_size != want:
 		w.content_scale_size = want
 	var width := get_viewport_rect().size.x
 	map_w = clampf(width * 0.32, 280.0, 560.0)
