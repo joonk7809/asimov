@@ -181,7 +181,8 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "say-3b"  # say-3b: answer prompts name people, leave = avoid them, ids said aloud become names; on 31
+ENGINE_VERSION = "32"
+# 32 = say-3b (#85): answer prompts name people, leave = avoid them, ids said aloud become names; on 31.
 # 31 = say-3 (#78): a spoken answer's words are its own `says` field, the reason stays private; a 3-tick listening hold; on 30.
 # 30 = say-2 (#75): a talk window bars a theft from the speaker too, and holds a running gift or theft; on 29.
 # 28 = G1-r supply-1: inputs last a day longer, supply runs wait for time off work, none when sick, a 3% gain held; on 27
