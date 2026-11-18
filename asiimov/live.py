@@ -34,6 +34,7 @@ import time
 from collections import defaultdict
 
 from . import inhabitant, narrate, persist
+from .llm import SCHEMAS
 from .minds import NoisyMind, ScriptMind, StubMind
 from .sim import ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, SAY_ACTS, SAY_MAX, TICKS_PER_DAY
 from .worldmap import position
@@ -950,6 +951,41 @@ async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, t
             c.writer.close()
 
 
+def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True)) -> list[tuple[str, float | None]]:
+    """One short call to each model server before the world opens (Steering 2026-11-18 05:42Z): aipt2's line-7
+    p95 of 6.08 s was its first, cold reply. Not a mind call: nothing is logged in the world or in calls. Each
+    server (url, model) once; a failure is printed and the world opens anyway. Returns (label, seconds|None)."""
+    out, seen = [], set()
+    for c in clients:
+        if c is None or not hasattr(c, "post") or (c.base_url, c.model) in seen:
+            continue
+        seen.add((c.base_url, c.model))
+        # The answer's own grammar for a structured mind, so its first reply doesn't pay the schema compile;
+        # json_object for the narrator, as it asks (review of #89).
+        fmt = ({"type": "json_schema", "json_schema": {"name": "answer", "schema": SCHEMAS["answer"], "strict": True}}
+               if getattr(c, "structured", False) else {"type": "json_object"})
+        body = {"model": c.model, "messages": [{"role": "user", "content": 'Say hello. Answer as JSON: {"says": "..."}'}],
+                "max_tokens": 24, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False},
+                "response_format": fmt}
+        t0 = time.monotonic()
+        retries = getattr(c, "retries", None)
+        try:
+            if retries is not None:
+                c.retries = 0  # one try: a dead server shouldn't hold the world shut for minutes (review of #89)
+            c.post("/v1/chat/completions", body)
+            dt = round(time.monotonic() - t0, 2)
+        except Exception as e:  # noqa: BLE001 - a cold server must not keep the world shut
+            dt = None
+            log(f"warm-up {c.model}: failed ({type(e).__name__}: {str(e)[:120]})")
+        else:
+            log(f"warm-up {c.model}: {dt} s")
+        finally:
+            if retries is not None:
+                c.retries = retries
+        out.append((c.model, dt))
+    return out
+
+
 def narrator_from_args(args, kind: str):
     """The same model narrates both sessions of a blind pair (Steering 2026-11-14): --narrate-url for a
     scripted world, or the llm mind's own server. A template only when no model is given."""
@@ -1001,6 +1037,7 @@ def main(argv=None):
     ap.add_argument("--narrate-url")
     ap.add_argument("--narrate-model")
     ap.add_argument("--narrate-key")
+    ap.add_argument("--no-warm-up", action="store_true", help="skip the one short call to each model server at start")
     args = ap.parse_args(argv)
     if args.token is None and args.host not in ("127.0.0.1", "localhost", "::1"):
         raise SystemExit(f"--host {args.host} is not loopback: pass --token")
@@ -1034,6 +1071,8 @@ def main(argv=None):
         if args.reply_delays:
             with open(args.reply_delays) as f:
                 hold = ReplyHold(json.load(f), f"{args.seed}-{runner.sim.state['tick']}")
+    if not args.no_warm_up:
+        warm_up([mind if kind == "llm" else None, getattr(narrator, "client", None)])
     try:
         asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token,
                           pull_min=None if args.pull_min < 0 else args.pull_min, narrator=narrator,
