@@ -518,6 +518,7 @@ func _lost_lines(evs: Array) -> void:
 				var box: LineEdit = ui["talk_line"]
 				box.text = last_said[t]
 				box.select_all_on_focus = true
+				box.release_focus()  # a focused box ignores select_all_on_focus: the next click must focus it anew
 				box.select_all()
 				_append(ui["feed"], "[color=#8a93a6]Your line is back in the Talk box: Say sends it again, "
 						+ "typing replaces it.[/color]\n")
