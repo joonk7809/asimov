@@ -81,7 +81,8 @@ HF_CACHE = "/root/.cache/huggingface"
 def stall_cmd(stall_s: int, every: int = 30) -> str:
     """Shell prefix for dockerStartCmd: the download watchdog (2026-11-17: a 32B shard sat at 29.7 of ~33 GB for
     16+ minutes and vLLM never served, ~$4.75 lost). While vLLM doesn't answer /health, a weight file is still
-    `.incomplete` and the cache hasn't grown for `stall_s` seconds, the pod terminates itself through the TTL
+    `.incomplete` and the cache's allocated bytes (du -B1, not the apparent size: hf_transfer writes chunks out of
+    order, so the apparent size jumps early and then holds while holes fill) haven't grown for `stall_s` seconds, the pod terminates itself through the TTL
     script. Loading into the GPU (no .incomplete left) never trips it; once /health answers it stops."""
     b64 = base64.b64encode(TTL_SCRIPT.encode()).decode()
     return (f"(last=-1; still=0; while true; do sleep {every}; "
@@ -89,7 +90,7 @@ def stall_cmd(stall_s: int, every: int = 30) -> str:
             f"python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=5)\" "
             f"2>/dev/null && break; "
             f"inc=$(find {HF_CACHE} -name '*.incomplete' 2>/dev/null | head -1); "
-            f"sz=$(du -sb {HF_CACHE} 2>/dev/null | cut -f1); "
+            f"sz=$(du -sB1 {HF_CACHE} 2>/dev/null | cut -f1); "
             f'if [ -n "$inc" ] && [ "$sz" = "$last" ]; then still=$((still+{every})); else still=0; fi; last=$sz; '
             f'if [ $still -ge {stall_s} ]; then echo "asiimov: weight download stalled $still s at $sz bytes, terminating"; '
             f"while true; do echo {b64} | base64 -d | python3; sleep 60; done; fi; done) & ")
@@ -241,7 +242,8 @@ def main():
     p.set_defaults(fn=up)
     p = sub.add_parser("wait")
     p.add_argument("pod")
-    p.add_argument("--timeout", type=int, default=1500)
+    # 45 min: a 32B download (~33 GB) and load took ~17 min on 2026-11-17; a stall is the watchdog's to catch
+    p.add_argument("--timeout", type=int, default=2700)
     p.add_argument("--keep", action="store_true", help="on a timeout, leave the pod running")
     p.set_defaults(fn=wait)
     sub.add_parser("list").set_defaults(fn=ls)

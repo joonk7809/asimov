@@ -91,3 +91,42 @@ def test_stall_watchdog_fires_only_on_a_stuck_download(monkeypatch, tmp_path, in
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
     assert ("TERMINATE" in out and "stalled" in out) == trips, out
+
+
+def test_stall_watchdog_counts_filled_holes_as_progress(monkeypatch, tmp_path):
+    """Review of #86: hf_transfer writes a far chunk first, then fills the holes before it; the apparent size holds
+    still while the download is healthy. The watchdog reads allocated bytes, so filling holes is progress."""
+    import subprocess
+    import threading
+    cache = tmp_path / "hf"
+    cache.mkdir()
+    f = cache / "shard.incomplete"
+    with open(f, "wb") as h:
+        h.seek(64 << 20)
+        h.write(b"x" * (1 << 20))  # the far chunk: apparent size 65 MB from the start
+    stop = threading.Event()
+
+    def fill():
+        off = 0
+        while not stop.is_set() and off < (64 << 20):
+            with open(f, "r+b") as h:
+                h.seek(off)
+                h.write(b"y" * (1 << 20))
+                h.flush()
+                os.fsync(h.fileno())
+            off += 1 << 20
+            stop.wait(0.3)
+
+    t = threading.Thread(target=fill)
+    t.start()
+    monkeypatch.setattr(rp, "HF_CACHE", str(cache))
+    monkeypatch.setattr(rp, "TTL_SCRIPT", "print('TERMINATE')")
+    cmd = rp.stall_cmd(2, every=1).rstrip().rstrip("&")
+    try:
+        out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=6).stdout
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+    finally:
+        stop.set()
+        t.join()
+    assert "TERMINATE" not in out, out
