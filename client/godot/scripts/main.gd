@@ -223,6 +223,7 @@ func _build_inhabit_ui() -> void:
 	line.placeholder_text = "Say something..."
 	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	line.text_submitted.connect(func(_t): _say())
+	line.text_changed.connect(func(_t): line.select_all_on_focus = false)  # a typed edit keeps the box's text
 	talk.add_child(line)
 	ui["talk_line"] = line
 	var say := Button.new()
@@ -481,8 +482,12 @@ func _refresh_talk() -> void:
 		if at >= 0:
 			who.select(at)
 	var none: bool = ids.is_empty()
-	ui["talk_line"].editable = not none
-	ui["talk_line"].placeholder_text = "Nobody here to talk to." if none else "Say something..."
+	# aipt2 x5: Enter while a line was on its way kept the text, and the next words were typed onto it. The box
+	# waits with the button until the line has landed.
+	var waiting: bool = not pending.is_empty() and str(pending.get("label", "")).begins_with("Say to ")
+	ui["talk_line"].editable = not none and not waiting
+	ui["talk_line"].placeholder_text = "Nobody here to talk to." if none else \
+			("Waiting to be heard..." if waiting else "Say something...")
 	ui["talk_say"].disabled = none or not pending.is_empty()
 
 
@@ -496,6 +501,7 @@ func _say() -> void:
 			"tick": int(client.view["tick"])}
 	last_said[t] = text
 	ui["talk_line"].text = ""
+	ui["talk_line"].select_all_on_focus = false
 	_refresh_inhabit()
 
 
@@ -507,8 +513,14 @@ func _lost_lines(evs: Array) -> void:
 				and str(d.get("action", "")) == "say" and not d.get("ok", false) and d.get("to") != null:
 			var t := int(d["to"])
 			if last_said.has(t) and str(ui["talk_line"].text) == "":
-				ui["talk_line"].text = last_said[t]
-				_append(ui["feed"], "[color=#8a93a6]Your line is back in the Talk box.[/color]\n")
+				# aipt2 x12: a click put the caret inside the old line and new words went into its middle. The
+				# returned line is selected whole, and a click selects it again, so typing replaces it.
+				var box: LineEdit = ui["talk_line"]
+				box.text = last_said[t]
+				box.select_all_on_focus = true
+				box.select_all()
+				_append(ui["feed"], "[color=#8a93a6]Your line is back in the Talk box: Say sends it again, "
+						+ "typing replaces it.[/color]\n")
 			last_said.erase(t)
 
 
