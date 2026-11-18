@@ -99,9 +99,9 @@ For each narrated item (`h…`):
 - `natural`: 1 if it reads like people talking, 0 if recited or stiff.
 
 ## Limits
-- Until the client keeps its buttons on screen at a crowded place, start the window tall (`--size
-  1440x1600`) and have the tester look at crops (`--crop 1030,0,410,1600` is the right-hand column). The
-  stub-world shakedown (2026-11-16) lost its first minutes finding that out.
+- Since the P-pass (2026-11-18) the UI is drawn 1.25x larger and the right-hand column holds only you, who's
+  here and the action buttons; your plan and the Talk box sit in the middle column. A tall window (`--size
+  1440x1600`) still shows more buttons at once; crop positions changed, so take them from a fresh screenshot.
 - One tester is one world: a world holds one player. Several testers need several worlds.
 - The tester is slower than a person (several seconds a look), so its feel for pace is weak; lines 6 and 7
   come from the log.
