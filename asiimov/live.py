@@ -666,6 +666,7 @@ class Hub:
 
     async def handle(self, reader, writer):
         if not await handshake(reader, writer):
+            self.runner._side("refused", reason="handshake")  # pt10: a join that never arrived left no trace
             writer.close()
             return
         conn = Conn(writer)
@@ -682,6 +683,9 @@ class Hub:
                     err = _hello_error(m) or (self.token is not None and not (isinstance(m.get("token"), str) and
                         hmac.compare_digest(m["token"].encode(), self.token.encode())) and "bad_token")
                     if err:
+                        m = m or {}
+                        self.runner._side("refused", reason=err, client=conn.name, scope=m.get("scope"),
+                                          agent=m.get("agent"), protocol=m.get("protocol"))
                         conn.close(err)
                         break
                     conn.scope = m.get("scope", "god")
