@@ -32,7 +32,7 @@ import time
 from collections import deque
 
 from .inhabitant import present_ids
-from .sim import TICKS_PER_DAY, TRADE_INPUT
+from .sim import TICKS_PER_DAY, TRADE_INPUT, clip_reply
 
 ASK_ACTS = ("ask_kin", "ask_food", "buy_from")
 REFUSALS = ("refused", "kin refused", "nothing to spare", "kin has nothing to spare")
@@ -499,7 +499,7 @@ class LLMNarrator:
             return None, [], "malformed"
         if not isinstance(says, str) or not says.strip():
             return None, [], "malformed"
-        says = " ".join(says.replace('"', "'").split())[:140]
+        says = clip_reply(" ".join(says.replace('"', "'").split()))  # say-3c: never mid-word (review of #88)
         return says, [x for x in invented(says, h) if not set(x.split()) <= theirs], None
 
     def lines(self, it: dict) -> list[dict]:

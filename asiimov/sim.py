@@ -94,6 +94,22 @@ OCCASIONS = {  # why a deliberation was asked, as its situation says it
 # and get SPOKEN_CALLS more calls a day than the usual cap, so a talk isn't met with silence.
 SAY_ACTS = ("say",)
 SAY_MAX = 140
+REPLY_MIN_SENTENCE = 93  # say-3c: a clipped reply backs up to a sentence end only if this much is kept
+
+
+def clip_reply(text: str) -> str:
+    """say-3c (Steering 2026-11-18 05:42Z; aipt2 heard "but I'll consi"): a reply over SAY_MAX backs up to its
+    last sentence end if that keeps at least REPLY_MIN_SENTENCE characters, else to its last word boundary,
+    ending in an ellipsis. Never longer than SAY_MAX."""
+    if len(text) <= SAY_MAX:
+        return text
+    cut = text[:SAY_MAX]
+    ends = [i + 1 for i, c in enumerate(cut) if c in ".!?" and text[i + 1] == " "]  # the full text: "3.5" is no end
+    if ends and ends[-1] >= REPLY_MIN_SENTENCE:
+        return cut[:ends[-1]]
+    room = cut[:SAY_MAX - 1]
+    w = room.rfind(" ")
+    return (room[:w].rstrip(" ,;:-") if w > 0 else room) + "…"
 LISTEN_TICKS = 3  # say-3 (Steering 11:32Z): a listener stands still this long after a line lands, unless it leaves
 SPOKEN_CALLS = 8
 # say-3 (pt8; Steering 2026-11-16 10:40Z, re-scoped 10:57Z/11:04Z): a line said to a villager is answered by its
@@ -181,7 +197,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "32"
+ENGINE_VERSION = "33"  # 33 = say-3c (#88): an over-long reply is clipped at a sentence or word, not mid-word; on 32
 # 32 = say-3b (#85): answer prompts name people, leave = avoid them, ids said aloud become names; on 31.
 # 31 = say-3 (#78): a spoken answer's words are its own `says` field, the reason stays private; a 3-tick listening hold; on 30.
 # 30 = say-2 (#75): a talk window bars a theft from the speaker too, and holds a running gift or theft; on 29.
@@ -2180,7 +2196,7 @@ class Sim:
         agents = self.state["agents"]  # say-3b: an engine id said aloud ("Take a joke, #0.") becomes the name
         says = ID_REF.sub(lambda m: agents[int(m.group(1))]["name"] if int(m.group(1)) < len(agents) else "someone",
                           says)
-        says = " ".join(says.split())[:SAY_MAX]
+        says = clip_reply(" ".join(says.split()))
         nxt = (out or {}).get("next")
         nxt = nxt if nxt in NEXT else "carry_on"
         self._emit("reply", "rule", a["id"], {"with": occ["who"], "says": says, "next": nxt}, [eid])
