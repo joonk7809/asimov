@@ -120,7 +120,16 @@ func _init() -> void:
 	var lost := Words.describe({"kind": "receipt", "actor": 3, "origin": "rule", "tick": 50,
 			"data": {"action": "say", "ok": false, "why": "target not here", "to": 4}}, {"id": 3, "name": "Me"}, {4: "Ari"})
 	var trip := [{"kind": "receipt", "data": {"ok": true, "why": "bought", "action": "buy_food"}}]
-	if "(#0)" in mind or not "Bane Deka asked you for food" in mind or not "didn't reach Ari" in lost \
+	# pt11: an answer that walks off says so, before the player types to someone who's leaving.
+	var off := Words.describe({"kind": "reply", "actor": 4, "origin": "rule", "tick": 50,
+			"data": {"with": 3, "says": "Goodbye.", "next": "leave"}}, {"id": 3, "name": "Me"}, {4: "Ari"})
+	var stays := Words.describe({"kind": "reply", "actor": 4, "origin": "rule", "tick": 50,
+			"data": {"with": 3, "says": "Sure.", "next": "stay"}}, {"id": 3, "name": "Me"}, {4: "Ari"})
+	if not "Ari walks away." in off or "walks away" in stays or not "Ari has gone" in lost:
+		printerr("pt11 words: %s | %s | %s" % [off, stays, lost])
+		quit(1)
+		return
+	if "(#0)" in mind or not "Bane Deka asked you for food" in mind or not "didn't reach" in lost \
 			or not Plan.bought(Plan.step("go_market"), trip) or Plan.bought(Plan.step("buy_food"), trip) \
 			or Plan.bought(Plan.step("go_market"), [{"kind": "receipt", "data": {"ok": true, "why": "no stock"}}]):
 		printerr("aipt1 words: %s | %s" % [mind, lost])

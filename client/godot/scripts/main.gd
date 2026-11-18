@@ -37,6 +37,7 @@ var plan_act := -1          # the act event of the head step, once acked
 var plan_receipts := []     # receipts (and a seek's meet) so far that cite plan_act
 var plan_sent := 0          # the view tick the head step was sent at
 var plan_failed := 0        # the view tick the head step failed at (it is skipped a tick later)
+var leaving := {}           # inhabitant: villager id -> the tick they answered you and walked away (pt11)
 var last_said := {}         # inhabitant: villager id -> the last line said to them, put back if it didn't reach them
 var heard_recent := []      # inhabitant: keys of the last overheard exchanges, so a word-for-word repeat isn't shown
 var map_rects := {}         # inhabitant: place name -> its rect on screen, for clicks
@@ -337,6 +338,9 @@ func _feed(evs: Array) -> void:
 		if line != "":
 			var at := "[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line]
 			_append(ui["feed"], at)
+			if e["kind"] == "reply" and str(e["data"].get("next", "")) == "leave" and e["data"].get("with") != null \
+					and int(e["data"]["with"]) == int(client.me["id"]):
+				leaving[int(e["actor"])] = int(e["tick"])  # pt11: not a Talk target while they walk off
 			if e["kind"] in ["said", "reply"]:  # say-1: spoken words also go where talk is read
 				_append(ui["said"], at)
 				var words := str(e["data"].get("text" if e["kind"] == "said" else "says", ""))
@@ -523,7 +527,9 @@ func _refresh_talk() -> void:
 	var ids := []
 	if not v.get("asleep", true):
 		for p in v.get("present", []):
-			if not p.get("asleep", false):
+			# Someone who answered you and walked away is still listed for the tick they leave on: a line to them
+			# would arrive after they'd gone (pt11, Steering 2026-11-18 23:52Z).
+			if not p.get("asleep", false) and int(v["tick"]) - int(leaving.get(int(p["id"]), -99)) > 2:
 				ids.append(int(p["id"]))
 	var key := JSON.stringify(ids)
 	var who: OptionButton = ui["talk_who"]
