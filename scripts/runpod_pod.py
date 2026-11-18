@@ -75,6 +75,27 @@ def ttl_cmd(expires: int) -> str:
     return f"(sleep $(({expires} - $(date +%s))); while true; do echo {b64} | base64 -d | python3; sleep 300; done) & "
 
 
+HF_CACHE = "/root/.cache/huggingface"
+
+
+def stall_cmd(stall_s: int, every: int = 30) -> str:
+    """Shell prefix for dockerStartCmd: the download watchdog (2026-11-17: a 32B shard sat at 29.7 of ~33 GB for
+    16+ minutes and vLLM never served, ~$4.75 lost). While vLLM doesn't answer /health, a weight file is still
+    `.incomplete` and the cache's allocated bytes (du -B1, not the apparent size: hf_transfer writes chunks out of
+    order, so the apparent size jumps early and then holds while holes fill) haven't grown for `stall_s` seconds, the pod terminates itself through the TTL
+    script. Loading into the GPU (no .incomplete left) never trips it; once /health answers it stops."""
+    b64 = base64.b64encode(TTL_SCRIPT.encode()).decode()
+    return (f"(last=-1; still=0; while true; do sleep {every}; "
+            # python3, not curl: the vLLM image is only known to carry python3
+            f"python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=5)\" "
+            f"2>/dev/null && break; "
+            f"inc=$(find {HF_CACHE} -name '*.incomplete' 2>/dev/null | head -1); "
+            f"sz=$(du -sB1 {HF_CACHE} 2>/dev/null | cut -f1); "
+            f'if [ -n "$inc" ] && [ "$sz" = "$last" ]; then still=$((still+{every})); else still=0; fi; last=$sz; '
+            f'if [ $still -ge {stall_s} ]; then echo "asiimov: weight download stalled $still s at $sz bytes, terminating"; '
+            f"while true; do echo {b64} | base64 -d | python3; sleep 60; done; fi; done) & ")
+
+
 def agent_cmd(key: str, model: str) -> str:
     """Shell prefix for dockerStartCmd: the job runner on AGENT_PORT, restarted if it ever exits.
     Jobs live on the container disk under /jobs and outlive the runner itself. It shares vLLM's key, so that
@@ -91,7 +112,7 @@ def up(args):
     serve = (f"exec vllm serve {args.model} --host 0.0.0.0 --port 8000 --api-key {key} "
              f"--max-model-len {args.max_len} --gpu-memory-utilization 0.92 --enable-prefix-caching "
              f"--served-model-name {args.model} {args.vllm_args}").rstrip()
-    cmd = ttl_cmd(expires) + agent_cmd(key, args.model) + serve
+    cmd = ttl_cmd(expires) + (stall_cmd(args.stall_s) if args.stall_s else "") + agent_cmd(key, args.model) + serve
     body = {
         "name": f"{NAME_PREFIX}{args.name or args.model.split('/')[-1].lower()}"[:60],
         "image": IMAGE,
@@ -128,8 +149,10 @@ def up(args):
 
 
 def wait(args):
+    """Blocks until vLLM answers. Ends early when the pod is gone (its stall watchdog or TTL fired), and on a
+    timeout it terminates the pod unless --keep: a pod that never served has no purpose left (joon, 2026-11-18)."""
     rec = json.load(open(os.path.join(POD_DIR, f"{args.pod}.json")))
-    t0 = time.time()
+    t0, n = time.time(), 0
     while time.time() - t0 < args.timeout:
         try:
             req = urllib.request.Request(rec["url"] + "/v1/models",
@@ -140,8 +163,24 @@ def wait(args):
                 return
         except Exception as e:  # noqa: BLE001 - startup produces 404/502/timeouts until vLLM is up
             print(f"{time.time() - t0:5.0f}s not ready: {str(e)[:80]}", flush=True)
-            time.sleep(15)
-    sys.exit("timed out waiting for the server; check the pod logs, and terminate it if stuck")
+        n += 1
+        if n % 4 == 0 and not pod_alive(args.pod):
+            sys.exit(f"pod {args.pod} is gone (stall watchdog or TTL): it never served")
+        time.sleep(15)
+    if args.keep:
+        sys.exit("timed out waiting for the server; the pod is still billing (--keep)")
+    down(argparse.Namespace(all=False, pod=args.pod))
+    sys.exit("timed out waiting for the server; terminated the pod")
+
+
+def pod_alive(pid: str) -> bool:
+    try:
+        pod = call("GET", f"/pods/{pid}") or {}
+    except RunPodError as e:
+        return e.code != 404
+    except Exception:  # noqa: BLE001 - an unreachable API says nothing about the pod
+        return True
+    return pod.get("status") not in ("TERMINATED", "EXITED", "ERROR")
 
 
 def pods_list() -> list:
@@ -198,10 +237,14 @@ def main():
     p.add_argument("--port", type=int, action="append", default=[],
                    help="another HTTP port to expose at https://POD_ID-PORT.proxy.runpod.net, e.g. 8765 for asiimov.live")
     p.add_argument("--ttl-hours", type=float, default=6.0, help="pod terminates itself this long after launch; size it to the planned run")
+    p.add_argument("--stall-s", type=int, default=180,
+                   help="pod terminates itself when its weight download makes no progress this long (0: off)")
     p.set_defaults(fn=up)
     p = sub.add_parser("wait")
     p.add_argument("pod")
-    p.add_argument("--timeout", type=int, default=1500)
+    # 45 min: a 32B download (~33 GB) and load took ~17 min on 2026-11-17; a stall is the watchdog's to catch
+    p.add_argument("--timeout", type=int, default=2700)
+    p.add_argument("--keep", action="store_true", help="on a timeout, leave the pod running")
     p.set_defaults(fn=wait)
     sub.add_parser("list").set_defaults(fn=ls)
     p = sub.add_parser("down")
