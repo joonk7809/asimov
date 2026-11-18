@@ -63,7 +63,9 @@ def test_a_said_line_is_remembered_and_answered_next_tick_in_words():
     req = next(r for r in mind.reqs[n0:] if r.agent_id == to)
     # say-3: its own request kind, the talk pilot's tail and schema line, no action menu
     assert req.kind == "answer"
-    assert req.prompt.endswith(S.answer_tail(sim._who(me), "Do you know where the 'good' well is?"))
+    sp = sim.state["agents"][me]
+    fam = ", ".join(sim.state["agents"][m]["name"] for m in sim.state["families"][sp["family"]]["members"] if m != me)
+    assert req.prompt.endswith(S.answer_tail(sp["name"], "Do you know where the 'good' well is?", fam))
     assert ANSWER_LINE in req.prompt and '"action"' not in req.prompt.split("# Now")[0].split("For kind=answer")[1].split("\n")[0]
     assert "Your action happens now" not in req.prompt
     new = [e for e in sim.events if e.tick == sim.state["tick"] - 1]
@@ -390,6 +392,44 @@ def test_an_answer_is_its_own_words_and_next_and_never_its_reason():
         ans = next(r for r in mind.reqs if r.agent_id == to and r.kind == "answer")
         assert schema_for(ans) == {"type": "object", "properties": {"says": {"type": "string"}, "next": {
             "type": "string", "enum": ["stay", "carry_on", "leave"]}}, "required": ["says", "next"], "additionalProperties": False}
+
+
+def test_an_answer_prompt_names_people_and_never_shows_an_id():
+    """say-3b (Steering 2026-11-17 08:28Z): the 32B check spoke "#0" aloud. The answer's prompt names the
+    people here, the family and the speaker (with the speaker's family), and has no "#N" anywhere in # Now."""
+    mind = Rec()
+    sim, me, to = body_with_company(mind)
+    say(sim, me, to, "Have you seen my family?")
+    n0 = len(mind.reqs)
+    sim.step()
+    req = next(r for r in mind.reqs[n0:] if r.agent_id == to and r.kind == "answer")
+    now = req.prompt.split("# Now")[1]
+    assert not S.ID_REF.search(now), now
+    sp = sim.state["agents"][me]
+    assert f"{sp['name']}'s family:" in now or not [m for m in sim.state["families"][sp["family"]]["members"] if m != me]
+    assert "leave means you want to get away from them, and you avoid them for a while." in now
+    assert sp["name"] in now.split("Here: ")[1].split(".")[0] or " others" in now.split("Here: ")[1].split(".")[0]
+
+
+def test_an_id_said_aloud_becomes_the_name_before_it_is_logged():
+    """say-3b: "Take a joke, #0." is logged with #0's name, in the reply and in both notes."""
+    class Says(StubMind):
+        def decide(self, req):
+            if req.kind == "answer":
+                return MindReply(json.dumps({"says": f"Take a joke, #{ME[0]}. And #99999 too.", "next": "carry_on"}),
+                                 "t", {}, "stop")
+            return super().decide(req)
+
+    ME = []
+    mind = Says()
+    sim, me, to = body_with_company(mind)
+    ME.append(me)
+    say(sim, me, to, "Tell me a joke.")
+    sim.step()
+    reply = next(e for e in sim.events if e.kind == "reply")
+    name = sim.state["agents"][me]["name"]
+    assert reply.data["says"] == f"Take a joke, {name}. And someone too."
+    assert any(f'said to me: "Take a joke, {name}.' in n for n in sim.state["agents"][me]["recent"])
 
 
 def test_a_line_said_does_not_settle_an_ask_waiting_on_the_player():

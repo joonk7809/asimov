@@ -203,7 +203,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "say-2": "b60c73ac39c36f24162c7a8f4efcb08374d8efe493d6e3c43ae20ed71e20cc49",  # say-2: theft barred in a talk window, on 29, before its number; no say: only the engine field differs
           "30": "a7e119f7285d75e164aaebef401ed44882fec20e46483bb9069b3b69584f65ac",  # say-2 (#75), no theft or gift in a talk window; no say: only the engine field differs
           "say-3": "ab40deb5b201960554d8c5d8f1d5f13593e2ce20c4231c00cee20c2b73db7955",  # say-3: a spoken answer's words in `says`, on 30, before its number; no say: only the engine field differs
-          "31": "7d56872a5271feaea7d9a44c51e1e25dedd4a8151e052926a11d2ef493732bf3"}  # say-3 (#78), a spoken answer's words; no say: only the engine field differs
+          "31": "7d56872a5271feaea7d9a44c51e1e25dedd4a8151e052926a11d2ef493732bf3",  # say-3 (#78), a spoken answer's words; no say: only the engine field differs
+          "say-3b": "4a3287eac6834cecf42965d6fb09e339f80b557cb62abb0ca85164db5a8a63a9"}  # say-3b: answer prompts name people, leave = avoid, on 31, before its number; no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
