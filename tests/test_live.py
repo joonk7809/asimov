@@ -421,3 +421,27 @@ def test_the_warm_up_calls_each_model_server_once_and_a_failure_does_not_stop_th
     assert narr.bodies[0][1]["response_format"] == {"type": "json_object"}
     assert down.tries == [0] and down.retries == 3  # one try while warming, then as before
     assert any("failed" in line for line in logged)
+
+
+def test_an_answer_first_warm_up_sends_a_priority_and_a_fcfs_server_stops_the_start():
+    """Review of #94: a pod started without --scheduling-policy priority refuses every priority with a 400; the
+    warm-up sends one, so the start fails at once instead of partway through the run."""
+    import pytest
+    from asiimov.live import warm_up
+
+    class C:
+        def __init__(self, fail):
+            self.base_url, self.model, self.structured, self.retries, self.answer_first = "https://a", "32b", True, 3, True
+            self.fail, self.bodies = fail, []
+
+        def post(self, path, body):
+            self.bodies.append(body)
+            if self.fail:
+                raise RuntimeError("HTTP 400: priority is not supported by fcfs")
+            return {}
+
+    ok = C(False)
+    warm_up([ok], log=lambda *a: None)
+    assert ok.bodies[0]["priority"] == 1
+    with pytest.raises(SystemExit, match="scheduling-policy priority"):
+        warm_up([C(True)], log=lambda *a: None)
