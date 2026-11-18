@@ -2,6 +2,8 @@
 #   godot --path client/godot -- --url ws://127.0.0.1:8765/     live, against python -m asiimov.live
 #   ... --url URL --inhabit 3 [--token T]                         live as villager 3: what it sees, in words, and
 #                                                                 its action menu
+#   ... --ui-scale 1.5                                            everything larger (default 1.25, times the screen's
+#                                                                 own scale); Ctrl/Cmd + and - change it while playing
 #   godot --path client/godot -- --log runs/demo/events.jsonl   a recorded log
 #   ... --log LOG --at TICK --screenshot out.png                  save one frame and quit (needs a display: xvfb-run;
 #                                                                 live, it waits about 3 s first)
@@ -38,7 +40,10 @@ var plan_failed := 0        # the view tick the head step failed at (it is skipp
 var last_said := {}         # inhabitant: villager id -> the last line said to them, put back if it didn't reach them
 var heard_recent := []      # inhabitant: keys of the last overheard exchanges, so a word-for-word repeat isn't shown
 var map_rects := {}         # inhabitant: place name -> its rect on screen, for clicks
-const MAP_W := 420          # inhabitant: the map's column; the feed and panels take the rest
+var map_w := 420.0          # inhabitant: the map's column; the feed and panels take the rest (sized in _layout)
+var side_w := 400.0         # inhabitant: the right-hand column (you, plan, here, actions, talk)
+var ui_scale := 1.25        # P-pass (joon 2026-11-18 "very small and hard to see"): everything x this, on top of
+							# the screen's own scale (2 on a Retina Mac); --ui-scale S, and Ctrl/Cmd + / - live
 var zoom := 1.8             # inhabitant: map zoom (V4), wheel over the map; past 1 the map follows you
 var bubbles := []           # inhabitant: words shown over their speaker (V3) {who, text, mine, born}
 var drawn_at := {}          # inhabitant: id -> where that villager was drawn this frame (for bubbles)
@@ -49,6 +54,9 @@ var say_once := ""          # --say TEXT (dev, screenshots): say it once to the 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST  # pixel art stays crisp when scaled (V-pass)
 	var args := _args()
+	ui_scale = clampf(float(args.get("ui-scale", str(ui_scale))), 0.5, 4.0)
+	_apply_scale(not "--resolution" in OS.get_cmdline_args())
+	get_viewport().size_changed.connect(_layout)
 	_build_ui()
 	if args.has("log"):
 		model = WorldModel.new()
@@ -88,6 +96,43 @@ func _args() -> Dictionary:
 		if a[i].begins_with("--"):
 			out[a[i].substr(2)] = a[i + 1]
 	return out
+
+
+func _apply_scale(fit_window: bool) -> void:
+	## P-pass: the UI is drawn at the screen's scale times ui_scale. A Retina Mac reports 2: without it, a window
+	## of 1280x800 pixels is a quarter of the screen and its 16 px text reads as 8 pt. The layout is in these
+	## scaled units, so a bigger scale gives fewer, larger units, and _layout sizes the columns to them.
+	var w := get_window()
+	var s := maxf(DisplayServer.screen_get_scale(w.current_screen), 1.0) * ui_scale
+	w.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	w.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	if fit_window and DisplayServer.get_name() != "headless":  # an explicit --resolution (CI, aiplay) is kept
+		var room := DisplayServer.screen_get_usable_rect(w.current_screen)
+		var want := Vector2(1280, 860) * s
+		var got := Vector2i(mini(int(want.x), int(room.size.x * 0.94)), mini(int(want.y), int(room.size.y * 0.92)))
+		w.size = got
+		w.position = room.position + (room.size - got) / 2
+	w.content_scale_size = Vector2i(Vector2(w.size) / s)
+	w.content_scale_factor = 1.0
+	_layout()
+
+
+func _layout() -> void:
+	## The columns as shares of the (scaled) window, so the panels fit at any scale: the map a third, the right
+	## column about a third with room for its buttons, the feed the rest.
+	var w := get_window()
+	var s := maxf(DisplayServer.screen_get_scale(w.current_screen), 1.0) * ui_scale
+	var want := Vector2i(Vector2(w.size) / s)
+	if w.content_scale_size != want:
+		w.content_scale_size = want
+	var width := get_viewport_rect().size.x
+	map_w = clampf(width * 0.32, 280.0, 560.0)
+	side_w = clampf(width * 0.33, 330.0, 520.0)
+	if ui.has("side"):
+		ui["side"].offset_left = -side_w
+		ui["feed_box"].offset_left = map_w + 12
+		ui["feed_box"].offset_right = -(side_w + 16)
+	queue_redraw()
 
 
 func _build_ui() -> void:
@@ -149,14 +194,28 @@ func _panel(parent: Control, title: String, expand := false) -> RichTextLabel:
 
 
 func _build_inhabit_ui() -> void:
-	## Inhabitant mode: you, your plan, who's here and your buttons on the right; what happened below the map.
+	## Inhabitant mode: you, who's here and your buttons on the right; what happened, your plan and talk in the middle.
 	var side := VBoxContainer.new()
 	side.set_anchors_and_offsets_preset(Control.PRESET_RIGHT_WIDE)
-	side.offset_left = -400
+	side.offset_left = -side_w
 	side.offset_right = -8
 	side.offset_top = 8
 	side.offset_bottom = -12
 	ui["layer"].add_child(side)
+	ui["side"] = side
+	# P-pass: at a larger text size the right column had no room left for its action buttons. What you did and
+	# heard, your own plan and the Talk box now share the middle column; the right one keeps you, who's here and
+	# what you can do.
+	var feed_box := VBoxContainer.new()
+	feed_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	feed_box.offset_left = map_w + 12  # the map takes the left column
+	feed_box.offset_right = -(side_w + 16)
+	feed_box.offset_top = 8
+	feed_box.offset_bottom = -12
+	ui["layer"].add_child(feed_box)
+	ui["feed_box"] = feed_box
+	ui["feed"] = _panel(feed_box, "What's happening", true)
+	ui["feed"].size_flags_stretch_ratio = 1.3
 	# aipt1 (fix 1): a yes/no ask waits on you for a few ticks, then your habits answer. It sat among 25 action rows
 	# and was missed; it now comes first, above everything, with its own buttons.
 	var asked := RichTextLabel.new()
@@ -175,9 +234,9 @@ func _build_inhabit_ui() -> void:
 	ui["here"].fit_content = false
 	ui["here"].scroll_active = true
 	ui["here"].custom_minimum_size = Vector2(0, 110)
-	ui["myplan"] = _panel(side, "Your plan")
+	ui["myplan"] = _panel(feed_box, "Your plan")
 	var ctl := HFlowContainer.new()
-	side.add_child(ctl)
+	feed_box.add_child(ctl)
 	var ahead := CheckButton.new()
 	ahead.text = "Plan ahead"
 	ahead.tooltip_text = "On: actions and places you press line up in your plan instead of happening now."
@@ -207,12 +266,14 @@ func _build_inhabit_ui() -> void:
 	scroll.add_child(menu)
 	ui["menu"] = menu
 	# say-1: talk to someone here in your own words; their mind answers on the next tick.
+	ui["said"] = _panel(feed_box, "Said near you", true)  # readable-world C3: talk you can hear, in words
+	ui["said"].append_text("[color=#8a93a6]Conversations near you, and what people say to you, show up here.[/color]\n")
 	var talk_head := Label.new()
 	talk_head.text = "Talk"
 	talk_head.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
-	side.add_child(talk_head)
+	feed_box.add_child(talk_head)
 	var talk := HBoxContainer.new()
-	side.add_child(talk)
+	feed_box.add_child(talk)
 	var who := OptionButton.new()
 	who.custom_minimum_size = Vector2(120, 0)
 	who.clip_text = true
@@ -231,17 +292,6 @@ func _build_inhabit_ui() -> void:
 	say.pressed.connect(_say)
 	talk.add_child(say)
 	ui["talk_say"] = say
-	var feed_box := VBoxContainer.new()
-	feed_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	feed_box.offset_left = MAP_W  # the map takes the left column
-	feed_box.offset_right = -416
-	feed_box.offset_top = 8
-	feed_box.offset_bottom = -12
-	ui["layer"].add_child(feed_box)
-	ui["feed"] = _panel(feed_box, "What's happening", true)
-	ui["feed"].size_flags_stretch_ratio = 1.6
-	ui["said"] = _panel(feed_box, "Said near you", true)  # readable-world C3: talk you can hear, in words
-	ui["said"].append_text("[color=#8a93a6]Conversations near you, and what people say to you, show up here.[/color]\n")
 
 
 var _menu_key := ""
@@ -538,9 +588,16 @@ func _choose(action: String, target: int, place: String, label: String) -> void:
 
 
 func _unhandled_input(ev: InputEvent) -> void:
+	if ev is InputEventKey and ev.pressed and (ev.ctrl_pressed or ev.meta_pressed) \
+			and ev.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0]:
+		# P-pass: Ctrl/Cmd + and - make everything larger or smaller, Ctrl/Cmd 0 goes back to the start size.
+		ui_scale = 1.25 if ev.keycode == KEY_0 else clampf(ui_scale * (1.1 if ev.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD] else 1 / 1.1), 0.6, 3.0)
+		_layout()
+		get_viewport().set_input_as_handled()
+		return
 	if client == null or client.scope != "inhabitant" or not (ev is InputEventMouseButton) or not ev.pressed:
 		return
-	if ev.position.x >= MAP_W:
+	if ev.position.x >= map_w:
 		return
 	if ev.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:  # V4: zoom the map
 		zoom = clampf(zoom * (1.15 if ev.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.15), 1.0, 4.0)
@@ -773,12 +830,12 @@ func _draw_inhabitant() -> void:
 		var r = p["rect"]
 		lo = lo.min(Vector2(r[0], r[1]))
 		hi = hi.max(Vector2(r[0] + r[2], r[1] + r[3]))
-	var k0 := minf((MAP_W - 40.0) / (hi.x - lo.x), (size.y - 60) / (hi.y - lo.y))  # the whole map fits at zoom 1
+	var k0 := minf((map_w - 40.0) / (hi.x - lo.x), (size.y - 60) / (hi.y - lo.y))  # the whole map fits at zoom 1
 	var k := k0 * zoom
 	var origin := Vector2(20, 20)
 	if zoom > 1.0:  # V4: the map follows you, centred in its column
 		var me_m := Vector2(client.view["pos"][0], client.view["pos"][1])
-		origin = Vector2(MAP_W / 2.0, (size.y - 30) / 2.0) - (me_m - lo) * k
+		origin = Vector2(map_w / 2.0, (size.y - 30) / 2.0) - (me_m - lo) * k
 	var font := ThemeDB.fallback_font
 	var kin_homes := {}
 	for m in client.view.get("kin", []):
@@ -789,6 +846,7 @@ func _draw_inhabitant() -> void:
 	elif client.view.get("route") != null:
 		going = str(client.view["route"]["to"])
 	map_rects = {}
+	var tags := []  # [label, rect]: drawn last, over the people (P-pass)
 	var to_screen := func(p: Vector2) -> Vector2: return (p - lo) * k + origin
 	_draw_ground(client.places, to_screen, lo, hi, k)
 	for name in client.places:
@@ -806,8 +864,7 @@ func _draw_inhabitant() -> void:
 		# others' labels overlap into noise. Public places keep their names.
 		var label: String = "you" if mine else ("family" if kin_homes.has(name) else ("" if name.begins_with("home") else name.replace("_", " ")))
 		if label != "":
-			Art.label(self, rect.position + Vector2(3, 14), label, clampi(int(9 + zoom * 2), 11, 16), Art.LABEL,
-					maxf(rect.size.x - 2, 8.0))
+			tags.append([label, rect])
 	var v: Dictionary = client.view
 	var at := (Vector2(v["pos"][0], v["pos"][1]) - lo) * k + origin
 	var px := maxf(k * 2.2, 12.0)
@@ -822,15 +879,54 @@ func _draw_inhabitant() -> void:
 		Art.villager(self, spot, str(p.get("role", "")), px * 0.85, false, bool(p.get("asleep", false)))
 	Art.villager(self, at, str(client.me.get("role", "")), px, true, bool(v["asleep"]))
 	drawn_at[int(client.me["id"])] = at - Vector2(0, px * 1.1)
+	var night := night_shade(fmod(client.display_tick(), float(client.ticks_per_day())) * 24.0 / client.ticks_per_day())
+	if night > 0.0:  # day and night (V-pass, left from #76): over the ground and people, under every word
+		draw_rect(_map_view(), Color(0.04, 0.06, 0.2, night))
+	_draw_tags(tags)
 	_draw_bubbles()
-	# The map's column ends at MAP_W: cover what a zoomed map draws beyond it, under the panels, and its foot.
-	draw_rect(Rect2(MAP_W, 0, size.x - MAP_W, size.y), RenderingServer.get_default_clear_color())
-	draw_rect(Rect2(0, size.y - 30, MAP_W, 30), RenderingServer.get_default_clear_color())
-	Art.label(self, Vector2(12, size.y - 10), "Click a place to walk there. Scroll the map to zoom.", 13, Color(0.75, 0.82, 0.95))
+	# The map's column ends at map_w: cover what a zoomed map draws beyond it, under the panels, and its foot.
+	draw_rect(Rect2(map_w, 0, size.x - map_w, size.y), RenderingServer.get_default_clear_color())
+	draw_rect(Rect2(0, size.y - 30, map_w, 30), RenderingServer.get_default_clear_color())
+	Art.label(self, Vector2(12, size.y - 10), "Click a place to walk there. Scroll the map to zoom.", 14, Color(0.75, 0.82, 0.95))
+
+
+static func night_shade(hour: float) -> float:
+	## How dark the map is at this hour, 0 by day to 0.42 at night, with an hour and a half of dusk and dawn.
+	## The names on the map and the speech bubbles are drawn over it, so the dark never hides a word (Steering
+	## 2026-11-16 08:53Z: the tint must never hurt readability).
+	const DARK := 0.42
+	if hour >= 7.0 and hour <= 19.0:
+		return 0.0
+	if hour > 19.0 and hour < 20.5:
+		return DARK * (hour - 19.0) / 1.5
+	if hour > 5.5 and hour < 7.0:
+		return DARK * (7.0 - hour) / 1.5
+	return DARK
+
+
+func _draw_tags(tags: Array) -> void:
+	## P-pass (aipt2: "label map places in full"): a place's name in full on a dark tag over its top edge, kept
+	## inside the map's column, never cut to the place's width or hidden under the crowd.
+	var font := ThemeDB.fallback_font
+	var fs := 15
+	var view := _map_view()
+	for t in tags:
+		var rect: Rect2 = t[1]
+		if not view.intersects(rect):
+			continue
+		var tw := font.get_string_size(t[0], HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var box := Rect2(Vector2(rect.get_center().x - tw / 2.0 - 5, rect.position.y - fs - 6), Vector2(tw + 10, fs + 6))
+		box.position.x = clampf(box.position.x, 2.0, map_w - box.size.x - 2.0)
+		box.position.y = clampf(box.position.y, 2.0, view.end.y - box.size.y - 2.0)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.1, 0.1, 0.14, 0.78)
+		sb.set_corner_radius_all(4)
+		draw_style_box(sb, box)
+		draw_string(font, box.position + Vector2(5, fs + 1), t[0], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 0.97, 0.88))
 
 
 func _map_view() -> Rect2:
-	return Rect2(0, 0, MAP_W, get_viewport_rect().size.y - 30)  # the map's column above its hint line
+	return Rect2(0, 0, map_w, get_viewport_rect().size.y - 30)  # the map's column above its hint line
 
 
 func _draw_bubbles() -> void:
@@ -845,6 +941,10 @@ func _draw_bubbles() -> void:
 	var shown := bubbles.filter(func(b): return now >= b["born"] and drawn_at.has(b["who"]) and seen.has_point(drawn_at[b["who"]]))
 	shown.sort_custom(func(x, y): return [int(x["to_me"]), int(x["mine"]), x["born"]] > [int(y["to_me"]), int(y["mine"]), y["born"]])
 	var placed := []
+	for b in shown:  # P-pass (aipt2): a warm ring on whoever is talking to you, so you can find them in a crowd
+		if b["to_me"]:
+			var a := clampf((BUBBLE_S - (now - b["born"])) / 1.0, 0.0, 1.0)
+			draw_arc(drawn_at[b["who"]] + Vector2(0, 10), 13.0, 0.0, TAU, 28, Color(1.0, 0.82, 0.3, a), 2.5)
 	for b in shown.slice(0, 4):
 		var age: float = now - b["born"]
 		var alpha := clampf((BUBBLE_S - age) / 1.0, 0.0, 1.0)
@@ -854,7 +954,7 @@ func _draw_bubbles() -> void:
 		var w := minf(font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x, 200.0)
 		var lines := font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, w, fs)
 		var box := Rect2(drawn_at[b["who"]] - Vector2(w / 2.0 + 6, lines.y + 14), Vector2(w + 12, lines.y + 8))
-		box.position.x = clampf(box.position.x, 4.0, MAP_W - box.size.x - 4.0)
+		box.position.x = clampf(box.position.x, 4.0, map_w - box.size.x - 4.0)
 		var y0 := box.position.y
 		for other in placed:  # stack upward past any bubble already drawn, never over it
 			if box.grow(2).intersects(other):
