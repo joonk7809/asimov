@@ -575,3 +575,10 @@ def test_a_long_reply_is_clipped_at_a_sentence_or_a_word_never_mid_word():
     assert S.clip_reply("Fine, thanks.") == "Fine, thanks."
     exact = "a" * S.SAY_MAX
     assert S.clip_reply(exact) == exact
+
+
+def test_a_decimal_point_at_the_cut_is_not_a_sentence_end():
+    """Review of #88: the end is judged on the full text, so "3.5" cut after "3." backs up to a word."""
+    from asiimov.sim import clip_reply
+    text = "x" * 131 + " price 3.5 coin now."
+    assert text.index("3.") + 2 == 140 and clip_reply(text) == "x" * 131 + " price…"

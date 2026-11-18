@@ -104,7 +104,7 @@ def clip_reply(text: str) -> str:
     if len(text) <= SAY_MAX:
         return text
     cut = text[:SAY_MAX]
-    ends = [i + 1 for i, c in enumerate(cut) if c in ".!?" and (i + 1 == len(cut) or cut[i + 1] == " ")]
+    ends = [i + 1 for i, c in enumerate(cut) if c in ".!?" and text[i + 1] == " "]  # the full text: "3.5" is no end
     if ends and ends[-1] >= REPLY_MIN_SENTENCE:
         return cut[:ends[-1]]
     room = cut[:SAY_MAX - 1]

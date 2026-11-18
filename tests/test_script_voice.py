@@ -81,7 +81,8 @@ class FakeClient:
 
 @pytest.mark.parametrize("content,want", [
     ('{"says": "Morning! I\'m off to work now."}', "Morning! I'm off to work now."),
-    ('{"says": "' + "x" * 300 + '"}', "x" * 140),
+    ('{"says": "' + "x" * 300 + '"}', "x" * 139 + "…"),
+    ('{"says": "' + "Well, " * 20 + 'but I will consider it."}', narrate.clip_reply("Well, " * 20 + "but I will consider it.")),
     ('{"says": "Have some bread, friend."}', None),       # invented: the village has only "food"
     ('{"says": "As an AI model I cannot."}', None),        # out of fiction
     ('not json', None),
@@ -213,3 +214,14 @@ def test_a_fallbacks_cause_is_in_the_log():
         sim.step()
         rep = next(e for e in sim.events if e.kind == "reply")
         assert sim.events[rep.parents[0]].mind["sampling"].get("voice_why") == want
+
+
+def test_a_long_voiced_reply_is_clipped_at_a_word_on_the_script_arm():
+    """Review of #88: the script arm's voiced line gets the same clean cut as the minds arm's."""
+    long = "I'm heading to the field to tend the crops before the rain comes in, so I can't stop long today, but I'll think about your kind offer and come and find you later."
+    assert len(long) > 140
+    sim, me, to = body_with_company(ScriptMind(Voice(says=long)))
+    say(sim, me, to, "Will you help me?")
+    sim.step()
+    got = next(e for e in sim.events if e.kind == "reply").data["says"]
+    assert len(got) <= 140 and got.endswith("…") and long.startswith(got[:-1]) and long[len(got) - 1] == " "
