@@ -206,7 +206,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "31": "7d56872a5271feaea7d9a44c51e1e25dedd4a8151e052926a11d2ef493732bf3",  # say-3 (#78), a spoken answer's words; no say: only the engine field differs
           "say-3b": "4a3287eac6834cecf42965d6fb09e339f80b557cb62abb0ca85164db5a8a63a9",  # say-3b: answer prompts name people, leave = avoid, on 31, before its number; no say: only the engine field differs
           "32": "1d0bb80d29a3b688cb7f117765dcfc417a028047e0ffe2ccdef593f4fb5018ed",  # say-3b (#85); no say: only the engine field differs
-          "say-3c": "4ada6cc0245843982de2b916d8f327c3deb4193b69229818e51bf11dbf7bfb3f"}  # say-3c: replies clipped at a sentence or word, on 32, before its number; no say: only the engine field differs
+          "say-3c": "4ada6cc0245843982de2b916d8f327c3deb4193b69229818e51bf11dbf7bfb3f",  # say-3c: replies clipped at a sentence or word, on 32, before its number; no say: only the engine field differs
+          "33": "ac999cef1ebf6a1c1340c7ab2a5688431a72d3a92146dbb0f6c4a8820aa70bfe"}  # say-3c (#88); no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
