@@ -1022,6 +1022,9 @@ def main(argv=None):
     ap.add_argument("--llm-model")
     ap.add_argument("--llm-key")
     ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument("--answer-first", action="store_true",
+                    help="llm mind: spoken answers ahead of plans (the model pod needs --vllm-args "
+                         "'--scheduling-policy priority')")
     ap.add_argument("--workers", type=int, default=None, help="concurrent mind calls (default 64 for llm, else 1)")
     ap.add_argument("--token", default=None, help="every hello must carry this token (use it on a public port)")
     ap.add_argument("--tps", type=float, default=1.0, help="ticks per wall-clock second")

@@ -94,8 +94,12 @@ class LLMMind:
 
     def __init__(self, base_url: str, model: str, temperature: float = 0.7, top_p: float = 0.9,
                  max_tokens: int = 200, timeout: float = 120.0, retries: int = 3, structured: bool = True,
-                 api_key: str | None = None):
+                 api_key: str | None = None, answer_first: bool = False):
         self.base_url = base_url.rstrip("/")
+        # pt11 (Steering 2026-11-18 23:52Z): a spoken answer waited behind the morning's plan calls. With a vLLM
+        # server started with --scheduling-policy priority, answers go first (priority 0, the rest 1). The request
+        # text is unchanged and this is not in `sampling`: the world log and replay don't see it.
+        self.answer_first = answer_first
         self.model = model
         self.temperature, self.top_p, self.max_tokens = temperature, top_p, max_tokens
         self.timeout, self.retries, self.structured = timeout, retries, structured
@@ -114,6 +118,8 @@ class LLMMind:
             # Qwen3 hybrid models: no <think> block; deliberation is the answer itself.
             "chat_template_kwargs": {"enable_thinking": False},
         }
+        if self.answer_first:
+            b["priority"] = 0 if req.kind == "answer" else 1
         if req.frequency_penalty_milli:  # only the T21 reflect retry; every first ask is unchanged
             b["frequency_penalty"] = req.frequency_penalty_milli / 1000
         if self.structured:
