@@ -370,7 +370,7 @@ def test_an_answer_is_its_own_words_and_next_and_never_its_reason():
             return super().decide(req)
 
     cases = [({"says": "  Do you  need food?  ", "next": "stay"}, "Do you need food?", "stay"),
-             ({"says": "x" * 300, "next": "carry_on"}, "x" * S.SAY_MAX, "carry_on"),
+             ({"says": "x" * 300, "next": "carry_on"}, "x" * (S.SAY_MAX - 1) + "…", "carry_on"),
              ({"reason": "Mimi asked for food, so I should check.", "next": "fly"}, "", "carry_on"),
              ({"says": 7}, "", "carry_on")]
     for out, want, nxt in cases:
@@ -560,3 +560,18 @@ def test_no_hold_over_a_running_override():
     say(sim, me, to, "Hello there.")
     assert next(e for e in sim.events if e.kind == "said")  # it landed
     assert t["override"]["do"] == "work" and t["override"]["event"] == eid
+
+
+def test_a_long_reply_is_clipped_at_a_sentence_or_a_word_never_mid_word():
+    """say-3c (Steering 2026-11-18 05:42Z): aipt2 heard "but I'll consi". A reply over SAY_MAX backs up to its
+    last sentence end when that keeps at least 93 characters, else to a word boundary with an ellipsis."""
+    first = "I'm glad you still have food, Mimi. Perhaps it's a matter of records, and the counts were off at the stall."
+    assert len(first) >= S.REPLY_MIN_SENTENCE
+    assert S.clip_reply(first + " As for guarding, I'm scheduled for rest this afternoon, but I'll consider it.") == first
+    short = "Yes. " + "I will walk with you to the market and we can look at the stalls together before the evening " * 2
+    got = S.clip_reply(short)
+    assert got.endswith("…") and len(got) <= S.SAY_MAX and not got[:-1].endswith(" ")
+    assert short.startswith(got[:-1]) and short[len(got) - 1] == " "  # cut at a word boundary
+    assert S.clip_reply("Fine, thanks.") == "Fine, thanks."
+    exact = "a" * S.SAY_MAX
+    assert S.clip_reply(exact) == exact
