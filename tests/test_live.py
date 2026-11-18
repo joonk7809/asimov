@@ -389,3 +389,27 @@ def test_only_time_steps_a_running_world_and_a_speed_change_takes_the_next_tick(
         await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(main())
+
+
+def test_the_warm_up_calls_each_model_server_once_and_a_failure_does_not_stop_the_world():
+    """Steering 2026-11-18 05:42Z: one short call to each model pod before the world opens (aipt2's cold reply)."""
+    from asiimov.live import warm_up
+
+    class C:
+        def __init__(self, url, model, fail=False):
+            self.base_url, self.model, self.fail, self.bodies = url, model, fail, []
+
+        def post(self, path, body):
+            self.bodies.append((path, body))
+            if self.fail:
+                raise RuntimeError("LLM server unreachable")
+            return {"choices": [{"message": {"content": "Hi"}}]}
+
+    mind, same, narr, down = C("https://a", "32b"), C("https://a", "32b"), C("https://b", "8b"), C("https://c", "x", True)
+    logged = []
+    got = warm_up([mind, None, same, narr, down], log=logged.append)
+    assert [m for m, _ in got] == ["32b", "8b", "x"] and got[2][1] is None and got[0][1] is not None
+    assert len(mind.bodies) == 1 and not same.bodies and len(narr.bodies) == 1
+    path, body = mind.bodies[0]
+    assert path == "/v1/chat/completions" and body["max_tokens"] == 4 and body["model"] == "32b"
+    assert any("failed" in line for line in logged)
