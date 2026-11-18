@@ -684,8 +684,8 @@ class Hub:
                         hmac.compare_digest(m["token"].encode(), self.token.encode())) and "bad_token")
                     if err:
                         m = m or {}
-                        self.runner._side("refused", reason=err, client=conn.name, scope=m.get("scope"),
-                                          agent=m.get("agent"), protocol=m.get("protocol"))
+                        self.runner._side("refused", reason=err, client=conn.name,  # clipped: unauthenticated input
+                                          **{k: repr(m.get(k))[:40] for k in ("scope", "agent", "protocol")})
                         conn.close(err)
                         break
                     conn.scope = m.get("scope", "god")
