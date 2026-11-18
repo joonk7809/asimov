@@ -34,6 +34,7 @@ import time
 from collections import defaultdict
 
 from . import inhabitant, narrate, persist
+from .llm import SCHEMAS
 from .minds import NoisyMind, ScriptMind, StubMind
 from .sim import ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, SAY_ACTS, SAY_MAX, TICKS_PER_DAY
 from .worldmap import position
@@ -959,10 +960,18 @@ def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True)) -> l
         if c is None or not hasattr(c, "post") or (c.base_url, c.model) in seen:
             continue
         seen.add((c.base_url, c.model))
-        body = {"model": c.model, "messages": [{"role": "user", "content": "Say hello."}], "max_tokens": 4,
-                "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
+        # The answer's own grammar for a structured mind, so its first reply doesn't pay the schema compile;
+        # json_object for the narrator, as it asks (review of #89).
+        fmt = ({"type": "json_schema", "json_schema": {"name": "answer", "schema": SCHEMAS["answer"], "strict": True}}
+               if getattr(c, "structured", False) else {"type": "json_object"})
+        body = {"model": c.model, "messages": [{"role": "user", "content": 'Say hello. Answer as JSON: {"says": "..."}'}],
+                "max_tokens": 24, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False},
+                "response_format": fmt}
         t0 = time.monotonic()
+        retries = getattr(c, "retries", None)
         try:
+            if retries is not None:
+                c.retries = 0  # one try: a dead server shouldn't hold the world shut for minutes (review of #89)
             c.post("/v1/chat/completions", body)
             dt = round(time.monotonic() - t0, 2)
         except Exception as e:  # noqa: BLE001 - a cold server must not keep the world shut
@@ -970,6 +979,9 @@ def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True)) -> l
             log(f"warm-up {c.model}: failed ({type(e).__name__}: {str(e)[:120]})")
         else:
             log(f"warm-up {c.model}: {dt} s")
+        finally:
+            if retries is not None:
+                c.retries = retries
         out.append((c.model, dt))
     return out
 

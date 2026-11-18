@@ -398,9 +398,11 @@ def test_the_warm_up_calls_each_model_server_once_and_a_failure_does_not_stop_th
     class C:
         def __init__(self, url, model, fail=False):
             self.base_url, self.model, self.fail, self.bodies = url, model, fail, []
+            self.structured, self.retries, self.tries = model == "32b", 3, []
 
         def post(self, path, body):
             self.bodies.append((path, body))
+            self.tries.append(self.retries)
             if self.fail:
                 raise RuntimeError("LLM server unreachable")
             return {"choices": [{"message": {"content": "Hi"}}]}
@@ -411,5 +413,8 @@ def test_the_warm_up_calls_each_model_server_once_and_a_failure_does_not_stop_th
     assert [m for m, _ in got] == ["32b", "8b", "x"] and got[2][1] is None and got[0][1] is not None
     assert len(mind.bodies) == 1 and not same.bodies and len(narr.bodies) == 1
     path, body = mind.bodies[0]
-    assert path == "/v1/chat/completions" and body["max_tokens"] == 4 and body["model"] == "32b"
+    assert path == "/v1/chat/completions" and body["model"] == "32b"
+    assert body["response_format"]["json_schema"]["name"] == "answer"  # the answer's grammar, compiled before play
+    assert narr.bodies[0][1]["response_format"] == {"type": "json_object"}
+    assert down.tries == [0] and down.retries == 3  # one try while warming, then as before
     assert any("failed" in line for line in logged)
