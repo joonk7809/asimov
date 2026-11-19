@@ -22,6 +22,11 @@ AFTER_TICKS = 12   # how long after a reply the listener's acts toward the playe
 LINE6_S, LINE7_S = 3.0, 6.0  # G5's bars, p95
 
 
+# What a villager does toward the player. A `deal` (talk-1, text-1) is goods moved by talk: its data names the
+# player under "to" (a give) or "from" (a sale to them).
+TOWARD_KINDS = ("ask", "meet", "receipt", "deal")
+
+
 def _jsonl(path: str) -> list[dict]:
     if not os.path.exists(path):
         return []
@@ -132,7 +137,7 @@ def rows(run_dir: str) -> dict:
                            mind={k: out.get(k) for k in ("action", "target", "goal", "then") if out.get(k) not in (None, "", [])},
                            after=[{"tick": e["tick"], "kind": e["kind"], **{k: e["data"][k] for k in ("action", "ok", "why", "food", "coin") if k in e["data"]}}
                                   for e in evs if e["actor"] == rep["actor"] and rep["tick"] <= e["tick"] <= rep["tick"] + AFTER_TICKS
-                                  and e["kind"] in ("ask", "meet", "receipt") and any(e["data"].get(k) == body for k in ("to", "with", "target"))])
+                                  and e["kind"] in TOWARD_KINDS and any(e["data"].get(k) == body for k in ("to", "with", "target", "from"))])
         exchanges.append(row)
 
     heard = [{"id": f"h{i + 1}", "tick": n["tick"], "kind": n["kind"], "to_player": n["to_player"], "fallback": n.get("fallback", False),
@@ -140,8 +145,8 @@ def rows(run_dir: str) -> dict:
              for i, n in enumerate(narr) if n.get("player") == body]
     toward = [{"id": f"t{i + 1}", "tick": e["tick"], "who": names.get(e["actor"]), "kind": e["kind"],
                **{k: e["data"][k] for k in ("action", "ok", "why", "food", "coin") if k in e["data"]}}
-              for i, e in enumerate(e for e in evs if e["actor"] not in (None, body) and e["kind"] in ("ask", "meet", "receipt")
-                                    and any(e["data"].get(k) == body for k in ("to", "with", "target"))
+              for i, e in enumerate(e for e in evs if e["actor"] not in (None, body) and e["kind"] in TOWARD_KINDS
+                                    and any(e["data"].get(k) == body for k in ("to", "with", "target", "from"))
                                     and step_wall.get(e["tick"], 0) >= t0)]
     held_ticks = sorted(t for t, w in step_wall.items() if t0 <= w <= t1)
     return {"run": os.path.abspath(run_dir), "engine": evs[0]["data"].get("engine"), "body": body, "name": names[body],
@@ -173,7 +178,7 @@ def metrics(r: dict) -> dict:
         "replies_empty": sum(not x["reply"].strip() for x in got),
         "replies_with_act_at_player": len(aimed),
         "replies_then_acted_at_player": sum(bool(x["after"]) for x in got),
-        "replies_then_goods_moved": sum(any(a.get("ok") and a["kind"] == "receipt" for a in x["after"]) for x in got),
+        "replies_then_goods_moved": sum(any(a.get("ok") and a["kind"] in ("receipt", "deal") for a in x["after"]) for x in got),
         "heard_items": len(heard), "heard_to_player": sum(h["to_player"] for h in heard),
         "heard_fallback": sum(h["fallback"] for h in heard),
         "heard_opened_on_a_topic": sum(bool(h["topics"]) for h in heard),
