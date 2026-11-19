@@ -209,3 +209,15 @@ def test_concurrent_calls_to_a_slow_server_give_the_serial_log(tmp_path):
     path = tmp_path / "log.jsonl"
     write_jsonl(fast.events, str(path))
     assert replay(read_jsonl(str(path))).state_hash() == fast.state_hash()
+
+
+def test_answer_first_puts_spoken_answers_ahead_without_changing_the_request():
+    """pt11 (Steering 2026-11-18 23:52Z): with --answer-first an answer asks for priority 0 and every other kind 1;
+    off, no priority field at all (a fcfs vLLM server refuses one). The prompt and sampling are unchanged."""
+    from asiimov.minds import MindRequest
+    reqs = [MindRequest(k, 1, 44, "p", "ab" * 32, {}) for k in ("answer", "plan")]
+    plain, first = LLMMind("http://x", "m"), LLMMind("http://x", "m", answer_first=True)
+    assert all("priority" not in plain.body(r) for r in reqs)
+    assert [first.body(r)["priority"] for r in reqs] == [0, 1]
+    strip = lambda b: {k: v for k, v in b.items() if k != "priority"}
+    assert [strip(first.body(r)) for r in reqs] == [plain.body(r) for r in reqs]

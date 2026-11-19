@@ -971,6 +971,8 @@ def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True)) -> l
         body = {"model": c.model, "messages": [{"role": "user", "content": 'Say hello. Answer as JSON: {"says": "..."}'}],
                 "max_tokens": 24, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False},
                 "response_format": fmt}
+        if getattr(c, "answer_first", False):
+            body["priority"] = 1  # a fcfs server refuses this now, at startup, not partway through (review of #94)
         t0 = time.monotonic()
         retries = getattr(c, "retries", None)
         try:
@@ -981,6 +983,9 @@ def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True)) -> l
         except Exception as e:  # noqa: BLE001 - a cold server must not keep the world shut
             dt = None
             log(f"warm-up {c.model}: failed ({type(e).__name__}: {str(e)[:120]})")
+            if getattr(c, "answer_first", False) and "400" in str(e):
+                raise SystemExit(f"--answer-first: {c.model} refused a priority; start vLLM with "
+                                 "--scheduling-policy priority") from e
         else:
             log(f"warm-up {c.model}: {dt} s")
         finally:
@@ -1022,6 +1027,9 @@ def main(argv=None):
     ap.add_argument("--llm-model")
     ap.add_argument("--llm-key")
     ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument("--answer-first", action="store_true",
+                    help="llm mind: spoken answers ahead of plans (the model pod needs --vllm-args "
+                         "'--scheduling-policy priority')")
     ap.add_argument("--workers", type=int, default=None, help="concurrent mind calls (default 64 for llm, else 1)")
     ap.add_argument("--token", default=None, help="every hello must carry this token (use it on a public port)")
     ap.add_argument("--tps", type=float, default=1.0, help="ticks per wall-clock second")
