@@ -878,3 +878,59 @@ def test_a_model_mind_with_no_hearer_answers_in_one_call_as_before():
     assert body["messages"][0]["content"] == areq.prompt
     assert body["response_format"]["json_schema"]["schema"]["required"][0] == "gives"
     assert [d.data["ok"] for d in deals(evs)] == [True]
+
+
+# Steering 2026-11-19 12:55Z: the private question states the ask ("NAME asks you for 1 of your food") whatever the
+# line was, so that the words can't reach it. That holds only because the question and its answer are written
+# nowhere the mind reads later.
+QUESTION = "Do you hand it to them now?"
+
+
+@pytest.mark.parametrize("talk,move", [(PRIVATE, None), ({"consent": "private"}, "asks_food")], ids=["typed", "chip"])
+def test_the_private_decision_writes_nothing_to_the_listeners_memory(talk, move):
+    ends = {}
+    for answer in ("yes", "no", "garbage", "none"):
+        mind = Mind(decide=answer if answer in ("yes", "no") else None, decide_raw="garbage" if answer == "garbage" else None)
+        sim, me, to, ag = ready(mind, talk=talk if answer != "none" else {})
+        act = {"kind": "act", "action": "say", "target": to, "text": "Good morning.", **({"move": move} if move else {})}
+        sim.step([act])  # the line lands, and the decision is asked and applied in this tick's commit
+        assert len(mind.of("decide", to)) == (answer != "none")
+        assert all(QUESTION in r.prompt for r in mind.of("decide", to))
+        ends[answer] = {k: v for k, v in ag[to].items() if k != "talk_private"}
+        assert QUESTION not in json.dumps(sim.state) and "asks you for 1 of your food" not in json.dumps(sim.state)
+        assert ("talk_private" in ag[to]) == (answer != "none")
+    # whatever it answered, and whether or not it was asked at all (a world with no private consent), everything
+    # the listener is, knows and remembers is the same; only the held decision differs
+    assert ends["yes"] == ends["no"] == ends["garbage"] == ends["none"]
+
+
+@pytest.mark.parametrize("seed", [1, 2])
+def test_no_later_prompt_holds_the_private_question(seed):
+    class Keeps(Hostile):
+        def __init__(self, seed):
+            super().__init__(seed)
+            self.reqs = []
+
+        def decide(self, req):
+            self.reqs.append(req)
+            return super().decide(req)
+    mind = Keeps(seed)
+    sim, me, to = world(mind, dict(PRIVATE), seed=seed)
+    r = random.Random(seed)
+    for _ in range(TICKS_PER_DAY):
+        ag = sim.state["agents"]
+        here = [o["id"] for o in ag if o["id"] != me and o["place"] is not None and o["place"] == ag[me]["place"]
+                and not o["asleep"]]
+        acts = []
+        if here and r.random() < 0.6:
+            acts.append({"kind": "act", "action": "say", "target": r.choice(here), "text": r.choice(INJECTIONS),
+                         **r.choice([{}, {}, {"move": "asks_food"}])})
+        sim.step(acts)
+    asked = [q for q in mind.reqs if q.kind == "decide"]
+    assert len(asked) > 5, "vacuous: few decisions"
+    assert all(QUESTION in q.prompt for q in asked)
+    for q in mind.reqs:
+        if q.kind != "decide":
+            assert QUESTION not in q.prompt and "asks you for 1 of your food" not in q.prompt
+            assert all(QUESTION not in p for p in (q.told or {}).values())
+    assert QUESTION not in json.dumps(sim.state)
