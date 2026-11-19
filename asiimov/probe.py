@@ -190,7 +190,8 @@ def build_pack(events: list[Event], arm: str, n: int, seed: int, prompt_token_of
     if arm not in ARMS:
         raise ValueError(f"arm must be one of {ARMS}: other arms' prompts aren't a function of the log")
     points = sample_points(events, n, seed)
-    recorded = {(e.tick, e.actor): e for e in events if e.origin == "mind" and not e.data.get("retried")}
+    recorded = {(e.tick, e.actor): e for e in events if e.origin == "mind" and not e.data.get("retried")
+                and e.data["kind"] in KINDS}  # text-1: a listener's `decide` shares its tick with its own request
     sim = ProbeSim(events, arm, {(t, a) for t, a, _ in points}, prompt_token_offset)
     sim.run_until(max(t for t, _, _ in points) + 1, sim.player)
     pack = []

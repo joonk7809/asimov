@@ -47,7 +47,10 @@ An inhabitant sends only `act` (anything else gets `scope`). After an hour (6 ti
 villager's own mind deliberates again; the next `act` takes the body back (plan/player-body-spec.md).
 It gets:
 - `welcome`: `world` is `{map, ticks_per_day, me: {id, name, role, family, home}, family: [{id, name, role}], people: [{id, name, role}]}`,
-  plus `view_tick`, `paused`, `tps`, `verbs` (`act` only) and its first `view`.
+  plus `view_tick`, `paused`, `tps`, `verbs` (`act` only), its first `view`, and `talk`: `{consent, typed}`
+  (text-1). `typed: 1` means a line said with no `move` may be given 1 food, so the say box needs no chip hint;
+  `consent` is `nature`, `mind` or `private` (who answers a line said with a chip). The villager's decision is
+  never sent: neither its `mind_decide` (a mind event) nor a `decided` roll.
 - `events` backlog and `tick` messages carrying only events it would witness: its own, those naming it
   (`data.with`, `to`, `target` or `household`), public ones (`fire`), and, on the tick they happen,
   those by people at its place. Of another villager's events it gets only what that villager does in

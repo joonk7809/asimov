@@ -36,7 +36,8 @@ from collections import defaultdict
 from . import inhabitant, narrate, persist
 from .llm import SCHEMAS
 from .minds import NoisyMind, ScriptMind, StubMind
-from .sim import CONSENTS, ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, SAY_ACTS, SAY_MAX, TALK_MOVES, TICKS_PER_DAY
+from .sim import (CONSENTS, ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, SAY_ACTS, SAY_MAX, TALK_DEFAULTS, TALK_MOVES,
+                  TICKS_PER_DAY)
 from .worldmap import position
 
 PROTOCOL = 2               # 2 adds the inhabitant scope (plan/player-body-spec.md)
@@ -500,6 +501,7 @@ class LiveRunner:
             aid = self.inhabitant["agent"]
             return msg("welcome", scope=scope, view_tick=self.sim.state["tick"], paused=paused, tps=tps,
                        verbs={"act": self.verbs()["act"]}, world=inhabitant.welcome_world(self.sim, aid),
+                       talk={k: self.sim._talk_params()[k] for k in ("consent", "typed")},  # text-1: for the say box
                        view=inhabitant.view(self.sim, aid))
         g = self.sim.events[0].data
         return msg("welcome", scope=scope, view_tick=self.sim.state["tick"], n_events=len(self.sim.events),
@@ -967,10 +969,13 @@ async def serve(runner: LiveRunner, host: str = "127.0.0.1", port: int = 8765, t
             c.writer.close()
 
 
-def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True)) -> list[tuple[str, float | None]]:
+def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True),
+            grammars=()) -> list[tuple[str, float | None]]:
     """One short call to each model server before the world opens (Steering 2026-11-18 05:42Z): aipt2's line-7
     p95 of 6.08 s was its first, cold reply. Not a mind call: nothing is logged in the world or in calls. Each
-    server (url, model) once; a failure is printed and the world opens anyway. Returns (label, seconds|None)."""
+    server (url, model) once; a failure is printed and the world opens anyway. Returns (label, seconds|None).
+    `grammars` (text-1): (name, schema) pairs a structured mind is also asked once with, so the first private
+    decision and the first typed answer don't pay their schema compile inside the reply the player waits on."""
     out, seen = [], set()
     for c in clients:
         if c is None or not hasattr(c, "post") or (c.base_url, c.model) in seen:
@@ -1000,6 +1005,14 @@ def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True)) -> l
                                  "--scheduling-policy priority") from e
         else:
             log(f"warm-up {c.model}: {dt} s")
+            for name, schema in (grammars if getattr(c, "structured", False) else ()):
+                t0 = time.monotonic()
+                try:
+                    c.post("/v1/chat/completions", {**body, "max_tokens": 32, "response_format": {
+                        "type": "json_schema", "json_schema": {"name": name, "schema": schema, "strict": True}}})
+                    log(f"warm-up {c.model} ({name}): {round(time.monotonic() - t0, 2)} s")
+                except Exception as e:  # noqa: BLE001
+                    log(f"warm-up {c.model} ({name}): failed ({type(e).__name__}: {str(e)[:120]})")
         finally:
             if retries is not None:
                 c.retries = retries
@@ -1044,7 +1057,15 @@ def main(argv=None):
                          "'--scheduling-policy priority')")
     ap.add_argument("--consent", choices=list(CONSENTS), default=None,
                     help="talk-1, a new world only: who answers a line said with a chip. nature (the default): "
-                         "today's roll; mind: the villager's mind (a 32B session)")
+                         "today's roll; mind: the villager's mind (a 32B session); private (text-1): the villager's "
+                         "mind, asked before any call reads the player's words, once a day per speaker")
+    ap.add_argument("--typed", action="store_true",
+                    help="text-1, a new world only: a line typed with no chip may be given 1 food, on the decision "
+                         "already held (consent private or nature). A script mind needs --hear-url to hear an ask")
+    ap.add_argument("--hear-url", help="script mind with --typed: the model server that hears whether a line asks "
+                    "for food (the minds arm's model), with --hear-model and --hear-key")
+    ap.add_argument("--hear-model")
+    ap.add_argument("--hear-key")
     ap.add_argument("--workers", type=int, default=None, help="concurrent mind calls (default 64 for llm, else 1)")
     ap.add_argument("--token", default=None, help="every hello must carry this token (use it on a public port)")
     ap.add_argument("--tps", type=float, default=1.0, help="ticks per wall-clock second")
@@ -1078,14 +1099,32 @@ def main(argv=None):
         mind = llm_from_args(args)[0]
     else:
         mind = {"stub": StubMind, "noisy": NoisyMind, "script": ScriptMind}[kind]()
+    if args.typed and args.consent == "mind":
+        raise SystemExit("--typed goes with consent private or nature: with mind, the call that reads the words would choose")
+    if (args.hear_url or args.hear_model) and (kind != "script" or not (args.hear_url and args.hear_model)):
+        raise SystemExit("--hear-url and --hear-model go together, for --mind script in a --typed world")
+    talk = {**({"consent": args.consent} if args.consent and args.consent != "nature" else {}),
+            **({"typed": 1} if args.typed else {})}
+    if args.typed or args.consent == "private":  # a held world states where "They look hungry" starts (ruling (b))
+        talk["hungry_at"] = TALK_DEFAULTS["hungry_at"]
     runner = LiveRunner(args.out, mind, args.seed, args.agents, mind_kind=kind,
-                        workers=args.workers or (64 if kind == "llm" else 1),
-                        talk={"consent": args.consent} if args.consent and args.consent != "nature" else None)
-    consent = runner.sim._talk_params()["consent"]
+                        workers=args.workers or (64 if kind == "llm" else 1), talk=talk or None)
+    params = runner.sim._talk_params()
+    consent = params["consent"]
     if args.consent and args.consent != consent:
         raise SystemExit(f"{args.out} was started with consent {consent!r}; --consent applies to a new world")
+    if args.typed and not params["typed"]:
+        raise SystemExit(f"{args.out} was started without --typed; it applies to a new world")
+    if args.hear_url:
+        if not params["typed"]:
+            raise SystemExit("--hear-url is for a --typed world: nothing is heard where typed lines move nothing")
+        from .llm import Hearer, LLMMind
+        mind.hear = Hearer(LLMMind(args.hear_url, args.hear_model, temperature=args.temperature, api_key=args.hear_key,
+                                   answer_first=args.answer_first))
+        print(f"script hearing: {mind.hear.model}", file=sys.stderr, flush=True)
     print(f"{'reopened' if runner.reopened else 'new world'} {args.out} at tick {runner.sim.state['tick']}, "
-          f"engine {ENGINE_VERSION}, consent {consent}, ws://{args.host}:{args.port}/", file=sys.stderr, flush=True)
+          f"engine {ENGINE_VERSION}, consent {consent}{', typed' if params['typed'] else ''}, "
+          f"ws://{args.host}:{args.port}/", file=sys.stderr, flush=True)
     narrator = narrator_from_args(args, kind)
     print(f"narrator: {getattr(narrator, 'model', 'off')}", file=sys.stderr, flush=True)
     hold = None
@@ -1103,7 +1142,14 @@ def main(argv=None):
             with open(args.reply_delays) as f:
                 hold = ReplyHold(json.load(f), f"{args.seed}-{runner.sim.state['tick']}")
     if not args.no_warm_up:
-        warm_up([mind if kind == "llm" else None, getattr(narrator, "client", None)])
+        held = []
+        if runner.sim._talk_held():  # text-1's two grammars, compiled before the first line is said
+            from .llm import schema_for
+            from .minds import MindRequest
+            held = [("decide", SCHEMAS["decide"])] + [
+                (k, schema_for(MindRequest(k, 0, 0, "", "", {"gives": ["food", "nothing"]}))) for k in ("answer", "hear")]
+        warm_up([mind if kind == "llm" else None, getattr(narrator, "client", None),
+                 getattr(getattr(mind, "hear", None), "client", None)], grammars=held)
     try:
         asyncio.run(serve(runner, args.host, args.port, args.tps, args.paused, token=args.token,
                           pull_min=None if args.pull_min < 0 else args.pull_min, narrator=narrator,
