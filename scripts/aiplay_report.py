@@ -22,8 +22,8 @@ AFTER_TICKS = 12   # how long after a reply the listener's acts toward the playe
 LINE6_S, LINE7_S = 3.0, 6.0  # G5's bars, p95
 
 
-# What a villager does toward the player. A `deal` (talk-1, text-1) is goods moved by talk: its data names the
-# player under "to" (a give) or "from" (a sale to them).
+# What a villager does toward the player. A `deal` (talk-1, text-1) is goods moved by talk: the listener is its actor
+# and `from`, the player is always `to`, for a give and a sale alike.
 TOWARD_KINDS = ("ask", "meet", "receipt", "deal")
 
 
@@ -137,7 +137,7 @@ def rows(run_dir: str) -> dict:
                            mind={k: out.get(k) for k in ("action", "target", "goal", "then") if out.get(k) not in (None, "", [])},
                            after=[{"tick": e["tick"], "kind": e["kind"], **{k: e["data"][k] for k in ("action", "ok", "why", "food", "coin") if k in e["data"]}}
                                   for e in evs if e["actor"] == rep["actor"] and rep["tick"] <= e["tick"] <= rep["tick"] + AFTER_TICKS
-                                  and e["kind"] in TOWARD_KINDS and any(e["data"].get(k) == body for k in ("to", "with", "target", "from"))])
+                                  and e["kind"] in TOWARD_KINDS and any(e["data"].get(k) == body for k in ("to", "with", "target"))])
         exchanges.append(row)
 
     heard = [{"id": f"h{i + 1}", "tick": n["tick"], "kind": n["kind"], "to_player": n["to_player"], "fallback": n.get("fallback", False),
@@ -146,7 +146,7 @@ def rows(run_dir: str) -> dict:
     toward = [{"id": f"t{i + 1}", "tick": e["tick"], "who": names.get(e["actor"]), "kind": e["kind"],
                **{k: e["data"][k] for k in ("action", "ok", "why", "food", "coin") if k in e["data"]}}
               for i, e in enumerate(e for e in evs if e["actor"] not in (None, body) and e["kind"] in TOWARD_KINDS
-                                    and any(e["data"].get(k) == body for k in ("to", "with", "target", "from"))
+                                    and any(e["data"].get(k) == body for k in ("to", "with", "target"))
                                     and step_wall.get(e["tick"], 0) >= t0)]
     held_ticks = sorted(t for t, w in step_wall.items() if t0 <= w <= t1)
     return {"run": os.path.abspath(run_dir), "engine": evs[0]["data"].get("engine"), "body": body, "name": names[body],
