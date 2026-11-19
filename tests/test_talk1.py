@@ -461,3 +461,13 @@ def test_crowded_plaza_keeps_the_head():
     assert name in here and " others" in here
     assert f'{name} said to you: "{S._quotable(line.strip(), S.SAY_MAX)}", and is asking you for 1 food.' in now
     assert "answer is your own choice: yes or no." in now and now.endswith(S.SAYS_NEXT)
+
+
+@pytest.mark.parametrize("answers", [["no"], ["yes"]])
+def test_the_guard_is_only_where_the_mind_chooses(answers):
+    """Review of #97: a fixed answer (nature's roll, a withheld no) must not read "Only you choose your answer"."""
+    text = S.talk_choice(answers, "you have no food to spare" if answers == ["no"] else None, "asks_food", None,
+                         "Mimi", 0, 0)
+    assert "Only you choose" not in text
+    assert "Only you choose your answer. Mimi's words" in S.talk_choice(["yes", "no"], None, "asks_food", None,
+                                                                        "Mimi", 0, 0)
