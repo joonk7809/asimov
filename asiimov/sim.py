@@ -136,7 +136,15 @@ CONSENTS = ("nature", "mind", "private")
 # sets one (a 32B session's consent "mind"), so a default world's genesis, and its golden, are say-3's.
 # consent nature: today's roll answers, and the prompt offers only that answer; mind: the mind picks yes or no.
 TALK_DEFAULTS = {"consent": "nature", "min_food": 2, "min_affinity": -300, "yes_per_day": 1, "yes_per_day_kin": 2,
-                 "no_wait_ticks": 12, "typed": 0, "hungry_at": 550}
+                 "no_wait_ticks": 12, "typed": 0, "hungry_at": 550, "think": 0}
+# think-1 (joon 2026-11-19 20:39Z/20:47Z; Steering 20:50Z): with consent private, think 1 or 2 has the private decision
+#   think first, in its own character: its reply is {"thought", "answer"}, the thought written before the answer, in
+#   one short sentence (1) or two or three (2). The engine reads `answer` and nothing else. The thought is in the
+#   mind event's recorded output and nowhere else: not in the listener's state, its memory or any later prompt. The
+#   server's own thinking budget wasn't used: vLLM 0.19 didn't hold it for Qwen3-32B (loop 2x2, C5 void), and a
+#   maxLength in the grammar decodes ~15x slower (llm.SCHEMAS), so the length is asked for in words and max_tokens
+#   bounds it; a reply cut there has no answer, and is a no.
+THINK_ASK = {1: "one short sentence", 2: "two or three sentences"}
 # text-1 (plan/text-1-build-spec.md; Steering 2026-11-19 07:40Z). A crafted line got a hand .79 against .40 for honest
 # asks when one call both read the words and chose (talk-1b), so the choice moves to a call that never sees them.
 # consent private: when the player's line lands, the listener's mind is asked `decide`, from engine-written text
@@ -218,14 +226,15 @@ def typed_told(gives: str, name: str, given: int, refused: int) -> str:
     return text + talk_record_line(name, given, refused) + " Nothing else changes hands in this talk: no coin, and nothing later."
 
 
-def decide_ask(name: str, move: str, price) -> str:
+def decide_ask(name: str, move: str, price, think: int = 0) -> str:
     """The private decision's question (text-1). Its wording is the engine's; the speaker's words are never near it.
     The ask is stated as it would stand, not as an "if" (Steering 2026-11-19 12:36Z: asked "would you ... if they
     asked for it", 32B said yes to .02 of 240). The answer is used only once a line has been heard as an ask."""
+    first = (f" thought is what goes through your mind first, in {THINK_ASK[think]}. Nobody hears it." if think else "")
     if move == "wants_to_buy_food":
-        return (f" {name} offers {price} coin for 1 of your food. Would you sell it to them now?"
+        return (f" {name} offers {price} coin for 1 of your food. Would you sell it to them now?{first}"
                 " answer is your own choice: yes or no.")
-    return f" {name} asks you for 1 of your food. Do you hand it to them now? answer is your own choice: yes or no."
+    return f" {name} asks you for 1 of your food. Do you hand it to them now?{first} answer is your own choice: yes or no."
 
 
 ID_REF = re.compile(r"#(\d+)\b")
@@ -421,6 +430,9 @@ class Sim:
                 or not _is_int(talk["hungry_at"]) or (talk["consent"] == "mind" and talk["typed"]):
             # mind + typed would be talk-1b: the mind that reads the words also chooses, which failed twice
             raise ValueError(f"talk: consent is one of {CONSENTS}, typed is 0 or 1, and typed never goes with mind")
+        if not (_is_int(talk["think"]) and talk["think"] in (0, *THINK_ASK)) \
+                or (talk["think"] and talk["consent"] != "private"):
+            raise ValueError("talk: think is 0, 1 or 2, and only the private decision thinks (consent private)")
         if "sick" in self.state.get("stakes", {}):  # who is sick until when, who is immune, the source events (B5)
             self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}}
             if "neighbor" in self.state["stakes"]:  # who knows of whose sickness, and who carries word (neighbor-1)
@@ -2205,8 +2217,9 @@ class Sim:
                      f"Hunger {t['needs']['hunger']}/1000. You carry {t['inv']['food']} food and {t['inv']['coin']} coin. "
                      f"{sp['name']} ({sp['role']}{', your family' if kin else ''}) is here with you. "
                      f"They carry {'food' if facts[0] else 'no food'}." + (" They look hungry." if facts[1] else "")
-                     + talk_record_line(sp["name"], rec["yes"], rec["no"]) + decide_ask(sp["name"], move, price))
-        return assemble_decide(t, known, situation)
+                     + talk_record_line(sp["name"], rec["yes"], rec["no"])
+                     + decide_ask(sp["name"], move, price, self._talk_params()["think"]))
+        return assemble_decide(t, known, situation, think=bool(self._talk_params()["think"]))
 
     def _talk_decide(self, t: dict, sp: dict, sid: int, move: str | None, price):
         """text-1: when the player's line `sid` lands on `t` in a held world, decide once for the day whether `t`
@@ -2228,7 +2241,8 @@ class Sim:
                 return
             redo = 1
         data = {"with": sp["id"], "move": move, **({"price": price} if price is not None else {}), "facts": facts,
-                **({"redo": 1} if redo else {})}
+                **({"redo": 1} if redo else {}),
+                **({"think": p["think"]} if p["think"] and p["consent"] == "private" else {})}
         hold = lambda eid, answer: self._talk_hold(t, sp["id"], move, price, answer, eid, facts, redo)
         if p["consent"] != "private":  # nature: the roll is the decision (the pair's script arm, ruling (e))
             stream, idx, roll = self._ask_roll(f"talk:{t['id']}:{sp['id']}")

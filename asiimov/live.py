@@ -1020,13 +1020,15 @@ def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True),
     return out
 
 
-def talk_params(consent: str | None, typed: bool) -> dict | None:
+def talk_params(consent: str | None, typed: bool, think: int = 0) -> dict | None:
     """A new world's talk parameters as genesis records them: only what was asked for, so a world started with
     neither flag has none and is a default world (its log is engine 35's but for the engine field). A held world
     (consent private, or typed) also states where "They look hungry" starts (text-1, ruling (b))."""
     talk = {**({"consent": consent} if consent and consent != "nature" else {}), **({"typed": 1} if typed else {})}
     if typed or consent == "private":
         talk["hungry_at"] = TALK_DEFAULTS["hungry_at"]
+    if think:  # think-1: only when asked for, as the others
+        talk["think"] = think
     return talk or None
 
 
@@ -1072,6 +1074,9 @@ def main(argv=None):
     ap.add_argument("--typed", action="store_true",
                     help="text-1, a new world only: a line typed with no chip may be given 1 food, on the decision "
                          "already held (consent private or nature). A script mind needs --hear-url to hear an ask")
+    ap.add_argument("--think", type=int, choices=[1, 2], default=0,
+                    help="think-1, a new world with --consent private: the private decision thinks first, in one "
+                         "short sentence (1) or two or three (2); the thought is logged and never shown")
     ap.add_argument("--hear-url", help="script mind with --typed: the model server that hears whether a line asks "
                     "for food (the minds arm's model), with --hear-model and --hear-key")
     ap.add_argument("--hear-model")
@@ -1111,10 +1116,12 @@ def main(argv=None):
         mind = {"stub": StubMind, "noisy": NoisyMind, "script": ScriptMind}[kind]()
     if args.typed and args.consent == "mind":
         raise SystemExit("--typed goes with consent private or nature: with mind, the call that reads the words would choose")
+    if args.think and args.consent != "private":
+        raise SystemExit("--think goes with --consent private: only the private decision thinks")
     if (args.hear_url or args.hear_model) and (kind != "script" or not (args.hear_url and args.hear_model)):
         raise SystemExit("--hear-url and --hear-model go together, for --mind script in a --typed world")
     runner = LiveRunner(args.out, mind, args.seed, args.agents, mind_kind=kind,
-                        workers=args.workers or (64 if kind == "llm" else 1), talk=talk_params(args.consent, args.typed))
+                        workers=args.workers or (64 if kind == "llm" else 1), talk=talk_params(args.consent, args.typed, args.think))
     params = runner.sim._talk_params()
     consent = params["consent"]
     if args.consent and args.consent != consent:

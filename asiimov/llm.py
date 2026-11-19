@@ -87,6 +87,10 @@ def schema_for(req: MindRequest) -> dict:
     if req.kind == "hear":  # text-1: the script arm's hearing call (Hearer)
         return {"type": "object", "properties": {"gives": {"type": "string", "enum": list(req.view["gives"])}},
                 "required": ["gives"], "additionalProperties": False}
+    if req.kind == "decide" and req.view.get("decide", {}).get("think"):  # think-1: the thought first, then the answer
+        base = SCHEMAS["decide"]
+        return {"type": "object", "properties": {"thought": {"type": "string"}, **base["properties"]},
+                "required": ["thought"] + base["required"], "additionalProperties": False}
     if req.kind != "deliberate":
         return SCHEMAS[req.kind]
     people = _ids(req.view, "people")
