@@ -510,7 +510,8 @@ class LLMNarrator:
         it["denied"] keeps each hit asked about, it["fallback"] whether the template was used.
         Then repeats (Steering 2026-11-18 23:52Z, pt11: 61 of 130 lines were word for word a line heard earlier
         that day): a line the player already heard today is asked about once more, naming it, and on a second
-        repeat the exchange is dropped (no lines). it["repeated"] keeps each repeat asked about, it["dropped"]."""
+        repeat the exchange is cut before the first line that still repeats (Steering 00:06Z). it["repeated"] keeps
+        each repeat found, it["dropped"] whether no line is left."""
         t0 = time.monotonic()
         p = prompt(it)
         got = self._ask(p, it)
@@ -533,24 +534,21 @@ class LLMNarrator:
             seen = set(self.said.get(key, ()))
         rep = repeats(out, seen)
         if rep and it["fallback"]:
-            # The model just failed (down, malformed or denied twice): no third call; a repeated template line
-            # stays unsaid (review of #95).
+            # The model just failed (down, malformed or denied twice): no third call (review of #95).
             it["repeated"].append(rep)
-            out = []
+            out = cut(out, seen)
         elif rep:
             it["repeated"].append(rep)
             again = self._ask(p + "\nNot " + ", ".join(f'"{t}"' for t in rep) + " again: it was already said today. "
                               "Say something new, from what is listed above.", it)
-            if again is None or check(it, again) or repeats(again, seen):
-                if again is not None:
-                    it["repeated"].append(repeats(again, seen))
-                out = []
-            else:
+            if again is not None and not check(it, again):
                 out, it["fallback"] = again, False
+            if repeats(out, seen):
+                it["repeated"].append(repeats(out, seen))
+                out = cut(out, seen)  # Steering 00:06Z: up to the first line that still repeats
         with self._said_lock:
             day = self.said.setdefault(key, set())
-            if out and repeats(out, day):  # the same words said meanwhile on another thread
-                out = []
+            out = cut(out, day)  # the same words said meanwhile on another thread
             day.update(norm(x["text"]) for x in out)
             for k in [k for k in self.said if k[0] == key[0] and k[1] < key[1]]:
                 del self.said[k]  # only today's lines count
@@ -562,6 +560,18 @@ class LLMNarrator:
 def norm(text: str) -> str:
     """A line's words, for "word for word": case, punctuation and spacing don't count."""
     return " ".join(re.findall(r"[a-z0-9']+", text.lower()))
+
+
+def cut(lines: list[dict], seen: set) -> list[dict]:
+    """The lines before the first repeat (Steering 2026-11-19 00:06Z): a reply without its opener doesn't stand
+    alone, an opener without its reply does; a repeated opener leaves nothing."""
+    here = set()
+    for i, x in enumerate(lines):
+        w = norm(x["text"])
+        if w and (w in seen or w in here):
+            return lines[:i]
+        here.add(w)
+    return lines
 
 
 def repeats(lines: list[dict], seen: set) -> list[str]:

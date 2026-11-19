@@ -392,6 +392,14 @@ def test_a_line_heard_earlier_that_day_is_asked_once_more_then_the_exchange_is_d
     assert '"good morning!" again' in asked[1] and asked[1].startswith(asked[0]) and got["repeated"] == [["good morning!"]]
     lines, got, asked = run([same, first])  # a second repeat: no words at all
     assert lines == [] and got["dropped"] is True and len(asked) == 2
+    reply_again = json.dumps({"lines": [{"who": nx, "text": "Did the well run dry?"}, {"who": ny, "text": "It is."}]})
+    lines, got, asked = run([reply_again, reply_again])  # Steering 00:06Z: the opener stands without its reply
+    assert [l["text"] for l in lines] == ["Did the well run dry?"] and got["dropped"] is False
+    lines, got, asked = run([json.dumps({"lines": [{"who": nx, "text": "Long day ahead."}, {"who": ny, "text": "Busy day."}]}),
+                             "not json"])  # a failed re-ask: the first answer, cut the same way
+    assert [l["text"] for l in lines] == ["Long day ahead."]
+    assert narrate.cut([{"text": "a"}, {"text": "b"}, {"text": "c"}], {"b"}) == [{"text": "a"}]
+    assert narrate.cut([{"text": "Hi."}, {"text": "New."}], {"hi"}) == []  # a reply never stands alone
     lines, got, asked = run([same], tick=4 * TICKS_PER_DAY + 50)  # a new day: heard afresh
     assert len(lines) == 2 and got["dropped"] is False and len(asked) == 1
     assert list(n.said) == [(me, 4)]  # yesterday's lines are let go
