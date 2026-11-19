@@ -17,6 +17,9 @@ SECTION_BUDGETS = {  # approximate tokens (chars / 4)
     # from engine 10, whose ask has a clause per offered action: at 450 it cut the people list in 24 of 289
     # stub deliberations (100 agents, 2 days), against 0 at engine 9.
     "situation_deliberate": 550,
+    # talk-1n: an answer's tail (the quoted line, the ask, the guard, the tags, says and next) is ~900 chars, so at 300
+    # a crowd left no room for the speaker in "Here:" (test_crowded_plaza_keeps_the_head).
+    "situation_answer": 400,
 }
 
 SCHEMA = """# How you act
