@@ -532,7 +532,12 @@ class LLMNarrator:
         with self._said_lock:
             seen = set(self.said.get(key, ()))
         rep = repeats(out, seen)
-        if rep:
+        if rep and it["fallback"]:
+            # The model just failed (down, malformed or denied twice): no third call; a repeated template line
+            # stays unsaid (review of #95).
+            it["repeated"].append(rep)
+            out = []
+        elif rep:
             it["repeated"].append(rep)
             again = self._ask(p + "\nNot " + ", ".join(f'"{t}"' for t in rep) + " again: it was already said today. "
                               "Say something new, from what is listed above.", it)

@@ -396,3 +396,12 @@ def test_a_line_heard_earlier_that_day_is_asked_once_more_then_the_exchange_is_d
     assert len(lines) == 2 and got["dropped"] is False and len(asked) == 1
     assert list(n.said) == [(me, 4)]  # yesterday's lines are let go
     assert narrate.repeats([{"text": "Hi."}, {"text": "hi"}], set()) == ["hi"]  # within one exchange too
+
+    def down(path, body):
+        down.calls += 1
+        raise RuntimeError("LLM server unreachable")
+    down.calls, n.client.post = 0, down
+    got = dict(it, tick=4 * TICKS_PER_DAY + 60)
+    assert n.lines(got) == narrate.TemplateNarrator().lines(it) and down.calls == 1  # the template, heard afresh
+    got = dict(it, tick=4 * TICKS_PER_DAY + 70)
+    assert n.lines(got) == [] and down.calls == 2 and got["dropped"] is True  # repeated: no call to a down server
