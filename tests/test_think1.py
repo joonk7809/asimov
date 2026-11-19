@@ -161,3 +161,40 @@ def test_genesis_names_the_flag_only_when_it_is_set():
     assert talk_params("private", True) == {"consent": "private", "typed": 1, "hungry_at": 550}
     assert talk_params("private", True, 2) == {"consent": "private", "typed": 1, "hungry_at": 550, "think": 2}
     assert talk_params(None, False) is None
+
+
+# The whole log of a held world with no `think`, as the commit before think-1 wrote it (da3e199): a day of hostile
+# lines and minds, every event with its recorded prompt hash and output. Steering 2026-11-19 21:18Z.
+BEFORE = {("typed", 1): "5429419df5b87ceea4b623cca759268b660ab81014915eeb8ad6e144217835da",
+          ("typed", 2): "66d35277e64cf3f539f8f7a3c8b6a45a14f6d071d76ce103875606f5eba7cdb0",
+          ("chip", 1): "d4e3137291a8607ce0ecb767b21e441bfaeaa8ac9d3a864e70f4b92a9d6329f9",
+          ("chip", 2): "37763f30746add348e53264275fe70e185c9b6a04435503ad5146ff977c2131c"}
+
+
+def day_log(talk, seed):
+    import hashlib
+    sim, me, to = world(Hostile(seed), dict(talk), seed=seed)
+    r = random.Random(seed)
+    for _ in range(TICKS_PER_DAY):
+        ag = sim.state["agents"]
+        here = [o["id"] for o in ag if o["id"] != me and o["place"] is not None and o["place"] == ag[me]["place"]
+                and not o["asleep"]]
+        acts = []
+        if here and r.random() < 0.6:
+            acts.append({"kind": "act", "action": "say", "target": r.choice(here),
+                         "text": r.choice(INJECTIONS + ["Could you spare some food?"]),
+                         **r.choice([{}, {}, {"move": "asks_food"}])})
+        sim.step(acts)
+    sim.finish()
+    decided = sum(e.kind == "mind_decide" for e in sim.events)
+    return hashlib.sha256("\n".join(e.to_json() for e in sim.events).encode()).hexdigest(), decided
+
+
+@pytest.mark.parametrize("name,seed", sorted(BEFORE))
+def test_a_world_without_the_flag_is_byte_identical_to_before_think_1(name, seed):
+    talk = PRIVATE if name == "typed" else {"consent": "private"}
+    log, decided = day_log(talk, seed)
+    assert decided >= 2, "vacuous: no private decision in the day"
+    assert log == BEFORE[(name, seed)]
+    assert day_log({**talk, "think": 0}, seed)[0] != log  # the flag written out is a different genesis ...
+    assert day_log({**talk, "think": 1}, seed)[0] != log  # ... and thinking is a different prompt
