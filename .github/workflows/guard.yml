@@ -1,0 +1,23 @@
+name: guard
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Protected paths, golden/engine changes and test weakening (scripts/pr_guard.py)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Run the base branch's guard, so a PR can't loosen the guard that judges it; fall back to the PR's
+          # copy only when the base has none yet (the PR that adds it).
+          git show "$BASE:scripts/pr_guard.py" > "$RUNNER_TEMP/pr_guard.py" 2>/dev/null || cp scripts/pr_guard.py "$RUNNER_TEMP/pr_guard.py"
+          python "$RUNNER_TEMP/pr_guard.py" --base "$BASE" --head "$HEAD" --repo .
