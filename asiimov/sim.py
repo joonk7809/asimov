@@ -233,7 +233,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "pace-1"  # pace-1: a plan or reflect call waits one tick while a player's line awaits its answer (Steering 07:39Z), on 35; 35 = talk-1g (#97): the injection guard sentence on chip lines (Steering 02:17Z); on 34 = talk-1 (#96)
+ENGINE_VERSION = "36"  # 36 = pace-1 (#99): a plan or reflect call waits one tick while a player's line awaits its answer (Steering 07:39Z); on 35 = talk-1g (#97): the injection guard sentence on chip lines (Steering 02:17Z); on 34 = talk-1 (#96)
 # 33 = say-3c (#88): an over-long reply is clipped at a sentence or word, not mid-word; on 32
 # 32 = say-3b (#85): answer prompts name people, leave = avoid them, ids said aloud become names; on 31.
 # 31 = say-3 (#78): a spoken answer's words are its own `says` field, the reason stays private; a 3-tick listening hold; on 30.
