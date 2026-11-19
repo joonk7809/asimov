@@ -120,15 +120,19 @@ def test_unanswered_the_bodys_own_nature_answers_after_an_hour_and_the_asker_nev
     assert r.tick == ask.tick + ASK_WAIT_TICKS and r.origin == "chance" and "roll" in r.data
 
 
-def test_acting_otherwise_or_letting_go_lets_the_bodys_nature_answer_at_once():
-    for acts in ([{"kind": "act", "action": "rest"}], [{"kind": "release"}]):
+def test_acting_otherwise_declines_and_letting_go_lets_the_bodys_nature_answer_at_once():
+    """talk-1 (design §2.4): an active player who moves on without answering has said no; its nature doesn't
+    give its goods away for it. Released, the body's own nature answers, as before."""
+    for acts, origin in (([{"kind": "act", "action": "rest"}], "rule"), ([{"kind": "release"}], "chance")):
         sim, a, b, player = scene("buy_from")
         sim.step([])
         ask = next(e for e in sim.events if e.kind == "ask" and e.actor == a)
         t = sim.state["tick"]
         sim.step(acts)
         r = receipt_for(sim, a, ask.id)
-        assert r.tick == t and r.origin == "chance", acts
+        assert r.tick == t and r.origin == origin, acts
+        if origin == "rule":
+            assert not r.data["ok"] and r.data["why"] == "refused" and r.data["answered"] == 1
 
 
 def test_an_answer_with_no_ask_is_refused():

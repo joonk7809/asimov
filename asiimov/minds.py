@@ -50,6 +50,10 @@ class StubMind:
             out = self._plan(v)
         elif req.kind == "deliberate":
             out = self._deliberate(v)
+        elif req.kind == "answer" and v.get("answers"):  # talk-1: the answer offered (consent nature offers one)
+            yes = v["answers"] == ["yes"] or len(v["answers"]) > 1 and v["traits"]["agreeableness"] > 500
+            out = {"answer": "yes" if yes else "no", "says": "Here, take one." if yes else "I can't spare any.",
+                   "next": "carry_on"}
         elif req.kind == "answer":  # say-3: a word back, warm or curt by agreeableness; it carries on as it was
             warm = v["traits"]["agreeableness"] > 500
             out = {"says": "Good to hear from you." if warm else "I've got things to do.", "next": "carry_on"}

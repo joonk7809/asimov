@@ -70,6 +70,11 @@ def schema_for(req: MindRequest) -> dict:
     family here for ask_kin, people here for steal, anyone listed for the other person actions. An action
     with nobody to aim at is left out. Intent steps may name anyone listed, or nobody; the world drops
     a person step without a target."""
+    if req.kind == "answer" and req.view.get("answers"):  # talk-1: yes or no first, from what the world offers
+        base = SCHEMAS["answer"]
+        return {"type": "object", "properties": {"answer": {"type": "string", "enum": list(req.view["answers"])},
+                                                 **base["properties"]},
+                "required": ["answer"] + base["required"], "additionalProperties": False}
     if req.kind != "deliberate":
         return SCHEMAS[req.kind]
     people = _ids(req.view, "people")

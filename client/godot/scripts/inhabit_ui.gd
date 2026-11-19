@@ -14,7 +14,7 @@ const NOW := {"work": "Working", "shop": "Shopping", "socialize": "Seeing people
 		"rest": "Resting", "explore": "Exploring", "visit": "Visiting"}
 const SHORT := {"ask_kin": "ask family for food", "ask_food": "ask for food", "buy_from": "buy food", "steal": "steal food",
 		"give_food": "give food", "give_coin": "give a coin", "seek": "go to them", "avoid": "keep away",
-		"agree": "say yes", "decline": "say no", "say": "say something"}
+		"agree": "give", "decline": "not now", "say": "say something"}  # talk-1: an ask's two chips
 const DOING := {"buy_food": "buy food", "go_market": "go to the market", "ask_kin": "ask family for food",
 		"ask_food": "ask for food", "buy_from": "buy food", "steal": "steal", "give_food": "give food",
 		"give_coin": "give a coin", "seek": "find someone", "avoid": "keep away", "work": "go to work",
@@ -44,7 +44,7 @@ const WHY := {"heading to market": "you head to the market", "started": "you sta
 		"no food to give": "you have no food to give", "no coin to give": "you have no coin to give", "no stock": "the market has no food left",
 		"unparseable or unknown action": "that isn't something you can do",
 		"heading there": "you set off", "already here": "you're already there", "arrived": "you arrive",
-		"time ran out": "it took too long"}
+		"time ran out": "it took too long", "price changed": "the price changed; check it and offer again"}
 const TO_YOU := {"gave": "you gave them 1 food", "sold": "you sold them 1 food", "refused": "you said no",
 		"kin gave food": "you gave them food", "kin refused": "you said no", "stolen": "they stole food from you",
 		"caught": "you caught them stealing", "nothing to spare": "you had nothing to spare",
@@ -183,11 +183,19 @@ static func _line(e: Dictionary, me: Dictionary, names: Dictionary) -> String:
 		"ask":
 			var what: String = ASKED.get(str(d.get("action", "")), "asked you something")
 			if d.get("to") != null and int(d["to"]) == me_id:
-				return "%s %s. Say yes or no." % [a, what]
+				return "%s %s. Give, or not now?" % [a, what]
 			return "%s %s." % [a, what.replace("you", _who(d.get("to"), me_id, names))]
-		"said":  # say-1: words spoken aloud, the player's own included
-			return "%s say%s to %s: \u201c%s\u201d" % [a, "" if mine else "s", _who(d.get("with"), me_id, names),
-					str(d.get("text", "")).replace("[", "[lb]")]
+		"said":  # say-1: words spoken aloud, the player's own included; talk-1: and the chip it was said with
+			var ask := ""
+			match str(d.get("move", "")):
+				"asks_food":
+					ask = " (asking for 1 food)"
+				"wants_to_buy_food":
+					ask = " (offering %d coin for 1 food)" % int(d.get("price", 0))
+			return "%s say%s to %s: \u201c%s\u201d%s" % [a, "" if mine else "s", _who(d.get("with"), me_id, names),
+					str(d.get("text", "")).replace("[", "[lb]"), ask]
+		"deal":  # talk-1: what a yes moved, or why it moved nothing
+			return deal_line(d, me_id, names)
 		"reply":  # say-1: a villager's answer to what was said to it
 			var w := str(d.get("says", ""))
 			if w == "":
@@ -254,6 +262,27 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Di
 	if d.get("to") != null and int(d["to"]) != me_id:
 		doing += " (" + _who(d["to"], me_id, names) + ")"
 	return ("Done: %s, %s." if d.get("ok", false) else "Didn't work: %s, because %s.") % [doing, said]
+
+
+const DEAL_WHY := {"not together": "you're no longer together", "asleep": "they fell asleep",
+		"nothing to spare": "they have nothing to spare now", "no coin": "you don't have the coin now"}
+
+
+static func deal_line(d: Dictionary, me_id: int, names: Dictionary) -> String:
+	## talk-1: "Vone gave you 1 food", "You bought 1 food from Vone for 6 coin", or why a yes didn't settle.
+	var giver := _who(d.get("from"), me_id, names, true)
+	var to := _who(d.get("to"), me_id, names)
+	var buy: bool = str(d.get("move", "")) == "wants_to_buy_food"
+	if not d.get("ok", false):
+		var why: String = DEAL_WHY.get(str(d.get("why", "")), str(d.get("why", "")))
+		return "[color=#e07070]%s said yes, but nothing changed hands: %s.[/color]" % [giver, why]
+	if d.get("to") != null and int(d["to"]) == me_id:
+		if buy:
+			return "[color=#80d080]You bought 1 food from %s for %d coin.[/color]" % [giver, int(d.get("coin", 0))]
+		return "[color=#80d080]%s gave you 1 food.[/color]" % giver
+	if buy:
+		return "%s sold 1 food to %s for %d coin." % [giver, to, int(d.get("coin", 0))]
+	return "%s gave 1 food to %s." % [giver, to]
 
 
 static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:
@@ -332,11 +361,12 @@ static func plan(v: Dictionary, per_day: int, names := {}) -> String:
 
 
 static func asks(v: Dictionary, names: Dictionary, secs_per_tick: float) -> String:
-	## Asks waiting on this villager's answer (player-ask-1), with how long is left before its nature answers.
+	## Asks waiting on this villager's answer (player-ask-1), with how long is left. talk-1 (design §2.4): left
+	## unanswered while you play, it's a no; only a body you've left idle answers by its habits.
 	var out := []
 	for q in v.get("asks", []):
 		var left := int(q["until"]) - int(v["tick"])
-		out.append("[color=#f0c060][b]%s %s.[/b]%s\nSay yes or no within %d tick%s (about %ds), or your habits answer for you.[/color]"
+		out.append("[color=#f0c060][b]%s %s.[/b]%s\nGive, or not now? You have %d tick%s (about %ds); no answer counts as not now.[/color]"
 				% [q["name"], ASKED.get(str(q["action"]), "asked you something"), said(q), left, "" if left == 1 else "s",
 				int(left * secs_per_tick)])
 	return "\n".join(out)

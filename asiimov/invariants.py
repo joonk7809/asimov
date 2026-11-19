@@ -8,7 +8,7 @@ from .events import ORIGINS, Event
 from .sim import PERSON_STEPS, RULE_STEPS, STEP_DOS, Sim
 from .worldmap import travel_ticks
 
-BOOL_FIELDS = ("asleep", "has_food", "kin")
+BOOL_FIELDS = ("asleep", "has_food", "kin", "talk")  # talk: an answer's own hold (say-3)
 
 
 def type_violations(x, path="state") -> list[str]:
@@ -69,6 +69,34 @@ def presence_violations(events: list[Event], start: int, where: dict) -> list[st
                 out.append(f"event {e.id}: bought away from the market")
         if other is not None and (where.get(a) is None or where.get(a) != where.get(other)):
             out.append(f"event {e.id}: {e.kind} between {a} at {where.get(a)!r} and {other} at {where.get(other)!r}")
+    return out
+
+
+def deal_violations(events: list[Event], start: int = 0, possessed=None) -> list[str]:
+    """talk-1 (spec §3): a `deal` that moved goods cites the listener's own `mind_answer`, whose request offered
+    yes and whose recorded reply says yes, and the player's `said` line that carried the move; it moves exactly
+    1 food, from a villager who is never the possessed body. A failed deal moves nothing, so cites only."""
+    import json
+    out = []
+    for e in events[start:]:
+        if e.kind != "deal":
+            continue
+        d = e.data
+        said = next((events[p] for p in e.parents if events[p].kind == "said"), None)
+        mind = next((events[p] for p in e.parents if events[p].kind == "mind_answer"), None)
+        if said is None or "move" not in said.data or said.data["move"] != d["move"]:
+            out.append(f"event {e.id}: deal without a line said with its move")
+        if d.get("food") != 1 or e.actor != d["from"] or d["from"] == d["to"] or d["from"] == possessed:
+            out.append(f"event {e.id}: deal {d}")
+        if mind is None or mind.actor != d["from"]:
+            out.append(f"event {e.id}: deal without the listener's answer")
+        elif d["ok"]:
+            try:
+                said_yes = json.loads(mind.mind["raw_output"]).get("answer") == "yes"
+            except (ValueError, AttributeError, TypeError, RecursionError):
+                said_yes = False
+            if not (said_yes and "yes" in mind.data.get("offered", [])):
+                out.append(f"event {e.id}: deal on an answer that wasn't an offered yes")
     return out
 
 
@@ -185,6 +213,7 @@ class Checker:
         out += state_violations(sim)
         out += log_violations(sim.events, n0)
         out += presence_violations(sim.events, n0, self.where)
+        out += deal_violations(sim.events, n0, sim.state.get("player", {}).get("agent"))
         if [a["traits"] for a in sim.state["agents"]] != self.traits:
             out.append("a mind changed someone's traits")
         return [f"tick {self._tick}: {v}" for v in out]

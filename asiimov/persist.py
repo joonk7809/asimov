@@ -19,7 +19,8 @@ from collections import defaultdict
 
 from .events import Event, write_jsonl
 from .minds import ReplayMind
-from .sim import TICKS_PER_DAY, Sim
+from .params import generate_population
+from .sim import DEFAULT_STAKES, TICKS_PER_DAY, Sim
 
 
 def _atomic_write(path: str, text: str):
@@ -100,17 +101,23 @@ def config(out: str) -> dict:
 
 def start(out: str, seed: int, agents: int, mind, order: str = "id", player: dict | None = None,
           workers: int = 1, snapshot_every: int = TICKS_PER_DAY, days: int | None = None,
-          mind_kind: str | None = None) -> Run:
-    """Start a new world in `out`. Refuses a directory that already holds a log."""
+          mind_kind: str | None = None, talk: dict | None = None) -> Run:
+    """Start a new world in `out`. Refuses a directory that already holds a log. `talk`: talk-1's parameters
+    (sim.TALK_DEFAULTS) where they differ, recorded in genesis; a world without them is a default world."""
     player = player or {}
     if os.path.exists(os.path.join(out, "events.jsonl")):
         raise FileExistsError(f"{out} already holds a run; resume it or pick another directory")
     os.makedirs(out, exist_ok=True)
     cfg = {"seed": seed, "agents": agents, "order": order,
            "player": [[t, act] for t in sorted(player) for act in player[t]],
-           "days": days, "mind": mind_kind, "model": getattr(mind, "model", None)}
+           "days": days, "mind": mind_kind, "model": getattr(mind, "model", None), **({"talk": talk} if talk else {})}
     _atomic_write(os.path.join(out, "run.json"), json.dumps(cfg, indent=1))
-    run = Run(out, Sim(seed, agents, mind, order=order, workers=workers), player, 0, 0, snapshot_every, days)
+    pop = None
+    if talk:
+        pop = generate_population(seed, agents)
+        pop["stakes"] = {**json.loads(json.dumps(DEFAULT_STAKES)), "talk": dict(talk)}
+    run = Run(out, Sim(seed, agents, mind, genesis=pop, order=order, workers=workers), player, 0, 0, snapshot_every,
+              days)
     run._append()
     run._snapshot()  # tick 0, so a run that dies on its first day still resumes
     return run

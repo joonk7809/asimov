@@ -43,7 +43,7 @@ func _init() -> void:
 	var said := Words.describe({"kind": "ask", "actor": 4, "origin": "rule", "data": {"action": "buy_from", "to": 3}},
 			{"id": 3, "name": "Me"}, {4: "Ari"})
 	if not ("Ari asked you for food" in waiting and "4 ticks" in waiting and "80s" in waiting) \
-			or said != "Ari wanted to buy food from you. Say yes or no." \
+			or said != "Ari wanted to buy food from you. Give, or not now?" \
 			or not Words.shown({"action": "agree", "target": 4}, {}) or not Words.shown({"action": "decline", "target": 4}, {}):
 		printerr("an ask doesn't read right: %s | %s" % [waiting, said])
 		quit(1)
@@ -56,7 +56,7 @@ func _init() -> void:
 			"data": {"action": "give_food", "ok": true, "why": "gave", "to": 3, "says": "return the favour"}},
 			{"id": 3, "name": "Me"}, {4: "Ari"})
 	var plain := Words.describe({"kind": "meet", "actor": 4, "origin": "rule", "data": {"with": 3}}, {"id": 3, "name": "Me"}, {4: "Ari"})
-	if not ("[i]\"I need food and my family [lb]b]should[lb]/b] support me\"[/i]\nSay yes or no" in w2) \
+	if not ("[i]\"I need food and my family [lb]b]should[lb]/b] support me\"[/i]\nGive, or not now? You have" in w2) \
 			or not g.ends_with("\n    [i]\"return the favour\"[/i]") or "\"" in plain:
 		printerr("a villager's words don't read right: %s | %s | %s" % [w2, g, plain])
 		quit(1)

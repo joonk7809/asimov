@@ -298,6 +298,25 @@ func _build_inhabit_ui() -> void:
 	say.pressed.connect(_say)
 	talk.add_child(say)
 	ui["talk_say"] = say
+	# talk-1: a chip says what the line asks for; the villager answers yes or no, and a yes moves the food. Just
+	# talk (the default) asks nothing, whatever the words say.
+	# Its own row above the Talk row, so the line keeps its width and its place at the bottom (the aiplay smoke
+	# clicks it there).
+	var chips := HBoxContainer.new()
+	var ask_label := Label.new()
+	ask_label.text = "Ask for:"
+	ask_label.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
+	chips.add_child(ask_label)
+	var chip := OptionButton.new()
+	chip.add_item("Nothing, just talk", 0)
+	chip.add_item("Ask for food", 1)
+	chip.add_item("Buy food", 2)
+	chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	chip.tooltip_text = "What your line asks for. They answer yes or no; a yes hands the food over."
+	chips.add_child(chip)
+	feed_box.add_child(chips)
+	feed_box.move_child(chips, talk.get_index())
+	ui["talk_chip"] = chip
 
 
 var _menu_key := ""
@@ -341,7 +360,7 @@ func _feed(evs: Array) -> void:
 			if e["kind"] == "reply" and str(e["data"].get("next", "")) == "leave" and e["data"].get("with") != null \
 					and int(e["data"]["with"]) == int(client.me["id"]):
 				leaving[int(e["actor"])] = int(e["tick"])  # pt11: not a Talk target while they walk off
-			if e["kind"] in ["said", "reply"]:  # say-1: spoken words also go where talk is read
+			if e["kind"] in ["said", "reply", "deal", "ask"]:  # say-1: spoken words (talk-1: and deals, asks) go where talk is read
 				_append(ui["said"], at)
 				var words := str(e["data"].get("text" if e["kind"] == "said" else "says", ""))
 				if words != "" and _caught_up:
@@ -550,6 +569,13 @@ func _refresh_talk() -> void:
 	ui["talk_line"].placeholder_text = "Nobody here to talk to." if none else \
 			("Waiting to be heard..." if waiting else "Say something...")
 	ui["talk_say"].disabled = none or not pending.is_empty()
+	var chip: OptionButton = ui["talk_chip"]
+	var price := int(v.get("food_price", 0))
+	chip.set_item_text(2, "Buy food for %d coin" % price)
+	chip.set_item_disabled(2, int(v.get("coin", 0)) < price)  # greyed when the coin is short
+	if chip.selected == 2 and int(v.get("coin", 0)) < price:
+		chip.select(0)
+	chip.disabled = none or waiting
 
 
 func _say() -> void:
@@ -558,8 +584,12 @@ func _say() -> void:
 	if text == "" or who.item_count == 0 or not pending.is_empty():
 		return
 	var t := who.get_selected_id()
-	pending = {"id": client.act("say", t, "", text), "label": "Say to %s" % names.get(t, "#%d" % t),
+	var chip: OptionButton = ui["talk_chip"]
+	var move: String = ["", "asks_food", "wants_to_buy_food"][maxi(0, chip.selected)]
+	var price := int(client.view.get("food_price", 0)) if move == "wants_to_buy_food" else -1
+	pending = {"id": client.act("say", t, "", text, move, price), "label": "Say to %s" % names.get(t, "#%d" % t),
 			"tick": int(client.view["tick"])}
+	chip.select(0)  # one ask per line: the next line just talks unless a chip is picked again
 	last_said[t] = text
 	ui["talk_line"].text = ""
 	ui["talk_line"].select_all_on_focus = false

@@ -35,15 +35,18 @@ assert SCHEMA.count(f'"action":"{E9_ACTIONS}"') == 1
 # say-3: an answer prompt's SCHEMA has this line in the deliberate line's place, as the talk pilot's had
 # (research/talk/tool/talk_bank.py, minus heard and answer).
 ANSWER_LINE = 'For kind=answer: {"says":"...","next":"stay|carry_on|leave"}'
+# talk-1 (plan/talk-1-build-spec.md §2.4): a line said with a move (the client's chip) is answered yes or no first.
+MOVE_ANSWER_LINE = 'For kind=answer: {"answer":"yes|no","says":"...","next":"stay|carry_on|leave"}'
 DELIBERATE_LINE = ('For kind=deliberate: {"action":"' + E9_ACTIONS + '","target":ID_or_null,"reason":"...",'
                    '"goal":"..." or "","then":[{"do":"...","target":ID_or_null}]}')
 assert SCHEMA.count(DELIBERATE_LINE) == 1
 
 
-def schema_text(actions=None, answer: bool = False) -> str:
-    """The SCHEMA section, with the deliberate line cut to `actions` when given, or swapped for the answer line."""
+def schema_text(actions=None, answer: bool = False, move: bool = False) -> str:
+    """The SCHEMA section, with the deliberate line cut to `actions` when given, or swapped for the answer line
+    (talk-1: the move answer's line for a line said with a chip)."""
     if answer:
-        return SCHEMA.replace(DELIBERATE_LINE, ANSWER_LINE, 1)
+        return SCHEMA.replace(DELIBERATE_LINE, MOVE_ANSWER_LINE if move else ANSWER_LINE, 1)
     if actions is None:
         return SCHEMA
     return SCHEMA.replace(f'"action":"{E9_ACTIONS}"', '"action":"' + "|".join(actions) + '"', 1)
@@ -217,40 +220,43 @@ def sheet_lines(agent: dict) -> str:
     return "\n".join(unanchored(render_soul(agent)).split("\n")[3:])
 
 
-def _relationship_lines(agent: dict, state: dict) -> list[tuple[int, str]]:
+def _relationship_lines(agent: dict, state: dict, named: bool = False) -> list[tuple[int, str]]:
+    """`named` (talk-1, Steering 2026-11-19 00:42Z): an answer's prompt shows people by name only, no ids."""
     names = {a["id"]: a["name"] for a in state["agents"]}
-    return [(int(other), f"- {names[int(other)]} (#{other}): affinity {rel['affinity']}, {rel.get('note', '')}".rstrip(", "))
+    return [(int(other), f"- {names[int(other)]}{'' if named else f' (#{other})'}: affinity {rel['affinity']}, "
+                         f"{rel.get('note', '')}".rstrip(", "))
             for other, rel in rank_relationships(agent)]
 
 
-def shown_relationships(agent: dict, state: dict) -> list[int]:
+def shown_relationships(agent: dict, state: dict, named: bool = False) -> list[int]:
     """The ids the prompt's "People I know" section shows (the lines that fit its budget)."""
-    rel = _relationship_lines(agent, state)
+    rel = _relationship_lines(agent, state, named)
     return [i for i, _ in rel[:_fit_count("# People I know", [line for _, line in rel], SECTION_BUDGETS["relationships"])]]
 
 
-def render_intent(agent: dict, state: dict) -> str:
+def render_intent(agent: dict, state: dict, named: bool = False) -> str:
     """The agent's live intent: its goal, the step under way and the steps still to come. The reason
     the mind gave is not shown back (L12)."""
     it = agent.get("intent")
     if not it:
         return ""
     names = {a["id"]: a["name"] for a in state["agents"]}
-    desc = [f"{s['do'].replace('_', ' ')}" + (f" {names[s['target']]} (#{s['target']})" if s["target"] is not None else "")
+    desc = [f"{s['do'].replace('_', ' ')}" + (f" {names[s['target']]}" + ("" if named else f" (#{s['target']})")
+                                              if s["target"] is not None else "")
             for s in it["steps"][it["i"]:]]
     return "\n\n# My intentions\n" + f"- {it['goal']}: now {desc[0]}" + (f"; then {', '.join(desc[1:])}" if desc[1:] else "")
 
 
-def render_files(agent: dict, state: dict) -> dict[str, str]:
-    """Render the agent's markdown map from state."""
-    rel_lines = [line for _, line in _relationship_lines(agent, state)]
+def render_files(agent: dict, state: dict, named: bool = False) -> dict[str, str]:
+    """Render the agent's markdown map from state. `named`: people by name only (an answer's prompt)."""
+    rel_lines = [line for _, line in _relationship_lines(agent, state, named)]
     belief_lines = [f"- {k}: {v}" for k, v in sorted(agent["beliefs"].items())]
     return {
         "soul.md": agent["soul"],
         "core.md": "# Core memories\n" + "\n".join(f"- {c}" for c in agent["core"]),
         "goals.md": "# Today's plan\n" + "\n".join(
             f"- {b['activity']} {b['start_h']:02d}:00-{b['end_h']:02d}:00" for b in agent["plan"])
-            + render_intent(agent, state),
+            + render_intent(agent, state, named),
         "relationships.md": "# People I know\n" + "\n".join(rel_lines),
         "beliefs.md": "# What I believe\n" + "\n".join(belief_lines),
         "recent.md": "# Today\n" + "\n".join(f"- {r}" for r in agent["recent"]),
@@ -258,16 +264,17 @@ def render_files(agent: dict, state: dict) -> dict[str, str]:
     }
 
 
-def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=None, actions=None) -> tuple[str, dict]:
+def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=None, actions=None,
+                    move: bool = False) -> tuple[str, dict]:
     """Stable sections first (prefix-cacheable), changing tail last. `actions`: a deliberation's offered
     actions, which its SCHEMA line lists.
 
     `edit(sections) -> sections` may drop or replace sections before clipping; the world never
     passes one, so its prompts are unchanged. asiimov.probe uses it for input ablations."""
-    files = render_files(agent, state)
+    files = render_files(agent, state, named=kind == "answer")
     top_episodes = sorted(agent["episodes"], key=lambda e: (-e["importance"], -e["tick"]))[:8]
     sections = {
-        "schema": schema_text(actions, answer=kind == "answer"),
+        "schema": schema_text(actions, answer=kind == "answer", move=move),
         "soul": files["soul.md"],
         "core": files["core.md"],
         "goals": files["goals.md"],
