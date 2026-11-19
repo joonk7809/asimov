@@ -47,6 +47,7 @@ var leaving := {}           # inhabitant: villager id -> the tick they answered 
 var last_said := {}         # inhabitant: villager id -> the last line said to them, put back if it didn't reach them
 var heard_recent := []      # inhabitant: keys of the last overheard exchanges, so a word-for-word repeat isn't shown
 var map_rects := {}         # inhabitant: place name -> its rect on screen, for clicks
+const CROWD_MAX := 12        # polish: at most this many people drawn at your place; the rest are "+N more here"
 var map_w := 420.0          # inhabitant: the map's column; the feed and panels take the rest (sized in _layout)
 var side_w := 400.0         # inhabitant: the right-hand column (you, plan, here, actions, talk)
 var ui_scale := 1.25        # P-pass (joon 2026-11-18 "very small and hard to see"): everything x this, on top of
@@ -967,6 +968,15 @@ func _draw_inhabitant() -> void:
 	if zoom > 1.0:  # V4: the map follows you, centred in its column
 		var me_m := Vector2(client.view["pos"][0], client.view["pos"][1])
 		origin = Vector2(map_w / 2.0, (size.y - 30) / 2.0) - (me_m - lo) * k
+		# Polish (aipt2: "the map is cropped at the left"): the camera stops at the village's edges, so near an
+		# edge the map's border shows whole instead of the column running past it into half-drawn houses.
+		var world := (hi - lo) * k
+		var col := Vector2(map_w, size.y - 30)
+		for i in 2:
+			if world[i] + 40.0 <= col[i]:
+				origin[i] = (col[i] - world[i]) / 2.0
+			else:
+				origin[i] = clampf(origin[i], col[i] - 20.0 - world[i], 20.0)
 	var font := ThemeDB.fallback_font
 	var kin_homes := {}
 	for m in client.view.get("kin", []):
@@ -1004,10 +1014,30 @@ func _draw_inhabitant() -> void:
 	if here.intersects(seen):  # zoomed in, a big place runs off the column: spread the people over what shows
 		here = here.intersection(seen)
 	drawn_at = {}
-	for p in v["present"]:
+	# Polish (aipt2: "the villagers cluster so I can't tell who is who"): a crowd draws at most CROWD_MAX people,
+	# whoever you're talking with and whoever is speaking first, then family, then by id; the rest are a "+N" tag.
+	var talking := -1
+	if ui.has("talk_who") and ui["talk_who"].item_count > 0:
+		talking = ui["talk_who"].get_selected_id()
+	var now := Time.get_ticks_msec() / 1000.0
+	var speaking := {}
+	for b in bubbles:
+		if now - b["born"] < BUBBLE_S:
+			speaking[int(b["who"])] = true
+	var crowd: Array = v["present"].duplicate()
+	crowd.sort_custom(func(x, y): return [int(x["id"]) != talking, not speaking.has(int(x["id"])), not x["kin"], int(x["id"])] \
+			< [int(y["id"]) != talking, not speaking.has(int(y["id"])), not y["kin"], int(y["id"])])
+	var extra := maxi(0, crowd.size() - CROWD_MAX)
+	for p in crowd.slice(0, CROWD_MAX):
 		var spot := Art.spot_in(here, int(p["id"]), px * 0.85)
 		drawn_at[int(p["id"])] = spot - Vector2(0, px * 0.85)
 		Art.villager(self, spot, str(p.get("role", "")), px * 0.85, false, bool(p.get("asleep", false)))
+	if extra > 0:
+		tags.append(["+%d more here" % extra, Rect2(here.position + Vector2(0, here.size.y + 22), Vector2(here.size.x, 0))])
+	if drawn_at.has(talking):  # the one you're talking with, named over their head
+		var who: String = str(names.get(talking, ""))
+		if who != "":
+			tags.append([who, Rect2(drawn_at[talking] - Vector2(0, 4), Vector2.ZERO)])
 	Art.villager(self, at, str(client.me.get("role", "")), px, true, bool(v["asleep"]))
 	drawn_at[int(client.me["id"])] = at - Vector2(0, px * 1.1)
 	var night := night_shade(fmod(client.display_tick(), float(client.ticks_per_day())) * 24.0 / client.ticks_per_day())
