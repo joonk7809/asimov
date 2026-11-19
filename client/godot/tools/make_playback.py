@@ -9,6 +9,8 @@ this engine reproduces. The client plays the pack back and computes no world rul
 
 A log replays only on the engine that wrote it. For an older log, pass --engine a checkout of that engine
 (git worktree add DIR COMMIT). A live run's log has no end event; it replays as far as it was recorded.
+A log copied while its world runs, or left by a kill, can stop inside a tick: a torn last line is dropped, and
+a last tick that doesn't replay whole is left out (the log is flushed tick by tick, so earlier ticks are whole).
 
 --expected writes the engine's state at every Nth view tick (positions, places, holdings, who is at each
 place), for tests/test_playback.gd.
@@ -39,10 +41,13 @@ def replay_frames(raw: bytes, every: int):
     from asiimov.minds import ReplayDivergence, ReplayMind
     from asiimov.sim import ENGINE_VERSION, Sim
 
-    events = [Event(**json.loads(l)) for l in raw.split(b"\n") if l.strip()]
-    genesis = events[0]
-    if genesis.kind != "genesis":
+    lines = raw.split(b"\n")
+    if lines[-1].strip():
+        print("the last line is torn (no newline): dropped", file=sys.stderr)
+    events = [Event(**json.loads(l)) for l in lines[:-1] if l.strip()]
+    if not events or events[0].kind != "genesis":
         raise SystemExit("not a world log: the first event isn't genesis")
+    genesis = events[0]
     engine = genesis.data.get("engine")
     if engine != ENGINE_VERSION:
         raise SystemExit(f"log was written by engine {engine}, this checkout is engine {ENGINE_VERSION}: "
@@ -66,27 +71,39 @@ def replay_frames(raw: bytes, every: int):
                 last[a["id"]] = now
                 holdings.append([tick, a["id"], *now])
 
-    def expect():
+    def state():
         agents = sim.state["agents"]
         present = defaultdict(list)
         for a in agents:
             if a["place"] is not None:
                 present[a["place"]].append(a["id"])
-        expected["ticks"].append(sim.state["tick"])
-        expected["pos"].append([list(sim._pos(a)) for a in agents])
-        expected["place"].append([a["place"] for a in agents])
-        expected["food"].append([a["inv"]["food"] for a in agents])
-        expected["coin"].append([a["inv"]["coin"] for a in agents])
-        expected["present"].append(dict(present))
+        return {"ticks": sim.state["tick"], "pos": [list(sim._pos(a)) for a in agents],
+                "place": [a["place"] for a in agents], "food": [a["inv"]["food"] for a in agents],
+                "coin": [a["inv"]["coin"] for a in agents], "present": dict(present)}
+
+    def expect(row):
+        if not expected["ticks"] or expected["ticks"][-1] != row["ticks"]:
+            for k in expected:
+                expected[k].append(row[k])
 
     record(-1)
     while sim.state["tick"] < stop:
-        if sim.state["tick"] % every == 0:
-            expect()
-        tick = sim.state["tick"]
-        sim.step(player.get(tick, []))
+        tick, whole = sim.state["tick"], len(sim.events)
+        if tick % every == 0:
+            expect(state())
+        open_end = not ended and tick == stop - 1  # only a log with no end can stop inside its last tick
+        before = state() if open_end else None      # a step that fails leaves the sim half-way
+        try:
+            sim.step(player.get(tick, []))
+        except ReplayDivergence as err:
+            if not open_end:
+                raise
+            print(f"tick {tick}, the last recorded, doesn't replay whole and is left out "
+                  f"({len(events) - whole} events): {str(err)[:120]}", file=sys.stderr)
+            expect(before)
+            return events[:whole], holdings, expected, tick - 1
         record(tick)
-    expect()
+    expect(state())
     if ended:
         sim.finish()
     if len(sim.events) != len(events):
