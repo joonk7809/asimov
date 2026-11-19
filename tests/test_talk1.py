@@ -3,12 +3,13 @@ on a chip, "asks_food" or "wants_to_buy_food" at the price shown. The villager a
 yes moves 1 food that tick, with a `deal`. A line with no move is say-3's and moves nothing."""
 import json
 import random
+import re
 
 import pytest
 
 from asiimov import sim as S
 from asiimov.invariants import Checker, deal_violations
-from asiimov.memory import ANSWER_LINE, MOVE_ANSWER_LINE
+from asiimov.memory import ANSWER_LINE, MOVE_ANSWER_LINE, situation_budget
 from asiimov.minds import MindReply, StubMind
 from asiimov.params import generate_population
 from asiimov.replay import replay
@@ -415,3 +416,45 @@ def test_hostile_minds_and_lines_keep_every_invariant_and_replay_exactly(seed, c
     assert consent == "nature" or any(e.kind == "deal" and e.data["ok"] for e in sim.events)  # not vacuous
     sim.finish()
     replay(sim.events)
+
+
+def test_crowded_plaza_keeps_the_head():
+    """Steering 2026-11-19 01:39Z: memory's tail-clip of the situation cut "# Now", the time, the place and the
+    holdings off a busy place's answer prompt (85 of 158 acceptance rows). Now the answer's tail counts toward the
+    budget, "Here:" shortens (the speaker first), and every request kind keeps its head whole in a crowd."""
+    mind = Says()
+    sim, me, to = world(mind, talk={"consent": "mind"}, n=100)
+    ag = sim.state["agents"]
+    crowd = [b["id"] for b in ag if not b["asleep"] and b["id"] != me]
+    for i in crowd + [me]:
+        ag[i]["place"], ag[i]["route"] = "plaza", None
+    hold(sim, *crowd, place="plaza")
+    for i in set(crowd) - {to}:  # let the crowd think too: every kind's prompt in an 80-person plaza
+        ag[i]["override"] = None
+    line = ("Could you spare some food? " * 6)[:S.SAY_MAX]
+    mind.reqs.clear()
+    real = sim._say
+
+    def beside(a, eid, target):  # the body's own routine may walk it off the plaza in the tick (say3_check's move)
+        a["place"], a["route"] = "plaza", None
+        return real(a, eid, target)
+    sim._say = beside
+    say(sim, to, text=line.strip())
+    reqs = [r for r in mind.reqs]
+    assert any(r.kind == "deliberate" for r in reqs)
+    head = re.compile(r"# Now \((\w+)\)\nDay \d+, \d\d:\d\d\. You are (at \w+|on your way to the \w+)\. "
+                      r"Hunger \d+/1000\. You carry (\d+) food and (\d+) coin\. Here: ")
+    for r in reqs:
+        now = r.prompt[r.prompt.index("# Now ("):]
+        m = head.match(now)
+        assert m and m.group(1) == r.kind, now[:200]
+        assert (int(m.group(3)), int(m.group(4))) == (r.view["food"], r.view["coin"])
+        assert len(now) <= situation_budget(r.kind) * 4, (r.kind, len(now))
+    ans = [r for r in reqs if r.kind == "answer" and r.agent_id == to]
+    assert ans, "no answer request"
+    now = ans[0].prompt[ans[0].prompt.index("# Now ("):]
+    name = ag[me]["name"]
+    here = now.split("Here: ", 1)[1].split(". Your family", 1)[0]
+    assert name in here and " others" in here
+    assert f'{name} said to you: "{S._quotable(line.strip(), S.SAY_MAX)}", and is asking you for 1 food.' in now
+    assert "answer is your own choice: yes or no." in now and now.endswith(S.SAYS_NEXT)

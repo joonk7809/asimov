@@ -475,10 +475,7 @@ class Sim:
         actions = None
         if kind == "deliberate":  # what it may answer: only actions that can work now
             actions = view["offer"] = self._offer(a, view)
-        situation = self._situation(a, view, kind)
-        if actions is not None and actions != self._offer(a, view):  # a crowd cut to nobody shown (rare)
-            actions = view["offer"] = self._offer(a, view)
-            situation = self._situation(a, view, kind)
+        tail = ""
         if kind == "answer":  # say-3: after the situation, as the talk pilot built it
             occ = view["occasion"]
             agents = self.state["agents"]
@@ -494,7 +491,13 @@ class Sim:
                 ask = ("is asking you for 1 food" if move == "asks_food"
                        else f"is offering {price} coin for 1 of your food")
                 choice = talk_choice(answers, why, move, price, sp["name"], rec["yes"], rec["no"])
-            situation += answer_tail(sp["name"], occ["detail"], fam, ask, choice)
+            tail = answer_tail(sp["name"], occ["detail"], fam, ask, choice)
+        # The tail is part of the section's budget, so a crowd shortens "Here:" and never cuts the head (Steering
+        # 2026-11-19 01:39Z: a tail-clip had cut "# Now", the time, the place and the holdings on busy places).
+        situation = self._situation(a, view, kind, tail)
+        if actions is not None and actions != self._offer(a, view):  # a crowd cut to nobody shown (rare)
+            actions = view["offer"] = self._offer(a, view)
+            situation = self._situation(a, view, kind, tail)
         prompt, counts = assemble_prompt(a, self.state, kind, situation, actions=actions,
                                          move=kind == "answer" and bool(view.get("answers")))
         # The mind gets a copy: whatever it does to the view must not reach world state.
@@ -616,7 +619,7 @@ class Sim:
             view["market_food"] = self.state["market_food"]
         return view
 
-    def _situation(self, a: dict, view: dict, kind: str) -> str:
+    def _situation(self, a: dict, view: dict, kind: str, tail: str = "") -> str:
         """The "# Now" section. Everything but the list of people here comes first; that list then gets
         whatever room the section budget leaves, and the view (so the reply schema) is cut to match.
         Tail-clipping a crowded situation (85+ people in one place) had cut the head off and left the
@@ -654,11 +657,13 @@ class Sim:
         head = (f"Day {self.state['tick'] // TICKS_PER_DAY}, {m // 60:02d}:{m % 60:02d}. {where} "
                 f"Hunger {a['needs']['hunger']}/1000. You carry {a['inv']['food']} food and {a['inv']['coin']} coin. "
                 f"Here: ")
-        room = situation_budget(kind) * 4 - len(f"# Now ({kind})\n") - len(head) - len(rest) - 2
-        # Kin first, then the strongest feelings, then id: the people one would notice in a crowd.
+        room = situation_budget(kind) * 4 - len(f"# Now ({kind})\n") - len(head) - len(rest) - len(tail) - 2
+        # The speaker (an answer's), then kin, then the strongest feelings, then id: the people one would notice in a
+        # crowd.
         rel = a["relationships"]
-        ranked = sorted(view["present"], key=lambda p: (not p["kin"], -abs(rel.get(str(p["id"]), {}).get("affinity", 0)),
-                                                        p["id"]))
+        speaker = (view.get("occasion") or {}).get("who") if kind == "answer" else None
+        ranked = sorted(view["present"], key=lambda p: (p["id"] != speaker, not p["kin"],
+                                                        -abs(rel.get(str(p["id"]), {}).get("affinity", 0)), p["id"]))
         label = (lambda p: f"{agents[p['id']]['name']} ({p['role']})") if named else (lambda p: f"#{p['id']} ({p['role']})")
         shown, size = [], 0
         for i, p in enumerate(ranked):
@@ -677,7 +682,7 @@ class Sim:
         # "People I know" section shows. The reply schema offers exactly these.
         view["people"] = sorted({k["id"] for k in view["kin"]} | {p["id"] for p in view["present"]}
                                 | set(shown_relationships(a, self.state, named)))
-        return head + (text or "nobody") + "." + rest
+        return head + (text or "nobody") + "." + rest + tail
 
     def _who(self, i) -> str:
         return f"{self.state['agents'][i]['name']} (#{i})"

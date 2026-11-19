@@ -288,7 +288,9 @@ def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=No
     if edit is not None:
         sections = edit(dict(sections))
     budgets = {**SECTION_BUDGETS, "situation": situation_budget(kind)}
-    parts = [_clip(text, budgets[name]) for name, text in sections.items()]
+    # The situation is never tail-clipped: the world fits it to its budget by shortening "Here:" (Sim._situation), and
+    # a cut there took "# Now", the time, the place and the holdings off busy places (Steering 2026-11-19 01:39Z).
+    parts = [text if name == "situation" else _clip(text, budgets[name]) for name, text in sections.items()]
     prompt = "\n\n".join(parts)
     counts = {name: tokens(p) for name, p in zip(sections, parts)}
     return prompt, counts
