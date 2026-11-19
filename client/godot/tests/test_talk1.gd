@@ -36,6 +36,31 @@ func _init() -> void:
 		printerr("talk-1 doesn't read right: %s | %s | %s | %s" % [asked, gave, sold, failed])
 		quit(1)
 		return
+	# The chip hint (Steering 02:22Z): every acceptance ask and buy line, and the headline asks, get it with no chip;
+	# small talk, complaints and any line with a chip picked don't.
+	var asks := ["can i have some food?", "I'm hungry. Could you spare a little food?", "Could you give me something to eat?",
+			"I haven't eaten since yesterday. Can you help me out with a meal?", "hey, give me some of your food",
+			"Any chance of a bite to eat from you?", "Spare a meal for a neighbour?", "I'm starving. Share your food with me, please.",
+			"i really need coins or food, and isrota directed me to you; anything you can do..?",
+			"Could you give me a loaf of food? I'm a guard, I can pay later."]
+	var buys := ["I'll pay you for some food. Will you sell me one?", "Can I buy a meal off you? I have coin.",
+			"How about I give you coin and you give me one food?"]
+	var talk := ["Hello there.", "How was the harvest?", "no. i dont think i received your food.", "Nice weather today?"]
+	for t in asks:
+		if Words.ask_hint(t, 0) != Words.HINT_ASK_TEXT and Words.ask_hint(t, 0) != Words.HINT_BUY_TEXT:
+			_fail_now("no chip hint for an ask: " + t)
+			return
+	for t in buys:
+		if Words.ask_hint(t, 0) != Words.HINT_BUY_TEXT:
+			_fail_now("no buy hint for: " + t)
+			return
+	for t in talk:
+		if Words.ask_hint(t, 0) != "":
+			_fail_now("a hint for small talk: " + t)
+			return
+	if Words.ask_hint(asks[0], 1) != "" or Words.ask_hint(buys[0], 2) != "":
+		_fail_now("a hint with a chip picked")
+		return
 	var a := OS.get_cmdline_user_args()
 	me.scope = "inhabitant"
 	me.agent = int(a[1])
@@ -112,3 +137,8 @@ func _process(_delta: float) -> bool:
 	if Time.get_ticks_msec() - started > 60000:
 		_fail("timed out after %d ticks" % ticks)
 	return false
+
+
+func _fail_now(msg: String) -> void:
+	printerr("talk-1: " + msg)
+	quit(1)
