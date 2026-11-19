@@ -882,10 +882,12 @@ class Hub:
                                     "kind": it["kind"], "player": it["player"], "to_player": it["to_player"],
                                     "narrator": self.narrator.model, "fallback": it.get("fallback", False),
                                     "latency_s": it.get("latency_s"), "prompt_facts": it["people"],
-                                    "topics": it.get("topics", []), "denied": it.get("denied", []), "lines": out},
+                                    "topics": it.get("topics", []), "denied": it.get("denied", []),
+                                    "repeated": it.get("repeated", []), "dropped": it.get("dropped", False),
+                                    "lines": out},
                                    sort_keys=True) + "\n")
         self.narr.flush()
-        if conn.ready and conn.agent == it["player"] and conn in self.conns:
+        if out and conn.ready and conn.agent == it["player"] and conn in self.conns:  # a dropped exchange: no words
             conn.send(msg("heard", tick=it["tick"], event=it["event"], kind=it["kind"], to_player=it["to_player"],
                           lines=out))
 

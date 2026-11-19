@@ -28,6 +28,7 @@ or was just turned down may sound it. A second greeting counts as a hit.
 """
 import json
 import re
+import threading
 import time
 from collections import deque
 
@@ -412,6 +413,8 @@ class LLMNarrator:
                               structured=False, api_key=api_key)
         self.model = model
         self.fallback = TemplateNarrator()
+        self.said: dict[tuple, set] = {}  # (player, day) -> every line the player has heard today, as words
+        self._said_lock = threading.Lock()  # items are narrated on worker threads
 
     def _ask(self, content: str, it: dict):
         body = {"model": self.client.model, "messages": [{"role": "user", "content": content}],
@@ -504,7 +507,10 @@ class LLMNarrator:
 
     def lines(self, it: dict) -> list[dict]:
         """One call; on a deny-list hit (E2c) one more, naming what isn't in the village; else the template.
-        it["denied"] keeps each hit asked about, it["fallback"] whether the template was used."""
+        it["denied"] keeps each hit asked about, it["fallback"] whether the template was used.
+        Then repeats (Steering 2026-11-18 23:52Z, pt11: 61 of 130 lines were word for word a line heard earlier
+        that day): a line the player already heard today is asked about once more, naming it, and on a second
+        repeat the exchange is dropped (no lines). it["repeated"] keeps each repeat asked about, it["dropped"]."""
         t0 = time.monotonic()
         p = prompt(it)
         got = self._ask(p, it)
@@ -512,15 +518,56 @@ class LLMNarrator:
         hits = check(it, got) if got else []
         if hits:
             it["denied"].append(hits)
-            got = self._ask(p + "\nNot " + ", ".join(sorted(set(hits))) + ": the village has none of that, and only "
-                            "the first line greets. Say only what is listed above.", it)
+            p += ("\nNot " + ", ".join(sorted(set(hits))) + ": the village has none of that, and only "
+                  "the first line greets. Say only what is listed above.")
+            got = self._ask(p, it)
             again = check(it, got) if got else []
             if again:
                 it["denied"].append(again)
                 got = None
-        it["latency_s"] = round(time.monotonic() - t0, 3)
         it["fallback"] = got is None
-        return got if got is not None else self.fallback.lines(it)
+        out = got if got is not None else self.fallback.lines(it)
+        key = (it.get("player"), it.get("tick", 0) // TICKS_PER_DAY)
+        it["repeated"], it["dropped"] = [], False
+        with self._said_lock:
+            seen = set(self.said.get(key, ()))
+        rep = repeats(out, seen)
+        if rep:
+            it["repeated"].append(rep)
+            again = self._ask(p + "\nNot " + ", ".join(f'"{t}"' for t in rep) + " again: it was already said today. "
+                              "Say something new, from what is listed above.", it)
+            if again is None or check(it, again) or repeats(again, seen):
+                if again is not None:
+                    it["repeated"].append(repeats(again, seen))
+                out = []
+            else:
+                out, it["fallback"] = again, False
+        with self._said_lock:
+            day = self.said.setdefault(key, set())
+            if out and repeats(out, day):  # the same words said meanwhile on another thread
+                out = []
+            day.update(norm(x["text"]) for x in out)
+            for k in [k for k in self.said if k[0] == key[0] and k[1] < key[1]]:
+                del self.said[k]  # only today's lines count
+        it["dropped"] = not out
+        it["latency_s"] = round(time.monotonic() - t0, 3)
+        return out
+
+
+def norm(text: str) -> str:
+    """A line's words, for "word for word": case, punctuation and spacing don't count."""
+    return " ".join(re.findall(r"[a-z0-9']+", text.lower()))
+
+
+def repeats(lines: list[dict], seen: set) -> list[str]:
+    """The lines whose words were heard already (in `seen`, or earlier in the same exchange)."""
+    out, here = [], set()
+    for x in lines:
+        w = norm(x["text"])
+        if w and (w in seen or w in here):
+            out.append(x["text"])
+        here.add(w)
+    return out
 
 
 def voice_facts(sim, aid: int, speaker) -> dict:

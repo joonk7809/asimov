@@ -82,6 +82,7 @@ def test_the_model_narrator_keeps_good_lines_and_falls_back_on_anything_else():
                "not json", json.dumps({"lines": []})]
     for i, text in enumerate(replies):
         n.client.post = lambda path, body, t=text: {"choices": [{"message": {"content": t}}]}
+        n.said = {}  # each reply as the day's first words; repeats have their own test
         got = n.lines(dict(it))
         if i == 0:
             assert got == [{"who": x, "text": "Morning."}, {"who": y, "text": "Busy one, isn't it?"}]
@@ -91,6 +92,7 @@ def test_the_model_narrator_keeps_good_lines_and_falls_back_on_anything_else():
     def down(path, body):
         raise RuntimeError("LLM server unreachable")
     n.client.post = down
+    n.said = {}
     got = dict(it)
     assert n.lines(got) == narrate.TemplateNarrator().lines(it) and got["fallback"] is True
 
@@ -231,6 +233,7 @@ def test_a_deny_list_hit_is_asked_once_more_then_falls_back():
         n.client.post = lambda path, body: (asked.append(body["messages"][0]["content"]),
                                             {"choices": [{"message": {"content": q.pop(0)}}]})[1]
         got = dict(it)
+        n.said = {}
         lines = n.lines(got)
         assert got["fallback"] is fallback and len(asked) == len(replies)
         assert lines == (narrate.TemplateNarrator().lines(it) if fallback else
@@ -362,3 +365,34 @@ def test_every_line_is_said_to_someone_or_is_thinking_aloud():
         {"who": 1, "text": "Hm. Youth these days.", "to": "self"}]
     assert [x["to"] for x in narrate.addressed(it, [{"who": 1, "text": "You again?", "to": "self"},
                                                     {"who": 2, "text": "Me again.", "to": "self"}])] == [2, "self"]
+
+
+def test_a_line_heard_earlier_that_day_is_asked_once_more_then_the_exchange_is_dropped():
+    """Steering 2026-11-18 23:52Z (pt11: 61 of 130 lines repeated word for word, mostly a bare "Good morning")."""
+    sim, me, (x, y, *_) = world_with_body()
+    it = narrate.items(sim, [Ev(1, "talk", x, {"with": y, "gossip": []})], me)[0]
+    it["hour"], it["tick"] = 8, 3 * TICKS_PER_DAY + 50
+    nx, ny = sim.state["agents"][x]["name"], sim.state["agents"][y]["name"]
+    first = json.dumps({"lines": [{"who": nx, "text": "Good morning."}, {"who": ny, "text": "Busy day."}]})
+    same = json.dumps({"lines": [{"who": nx, "text": "good morning!"}, {"who": ny, "text": "Quiet here."}]})
+    new = json.dumps({"lines": [{"who": nx, "text": "Good morning, the well is low."}, {"who": ny, "text": "It is."}]})
+    n = narrate.LLMNarrator("http://127.0.0.1:9", "m")
+
+    def run(replies, tick=None):
+        asked, q = [], list(replies)
+        n.client.post = lambda path, body: (asked.append(body["messages"][0]["content"]),
+                                            {"choices": [{"message": {"content": q.pop(0)}}]})[1]
+        got = dict(it, tick=tick or it["tick"])
+        return n.lines(got), got, asked
+
+    lines, got, asked = run([first])
+    assert len(lines) == 2 and got["repeated"] == [] and got["dropped"] is False
+    lines, got, asked = run([same, new])  # case and punctuation don't make it new
+    assert [l["text"] for l in lines] == ["Good morning, the well is low.", "It is."] and len(asked) == 2
+    assert '"good morning!" again' in asked[1] and asked[1].startswith(asked[0]) and got["repeated"] == [["good morning!"]]
+    lines, got, asked = run([same, first])  # a second repeat: no words at all
+    assert lines == [] and got["dropped"] is True and len(asked) == 2
+    lines, got, asked = run([same], tick=4 * TICKS_PER_DAY + 50)  # a new day: heard afresh
+    assert len(lines) == 2 and got["dropped"] is False and len(asked) == 1
+    assert list(n.said) == [(me, 4)]  # yesterday's lines are let go
+    assert narrate.repeats([{"text": "Hi."}, {"text": "hi"}], set()) == ["hi"]  # within one exchange too
