@@ -36,7 +36,7 @@ from collections import defaultdict
 from . import inhabitant, narrate, persist
 from .llm import SCHEMAS
 from .minds import NoisyMind, ScriptMind, StubMind
-from .sim import ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, SAY_ACTS, SAY_MAX, TICKS_PER_DAY
+from .sim import CONSENTS, ENGINE_VERSION, GO_ACTS, PLAYER_ACTIONS, SAY_ACTS, SAY_MAX, TALK_MOVES, TICKS_PER_DAY
 from .worldmap import position
 
 PROTOCOL = 2               # 2 adds the inhabitant scope (plan/player-body-spec.md)
@@ -67,7 +67,8 @@ class LiveRunner:
     Not thread-safe: submit(), step() and view() must not overlap."""
 
     def __init__(self, out: str, mind, seed: int = 1, agents: int = 25, order: str = "id",
-                 snapshot_every: int = TICKS_PER_DAY, mind_kind: str | None = None, workers: int = 1):
+                 snapshot_every: int = TICKS_PER_DAY, mind_kind: str | None = None, workers: int = 1,
+                 talk: dict | None = None):
         self.out = out
         self.mind = mind
         if os.path.exists(os.path.join(out, "events.jsonl")):
@@ -75,7 +76,7 @@ class LiveRunner:
             self.reopened = True
         else:
             self.run = persist.start(out, seed, agents, mind, order, {}, workers, snapshot_every=snapshot_every,
-                                     mind_kind=mind_kind)
+                                     mind_kind=mind_kind, talk=talk)
             self.reopened = False
         self.sim = self.run.sim
         self.intents: dict[str, dict] = {}  # intent id -> {status, tick, slot, act, event | reason}
@@ -255,7 +256,12 @@ class LiveRunner:
         else:
             t, place, text = args.get("target"), args.get("place"), args.get("text")
             go, say = args.get("action") in GO_ACTS, args.get("action") in SAY_ACTS
-            ok = set(args) <= {"action", "target", "place", "text"} and isinstance(args.get("action"), str) \
+            move, price = args.get("move"), args.get("price")  # talk-1: the chip on a say, and a buy's shown price
+            ok = set(args) <= {"action", "target", "place", "text", "move", "price"} \
+                and isinstance(args.get("action"), str) \
+                and ((move is None and price is None) or say and isinstance(move, str) and move in TALK_MOVES
+                     and (move == "wants_to_buy_food") == (price is not None)
+                     and (price is None or _is_int(price) and price >= 0)) \
                 and (text is not None) == say and (not say or (_is_int(t) and isinstance(text, str)
                                                              and 0 < len(text) <= SAY_MAX and text.strip() != ""
                                                              and text.isprintable())) \
@@ -268,6 +274,10 @@ class LiveRunner:
                 act["place"] = place
             if say:
                 act["text"] = text
+            if move is not None:
+                act["move"] = move
+                if price is not None:
+                    act["price"] = price
         if not ok:
             return None, "bad_args"
         if not _is_int(seen) or not 0 <= seen <= now:
@@ -1032,6 +1042,9 @@ def main(argv=None):
     ap.add_argument("--answer-first", action="store_true",
                     help="llm mind: spoken answers ahead of plans (the model pod needs --vllm-args "
                          "'--scheduling-policy priority')")
+    ap.add_argument("--consent", choices=list(CONSENTS), default=None,
+                    help="talk-1, a new world only: who answers a line said with a chip. nature (the default): "
+                         "today's roll; mind: the villager's mind (a 32B session)")
     ap.add_argument("--workers", type=int, default=None, help="concurrent mind calls (default 64 for llm, else 1)")
     ap.add_argument("--token", default=None, help="every hello must carry this token (use it on a public port)")
     ap.add_argument("--tps", type=float, default=1.0, help="ticks per wall-clock second")
@@ -1066,9 +1079,13 @@ def main(argv=None):
     else:
         mind = {"stub": StubMind, "noisy": NoisyMind, "script": ScriptMind}[kind]()
     runner = LiveRunner(args.out, mind, args.seed, args.agents, mind_kind=kind,
-                        workers=args.workers or (64 if kind == "llm" else 1))
+                        workers=args.workers or (64 if kind == "llm" else 1),
+                        talk={"consent": args.consent} if args.consent and args.consent != "nature" else None)
+    consent = runner.sim._talk_params()["consent"]
+    if args.consent and args.consent != consent:
+        raise SystemExit(f"{args.out} was started with consent {consent!r}; --consent applies to a new world")
     print(f"{'reopened' if runner.reopened else 'new world'} {args.out} at tick {runner.sim.state['tick']}, "
-          f"engine {ENGINE_VERSION}, ws://{args.host}:{args.port}/", file=sys.stderr, flush=True)
+          f"engine {ENGINE_VERSION}, consent {consent}, ws://{args.host}:{args.port}/", file=sys.stderr, flush=True)
     narrator = narrator_from_args(args, kind)
     print(f"narrator: {getattr(narrator, 'model', 'off')}", file=sys.stderr, flush=True)
     hold = None

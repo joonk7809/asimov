@@ -145,9 +145,11 @@ func fire(family: int) -> String:
 	return id
 
 
-func act(action: String, target: int = -1, place: String = "", text: String = "") -> String:
+func act(action: String, target: int = -1, place: String = "", text: String = "", move: String = "",
+		price: int = -1) -> String:
 	## Inhabitant scope: the body's act. Its ack names the act event; the receipt follows in a tick's events.
-	## `place` is go_to's (engine 24), and only go_to's; `text` is say's (say-1), and only say's.
+	## `place` is go_to's (engine 24), and only go_to's; `text` is say's (say-1), and only say's. `move` (talk-1) is
+	## a say's chip, "asks_food" or "wants_to_buy_food"; a buy carries the `price` shown.
 	_seq += 1
 	var id := "i%x%x-%d" % [Time.get_ticks_usec(), randi(), _seq]
 	var args := {"action": action}
@@ -157,6 +159,10 @@ func act(action: String, target: int = -1, place: String = "", text: String = ""
 		args["place"] = place
 	if text != "":
 		args["text"] = text
+	if move != "":
+		args["move"] = move
+	if price >= 0:
+		args["price"] = price
 	_send({"type": "intent", "id": id, "verb": "act", "args": args, "seen_tick": view_tick})
 	return id
 
