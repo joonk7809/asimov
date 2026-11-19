@@ -111,6 +111,12 @@ def test_an_ask_said_with_the_chip_is_answered_yes_and_one_food_moves_with_a_dea
     req = [r for r in mind.reqs if r.kind == "answer" and r.agent_id == to][-1]
     assert req.view["answers"] == ["no"] and "you already said yes to them today" in req.prompt
     assert f"Today you have given {me_name} 1 food and refused them 0 times." in req.prompt
+    assert ag[to]["inv"]["food"] >= 2  # the why holds: food to spare, the limit is the day's yes
+    sim.step([])
+    say(sim, to, "And again?")  # Steering 01:03Z: an already-said-yes no counts, and starts the wait
+    req = [r for r in mind.reqs if r.kind == "answer" and r.agent_id == to][-1]
+    assert f"given {me_name} 1 food and refused them 1 times." in req.prompt
+    assert ag[to]["talk_deals"][str(me)]["last_no"] is not None
 
 
 def test_a_buy_said_with_the_chip_pays_the_price_shown_and_a_changed_price_is_refused():
@@ -155,7 +161,7 @@ def test_a_no_moves_nothing_and_holds_off_a_yes_for_twelve_ticks():
         sim.step([])
     say(sim, to, "Now?")
     req = [r for r in mind.reqs if r.kind == "answer" and r.agent_id == to][-1]
-    assert req.view["answers"] == ["yes", "no"] and "refused them 2 times" in req.prompt
+    assert req.view["answers"] == ["yes", "no"] and "refused them 1 times" in req.prompt  # the forced no isn't counted
 
 
 @pytest.mark.parametrize("case", ["food", "affinity", "coin"])
@@ -179,6 +185,15 @@ def test_no_yes_is_offered_without_food_to_spare_on_bad_terms_or_without_the_coi
     req = [r for r in mind.reqs if r.kind == "answer" and r.agent_id == to][-1]
     assert req.view["answers"] == ["no"] and f"Your answer is no: you can't say yes, as {why}." in req.prompt
     assert not deals(evs) and next(e for e in evs if e.kind == "reply").data["answer"] == "no"
+    # The why is true of the state the prompt was built from (Steering 01:03Z), and it's logged by its key
+    m = next(e for e in evs if e.kind == "mind_answer")
+    key = m.data["deal"]["withheld"]
+    assert S.TALK_WHY[key].format(price=price) == why
+    rec = sim._talk_record(ag[to], me)
+    if case == "affinity":  # bad terms: a refusal, counted, and the wait starts
+        assert rec["no"] == 1 and rec["last_no"] is not None
+    else:  # can't be done: no refusal, no wait
+        assert rec["no"] == 0 and rec["last_no"] is None
 
 
 def test_family_may_say_yes_twice_a_day():

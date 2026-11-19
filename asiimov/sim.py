@@ -122,6 +122,10 @@ NEXT = ("stay", "carry_on", "leave")
 # and logs a `deal`. Each move settles like the act named here. The engine never reads a move from the words.
 TALK_MOVES = {"asks_food": "ask_food", "wants_to_buy_food": "buy_from"}
 ANSWERS = ("yes", "no")
+# Why only no is offered (spec §2.2), as the prompt says it; logged on the mind event's deal as the key.
+TALK_WHY = {"food": "you have no food to spare", "coin": "they don't have {price} coin",
+            "terms": "you are on bad terms with them", "said_yes": "you already said yes to them today",
+            "wait": "you turned them down not long ago"}
 CONSENTS = ("nature", "mind")
 # The limits (Steering §11.2), genesis parameters under population["stakes"]["talk"]. Recorded only when a world
 # sets one (a 32B session's consent "mind"), so a default world's genesis, and its golden, are say-3's.
@@ -2014,17 +2018,17 @@ class Sim:
         affinity = t["relationships"].get(str(sp["id"]), {}).get("affinity", 0)
         why = None
         if t["inv"]["food"] < p["min_food"]:
-            why = "you have no food to spare"
+            why = "food"
         elif action == "buy_from" and sp["inv"]["coin"] < price:
-            why = f"they don't have {price} coin"
+            why = "coin"
         elif affinity <= p["min_affinity"]:
-            why = "you are on bad terms with them"
+            why = "terms"
         elif rec["yes"] >= (p["yes_per_day_kin"] if kin else p["yes_per_day"]):
-            why = "you already said yes to them today"
+            why = "said_yes"
         elif rec["last_no"] is not None and tick - rec["last_no"] < p["no_wait_ticks"]:
-            why = "you turned them down not long ago"
+            why = "wait"
         if why is not None:
-            return ["no"], why, {}
+            return ["no"], TALK_WHY[why].format(price=price), {"withheld": why}
         if p["consent"] == "mind":
             return ["yes", "no"], None, {}
         stream, idx, roll = self._ask_roll(f"talk:{t['id']}:{sp['id']}")
@@ -2035,7 +2039,7 @@ class Sim:
                            + (SHARE_KIN if kin else 0), 0, SHARE_MAX)
         return ["yes"] if roll < limit else ["no"], None, {"stream": stream, "index": idx, "roll": roll, "limit": limit}
 
-    def _settle_talk(self, t: dict, occ: dict, eid: int, answer: str):
+    def _settle_talk(self, t: dict, occ: dict, eid: int, answer: str, withheld: str | None = None):
         """talk-1 §2.6: after the reply's words. An offered yes is checked again, live, then moves 1 food (and the
         price back) as ask_food's or buy_from's yes does, with a `deal`; a failed check logs a deal that moved
         nothing. A no is their no, with no deal. A sale is at the price offered, which was the stall's when said (the
@@ -2051,8 +2055,14 @@ class Sim:
         r = self._met(sp, t["id"])
         self._met(t, sp["id"])
         if answer == "no":
+            # Steering 2026-11-19 01:03Z: a no forced by what can't be done (food, coin) is no refusal; one forced
+            # inside the wait restarts it but isn't counted; a chosen no, bad terms and a second ask in a day are.
+            if withheld in ("food", "coin"):
+                return
             self._refused_food(sp, t, action, r)
-            rec["no"], rec["last_no"] = rec["no"] + 1, tick
+            rec["last_no"] = tick
+            if withheld != "wait":
+                rec["no"] += 1
             self._occasion(sp, "refused", 450 + (1000 - sp["traits"]["agreeableness"]) // 4, t["id"], eid)
             return
         data = {"move": move, "from": t["id"], "to": sp["id"], "food": 1, **({"coin": price} if price is not None else {})}
@@ -2331,7 +2341,7 @@ class Sim:
             answer = answer if isinstance(answer, str) and answer in offered else "no"
         self._reply(a, occ, eid, out, answer)
         if answer is not None:
-            self._settle_talk(a, occ, eid, answer)
+            self._settle_talk(a, occ, eid, answer, self.events[eid].data["deal"].get("withheld"))
         nxt = (out or {}).get("next")
         if a["override"] is not None and not a["override"].get("talk"):  # review of #78: a running override (a sick
             return  # day home, a trade, a rule's step) holds it; words never undo it. Talk's own holds they replace.
