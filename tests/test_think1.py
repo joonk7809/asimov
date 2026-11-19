@@ -193,7 +193,8 @@ def day_log(talk, seed):
 
 
 @pytest.mark.parametrize("name,seed", sorted(BEFORE))
-def test_a_world_without_the_flag_is_byte_identical_to_before_think_1(name, seed):
+def test_a_world_without_the_flag_is_byte_identical_to_before_think_1(monkeypatch, name, seed):
+    monkeypatch.setattr(S, "ENGINE_VERSION", "apart-1")  # the label the pins were written under; 37 since the rename
     talk = PRIVATE if name == "typed" else {"consent": "private"}
     log, decided = day_log(talk, seed)
     assert decided >= 2, "vacuous: no private decision in the day"

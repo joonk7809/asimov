@@ -215,6 +215,7 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "pace-1": "061d34b0c2d8ea7c4c33c89a9495a9060285c37188a758923d9ee6797f12442b",  # pace-1: plan/reflect wait a tick for a player's answer, on 35, before its number; no say: only the engine field differs
           "36": "5300954a78dcdc78cf3f08227dec4738e738c5c8621235ff500a142a64d74c56",  # pace-1 (#99), plan/reflect wait a tick for a player's answer; no say: only the engine field differs
           "text-1": "a1a1cef15b280cd20c28f256310021048dc20a9b5cc3a9d871f788baf02054cb",  # text-1: a private decision and a typed line's give, on 35, before its number; no say: only the engine field differs
+          "37": "fe59f5e4ba19f7f35cc67a0382e466367abe13cbffc12bfeae5bfeffc770bb2f",  # text-1 with apart-1 and think-1 (#101), a typed ask settled by the private yes; no say: only the engine field differs
           "apart-1": "f44c05e0c7390243a435a973ea22852b19cfe2b15983a70e12621e4255810e5c"}  # apart-1: no yes offered in talk once the two have parted, on text-1 and 36, before its number; no say: only the engine field differs
 
 
