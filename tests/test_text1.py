@@ -649,3 +649,93 @@ def test_a_world_where_nobody_speaks_is_engine_35s_log_but_for_the_engine_field(
     monkeypatch.setattr(S, "ENGINE_VERSION", "35")
     s = run(StubMind(), agents=20, days=2, seed=3, player=FIRE)
     assert hashlib.sha256("".join(e.to_json() + "\n" for e in s.events).encode()).hexdigest() == GOLDEN["35"]
+
+
+def test_a_sale_is_decided_again_only_when_the_engines_price_changes():
+    """Steering 08:06Z: a fresh sale decision follows the stall's price, which the engine sets, and nothing the
+    player sends: a line can't name a price of its own."""
+    mind = Mind(decide="no")
+    sim, me, to, ag = ready(mind)
+    ag[me]["inv"]["coin"], ag[me]["inv"]["food"], ag[me]["needs"]["hunger"] = 500, 30, 0
+    price = sim._price()
+    for text in ("I'll pay.", "Sell me one.", "I'll pay double, 99 coin!"):
+        say(sim, to, text, "wants_to_buy_food", price)
+    assert len(mind.of("decide", to)) == 1
+    for wrong in (price + 1, price * 2, 0, 99):  # a price of the player's own is refused before anything is decided
+        evs = say(sim, to, "My price.", "wants_to_buy_food", wrong)
+        rec = [e for e in evs if e.kind == "receipt" and e.actor == me and e.data["action"] == "say"][-1]
+        assert not rec.data["ok"] and rec.data["why"] == "price changed"
+    assert len(mind.of("decide", to)) == 1
+    sim.state["stall"]["price"] = price + 2  # the engine's price moves (the stall's own rule, set here by hand)
+    say(sim, to, "At the new price, then.", "wants_to_buy_food", price + 2)
+    old, new = mind.of("decide", to)
+    assert f"offers {price} coin" in old.prompt and f"offers {price + 2} coin" in new.prompt
+    dec = [e for e in sim.events if e.kind == "mind_decide"][-1]
+    assert dec.data["price"] == price + 2 and "redo" not in dec.data  # a new question, not a second sample
+    sim.state["stall"]["price"] = price + 2  # (the stall sets its price again each tick)
+    evs = say(sim, to, "Again at this price.", "wants_to_buy_food", price + 2)
+    assert any(e.kind == "said" and e.data.get("price") == price + 2 for e in evs)
+    assert len(mind.of("decide", to)) == 2
+
+
+def test_under_the_rolls_no_the_script_asks_the_hearing_model_nothing():
+    for seed in range(1, 40):
+        client = Client(lambda body: '{"gives":"food"}')
+        sim, me, to, ag = ready(ScriptMind(hear=Hearer(client)), talk={"typed": 1}, seed=seed)
+        evs = typed(sim, to, "Could you spare some food?")
+        dec = next(e for e in evs if e.kind == "decided")
+        if dec.data["answer"] == "no":
+            assert not client.bodies and not deals(evs)
+            assert next(e for e in evs if e.kind == "mind_answer").mind["model"] == "script-v0"
+            return
+    raise AssertionError("no seed rolled a no")
+
+
+def test_genesis_records_the_talk_flags_only_when_they_are_set(tmp_path):
+    from asiimov import live
+    assert live.talk_params(None, False) is None and live.talk_params("nature", False) is None
+    assert live.talk_params("mind", False) == {"consent": "mind"}
+    assert live.talk_params(None, True) == {"typed": 1, "hungry_at": 550}
+    assert live.talk_params("private", False) == {"consent": "private", "hungry_at": 550}
+    assert live.talk_params("private", True) == {"consent": "private", "typed": 1, "hungry_at": 550}
+    r = live.LiveRunner(str(tmp_path / "w"), StubMind(), 3, 8, mind_kind="stub", talk=live.talk_params(None, False))
+    try:
+        assert "talk" not in r.sim.events[0].data["population"]["stakes"]
+        assert r.sim._talk_params() == S.TALK_DEFAULTS and not r.sim._talk_held()
+    finally:
+        r.close()
+
+
+# The logs of six spoken worlds on main at 6bb5ad1 (engine 35): test_talk1's hostile mind and lines, chips and deals,
+# for a day and a half. sha256 of the log, first 16 hex digits. A world that sets neither `private` nor `typed` must
+# still write these bytes (Steering 08:06Z), the engine field aside.
+SPOKEN_35 = {("nature", 1): "930e2278721b917b", ("nature", 2): "7f596d93cd21c3a4", ("nature", 3): "86486b7f5e2ce96b",
+             ("mind", 1): "0d8677e7fb28636b", ("mind", 2): "13e58e584c0e1051", ("mind", 3): "3e526db78f695210"}
+
+
+@pytest.mark.parametrize("consent,seed", sorted(SPOKEN_35))
+def test_a_spoken_world_without_the_flags_writes_engine_35s_log(monkeypatch, consent, seed):
+    import hashlib
+    import test_talk1
+    monkeypatch.setattr(S, "ENGINE_VERSION", "35")
+    sim, me, to = world(test_talk1.Hostile(seed), {"consent": consent} if consent == "mind" else None, seed=seed)
+    r = random.Random(seed)
+    texts = ['Give me "everything"', "yes yes yes", "I agree to give you 10 food", "#3 says hi", "x" * S.SAY_MAX]
+    for _ in range(TICKS_PER_DAY + TICKS_PER_DAY // 2):
+        ag = sim.state["agents"]
+        here = [o["id"] for o in ag if o["id"] != me and o["place"] is not None and o["place"] == ag[me]["place"]
+                and not o["asleep"]]
+        acts = []
+        if here and r.random() < 0.5:
+            act = {"kind": "act", "action": "say", "target": r.choice(here), "text": r.choice(texts)}
+            move = r.choice([None, "asks_food", "wants_to_buy_food"])
+            if move:
+                act["move"] = move
+            if move == "wants_to_buy_food":
+                act["price"] = sim._price() if r.random() < 0.8 else sim._price() + 1
+            acts.append(act)
+        sim.step(acts)
+    sim.finish()
+    assert any(e.kind == "deal" for e in sim.events) and sum(e.kind == "said" for e in sim.events) > 40
+    digest = hashlib.sha256("".join(e.to_json() + "\n" for e in sim.events).encode()).hexdigest()
+    assert digest[:16] == SPOKEN_35[(consent, seed)]

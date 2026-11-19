@@ -1020,6 +1020,16 @@ def warm_up(clients, log=lambda *a: print(*a, file=sys.stderr, flush=True),
     return out
 
 
+def talk_params(consent: str | None, typed: bool) -> dict | None:
+    """A new world's talk parameters as genesis records them: only what was asked for, so a world started with
+    neither flag has none and is a default world (its log is engine 35's but for the engine field). A held world
+    (consent private, or typed) also states where "They look hungry" starts (text-1, ruling (b))."""
+    talk = {**({"consent": consent} if consent and consent != "nature" else {}), **({"typed": 1} if typed else {})}
+    if typed or consent == "private":
+        talk["hungry_at"] = TALK_DEFAULTS["hungry_at"]
+    return talk or None
+
+
 def narrator_from_args(args, kind: str):
     """The same model narrates both sessions of a blind pair (Steering 2026-11-14): --narrate-url for a
     scripted world, or the llm mind's own server. A template only when no model is given."""
@@ -1103,12 +1113,8 @@ def main(argv=None):
         raise SystemExit("--typed goes with consent private or nature: with mind, the call that reads the words would choose")
     if (args.hear_url or args.hear_model) and (kind != "script" or not (args.hear_url and args.hear_model)):
         raise SystemExit("--hear-url and --hear-model go together, for --mind script in a --typed world")
-    talk = {**({"consent": args.consent} if args.consent and args.consent != "nature" else {}),
-            **({"typed": 1} if args.typed else {})}
-    if args.typed or args.consent == "private":  # a held world states where "They look hungry" starts (ruling (b))
-        talk["hungry_at"] = TALK_DEFAULTS["hungry_at"]
     runner = LiveRunner(args.out, mind, args.seed, args.agents, mind_kind=kind,
-                        workers=args.workers or (64 if kind == "llm" else 1), talk=talk or None)
+                        workers=args.workers or (64 if kind == "llm" else 1), talk=talk_params(args.consent, args.typed))
     params = runner.sim._talk_params()
     consent = params["consent"]
     if args.consent and args.consent != consent:
