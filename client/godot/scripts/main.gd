@@ -290,7 +290,9 @@ func _build_inhabit_ui() -> void:
 	line.placeholder_text = "Say something..."
 	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	line.text_submitted.connect(func(_t): _say())
-	line.text_changed.connect(func(_t): line.select_all_on_focus = false)  # a typed edit keeps the box's text
+	line.text_changed.connect(func(_t):
+		line.select_all_on_focus = false  # a typed edit keeps the box's text
+		_ask_hint())
 	talk.add_child(line)
 	ui["talk_line"] = line
 	var say := Button.new()
@@ -317,6 +319,20 @@ func _build_inhabit_ui() -> void:
 	feed_box.add_child(chips)
 	feed_box.move_child(chips, talk.get_index())
 	ui["talk_chip"] = chip
+	chip.item_selected.connect(func(_i): _ask_hint())
+	var hint := Label.new()  # the chip hint: shown only while a typed line reads like an ask and no chip is picked
+	hint.add_theme_color_override("font_color", Color(0.95, 0.8, 0.45))
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.visible = false
+	feed_box.add_child(hint)
+	feed_box.move_child(hint, talk.get_index())
+	ui["talk_hint"] = hint
+
+
+func _ask_hint() -> void:
+	var hint: Label = ui["talk_hint"]
+	hint.text = Words.ask_hint(str(ui["talk_line"].text), int(ui["talk_chip"].selected))
+	hint.visible = hint.text != ""
 
 
 var _menu_key := ""
@@ -593,6 +609,7 @@ func _say() -> void:
 	last_said[t] = text
 	ui["talk_line"].text = ""
 	ui["talk_line"].select_all_on_focus = false
+	_ask_hint()
 	_refresh_inhabit()
 
 
@@ -611,6 +628,7 @@ func _lost_lines(evs: Array) -> void:
 				box.select_all_on_focus = true
 				box.release_focus()  # a focused box ignores select_all_on_focus: the next click must focus it anew
 				box.select_all()
+				_ask_hint()
 				_append(ui["feed"], "[color=#8a93a6]Your line is back in the Talk box: Say sends it again, "
 						+ "typing replaces it.[/color]\n")
 			last_said.erase(t)

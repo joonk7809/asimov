@@ -209,7 +209,9 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "say-3c": "4ada6cc0245843982de2b916d8f327c3deb4193b69229818e51bf11dbf7bfb3f",  # say-3c: replies clipped at a sentence or word, on 32, before its number; no say: only the engine field differs
           "33": "ac999cef1ebf6a1c1340c7ab2a5688431a72d3a92146dbb0f6c4a8820aa70bfe",  # say-3c (#88); no say: only the engine field differs
           "talk-1": "e21c7dfef34ffdb72df958131890a3fe4e5041f0335a9fe3d261b53e44c2a370",  # talk-1: an ask with a chip, a yes moves food, on 33, before its number; no say: only the engine field differs
-          "34": "7a0862cc1928d90fd89ead9e29f37b49be5f42a485ffed890865625a77c064de"}  # talk-1 (#96), an ask with a chip; no say: only the engine field differs
+          "34": "7a0862cc1928d90fd89ead9e29f37b49be5f42a485ffed890865625a77c064de",  # talk-1 (#96), an ask with a chip; no say: only the engine field differs
+          "talk-1g": "3682d85d16595b3669729027e7243f23a5af50095fe478074fdd4b239e21f1f4",  # talk-1g: the injection guard on chip lines, on 34, before its number; no say: only the engine field differs
+          "35": "bb18713cb07e55973a6dd3cd1fc1783c10d87e43cbd3cef3f68632fec9d12de0"}  # talk-1g (#97), the injection guard; no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():

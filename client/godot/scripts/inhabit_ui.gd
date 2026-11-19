@@ -285,6 +285,29 @@ static func deal_line(d: Dictionary, me_id: int, names: Dictionary) -> String:
 	return "%s gave 1 food to %s." % [giver, to]
 
 
+# talk-1's chip hint (Steering 2026-11-19 02:22Z): 32B replies to chipless asks claimed a handover in .27 of samples
+# (bar .10), so the say box suggests the chip when a typed line reads like an ask. A client hint only: the line is
+# sent as typed, and the engine never reads the words for consent.
+const HINT_FOOD := "\\b(food|eat|eaten|eating|meal|meals|bite|loaf|loaves|bread|hungry|starving|starve|snack|feed me)\\b"
+const HINT_BUY := "\\b(buy|sell|pay|paid|coin|coins|trade|price)\\b"
+const HINT_ASK := "\\?|\\b(can|could|would|will|give|spare|share|hand|let|need|please|any chance|have)\\b"
+const HINT_ASK_TEXT := "Asking for food? Pick \"Ask for food\" above. Without it this line only talks, and nothing changes hands."
+const HINT_BUY_TEXT := "Buying food? Pick \"Buy food\" above. Without it this line only talks, and nothing changes hands."
+
+
+static func _has(pattern: String, text: String) -> bool:
+	return RegEx.create_from_string("(?i)" + pattern).search(text) != null
+
+
+static func ask_hint(text: String, chip: int) -> String:
+	## The hint under the chip row while "Nothing, just talk" is picked and the typed line reads like an ask.
+	if chip != 0 or not _has(HINT_FOOD, text):
+		return ""
+	if _has(HINT_BUY, text):
+		return HINT_BUY_TEXT
+	return HINT_ASK_TEXT if _has(HINT_ASK, text) else ""
+
+
 static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:
 	var lines := ["[b]%s[/b], %s" % [me.get("name", "?"), me.get("role", "")], clock(int(v["tick"]), per_day)]
 	if v["asleep"]:
