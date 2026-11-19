@@ -163,12 +163,14 @@ def test_genesis_names_the_flag_only_when_it_is_set():
     assert talk_params(None, False) is None
 
 
-# The whole log of a held world with no `think`, as the commit before think-1 wrote it (da3e199): a day of hostile
-# lines and minds, every event with its recorded prompt hash and output. Steering 2026-11-19 21:18Z.
-BEFORE = {("typed", 1): "5429419df5b87ceea4b623cca759268b660ab81014915eeb8ad6e144217835da",
-          ("typed", 2): "66d35277e64cf3f539f8f7a3c8b6a45a14f6d071d76ce103875606f5eba7cdb0",
-          ("chip", 1): "d4e3137291a8607ce0ecb767b21e441bfaeaa8ac9d3a864e70f4b92a9d6329f9",
-          ("chip", 2): "37763f30746add348e53264275fe70e185c9b6a04435503ad5146ff977c2131c"}
+# The whole log of a held world with no `think`, as the tree before think-1 writes it: a day of hostile lines and
+# minds, every event with its recorded prompt hash and output. Steering 2026-11-19 21:18Z. First pinned from da3e199
+# on engine 35 (5429419d, 66d35277 typed; d4e31372, 37763f30 chip), which this branch matched. Re-pinned when #99
+# (pace-1, engine 36) landed under it: these are da3e199 merged with main at 01eebda, without the think-1 commits.
+BEFORE = {("typed", 1): "3983aa1196a9c34647509c761b5ff6a85fea44715eb02244cce2caa69db5227b",
+          ("typed", 2): "22654ac7c0042c6ee453ff060af8a63e9fae9fc54b21fa37f7d398d4690dfe81",
+          ("chip", 1): "389f034db169089263752aa64cfcb3b400ea51eb2cdc609652fe8196513a4db8",
+          ("chip", 2): "c3b9ed261023d4e31f3d7f3b0c69de633aee39cf6d80868c235126f64c07242a"}
 
 
 def day_log(talk, seed):

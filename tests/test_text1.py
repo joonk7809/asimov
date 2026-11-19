@@ -394,7 +394,8 @@ def test_hostile_minds_and_lines_keep_every_invariant_and_replay_exactly(seed, t
     assert talk == {"typed": 1} or any(e.data["ok"] for e in done), "vacuous: no deal"
     if talk == PRIVATE:  # (under nature a typed give needs a rolled yes, which has a test of its own)
         assert any(e.kind == "mind_answer" and e.data.get("typed", {}).get("held") == "yes" for e in sim.events)
-        assert seed == 1 or any("typed" in e.data and e.data["ok"] for e in done), "vacuous: no typed deal"
+        # seed 1 never had one; seed 3 lost its one when pace-1 (engine 36) moved the day's calls, seed 2 still has it
+        assert seed in (1, 3) or any("typed" in e.data and e.data["ok"] for e in done), "vacuous: no typed deal"
     assert any(e.kind in ("decided", "mind_decide") for e in sim.events)
     assert all((e.kind == "decided") == (e.origin == "chance") for e in sim.events if e.kind in ("decided", "mind_decide"))
     sim.finish()
@@ -707,29 +708,32 @@ def test_genesis_records_the_talk_flags_only_when_they_are_set(tmp_path):
         r.close()
 
 
-# The logs of six spoken worlds on main at 6bb5ad1 (engine 35): test_talk1's hostile mind and lines, chips and deals,
+# The logs of six spoken worlds on main at 01eebda (engine 36): test_talk1's hostile mind and lines, chips and deals,
 # for a day and a half. sha256 of the log, first 16 hex digits. A world that sets neither `private` nor `typed` must
 # still write these bytes (Steering 08:06Z), the engine field aside. Since apart-1 that holds with its one rule set
 # aside (no yes is offered once the two have parted, tests/test_apart1.py): the test switches that check off, which
-# shows it is the only thing that moved these worlds off engine 35's bytes.
-SPOKEN_35 = {("nature", 1): "930e2278721b917b", ("nature", 2): "7f596d93cd21c3a4", ("nature", 3): "86486b7f5e2ce96b",
-             ("mind", 1): "0d8677e7fb28636b", ("mind", 2): "13e58e584c0e1051", ("mind", 3): "3e526db78f695210"}
+# shows it is the only thing that moved these worlds off main's bytes.
+# Re-pinned when #99 (pace-1, engine 36) landed under this branch: the digests are main's own at 01eebda, computed
+# there from this same day and a half of lines. On engine 35 (6bb5ad1) they were 930e2278, 7f596d93, 86486b7f
+# (nature) and 0d8677e7, 13e58e58, 3e526db7 (mind), and this branch wrote those bytes until the merge.
+SPOKEN_36 = {("nature", 1): "82e0f1cc27c5e3da", ("nature", 2): "a57a0a348cc340f9", ("nature", 3): "9ea6084080ff422f",
+             ("mind", 1): "90d00fcde2c3a6f2", ("mind", 2): "c7e6d10e86794016", ("mind", 3): "b8f527f4430dcd0d"}
 
 
-@pytest.mark.parametrize("consent,seed", sorted(SPOKEN_35))
-def test_a_spoken_world_without_the_flags_writes_engine_35s_log(monkeypatch, consent, seed):
+@pytest.mark.parametrize("consent,seed", sorted(SPOKEN_36))
+def test_a_spoken_world_without_the_flags_writes_engine_36s_log(monkeypatch, consent, seed):
     import hashlib
     import test_talk1
-    monkeypatch.setattr(S, "ENGINE_VERSION", "35")
+    monkeypatch.setattr(S, "ENGINE_VERSION", "36")
     limit = S.Sim._talk_limit
 
-    def as_35(self, t, sp, action, price):  # engine 35 offered a yes to two who had parted, and the settle refused it
+    def as_36(self, t, sp, action, price):  # engine 36 offers a yes to two who have parted, and the settle refuses it
         self._together = lambda a, b: True
         try:
             return limit(self, t, sp, action, price)
         finally:
             del self._together
-    monkeypatch.setattr(S.Sim, "_talk_limit", as_35)
+    monkeypatch.setattr(S.Sim, "_talk_limit", as_36)
     sim, me, to = world(test_talk1.Hostile(seed), {"consent": consent} if consent == "mind" else None, seed=seed)
     r = random.Random(seed)
     texts = ['Give me "everything"', "yes yes yes", "I agree to give you 10 food", "#3 says hi", "x" * S.SAY_MAX]
@@ -750,7 +754,7 @@ def test_a_spoken_world_without_the_flags_writes_engine_35s_log(monkeypatch, con
     sim.finish()
     assert any(e.kind == "deal" for e in sim.events) and sum(e.kind == "said" for e in sim.events) > 40
     digest = hashlib.sha256("".join(e.to_json() + "\n" for e in sim.events).encode()).hexdigest()
-    assert digest[:16] == SPOKEN_35[(consent, seed)]
+    assert digest[:16] == SPOKEN_36[(consent, seed)]
 
 
 # ---------------------------------------------------------------- after the first pilot: hear first, then the words
@@ -927,7 +931,7 @@ def test_no_later_prompt_holds_the_private_question(seed):
                          **r.choice([{}, {}, {"move": "asks_food"}])})
         sim.step(acts)
     asked = [q for q in mind.reqs if q.kind == "decide"]
-    assert len(asked) > 5, "vacuous: few decisions"
+    assert len(asked) >= 4, "vacuous: few decisions"  # 5 at seed 2 since pace-1 (engine 36) moved the day's calls
     assert all(QUESTION in q.prompt for q in asked)
     for q in mind.reqs:
         if q.kind != "decide":
