@@ -111,7 +111,22 @@ def count_asserts(tree):
 
 
 def count_skips(tree):
-    return sum(isinstance(n, ast.Attribute) and dotted(n) in SKIPS for n in ast.walk(tree))
+    """Skip/xfail references, with import aliases resolved (import pytest as _pytest; from pytest import mark)."""
+    alias = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            alias.update({a.asname or a.name: a.name for a in n.names})
+        elif isinstance(n, ast.ImportFrom) and n.module:
+            alias.update({a.asname or a.name: f"{n.module}.{a.name}" for a in n.names})
+    count = 0
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Attribute, ast.Name)) and isinstance(getattr(n, "ctx", None), ast.Load):
+            name = dotted(n)
+            if name:
+                root, _, rest = name.partition(".")
+                full = alias.get(root, root) + ("." + rest if rest else "")
+                count += full in SKIPS
+    return count
 
 
 def module_constants(tree, want):

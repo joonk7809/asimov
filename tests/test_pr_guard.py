@@ -125,6 +125,16 @@ def test_added_skip_or_xfail_fails(repo, tmp_path, capsys, deco):
     assert rc == 1 and _kinds(out) == ["skip/xfail added"]
 
 
+@pytest.mark.parametrize("imp,use", [("import pytest as _pytest", "@_pytest.mark.skipif(True, reason='x')"),
+                                     ("from pytest import mark", "@mark.xfail"),
+                                     ("from unittest import skip", "@skip('x')")])
+def test_aliased_skip_fails(repo, tmp_path, capsys, imp, use):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": imp + "\n" + TEST_A.replace("def test_two", use + "\ndef test_two")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"]
+
+
 def test_skip_call_in_body_fails(repo, tmp_path, capsys):
     r, base = repo
     head = _commit(r, {"tests/test_a.py": TEST_A.replace("    assert True\n", "    pytest.skip('later')\n    assert True\n")})
