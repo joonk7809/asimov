@@ -233,7 +233,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "35"  # 35 = talk-1g (#97): the injection guard sentence on chip lines (Steering 02:17Z); on 34 = talk-1 (#96)
+ENGINE_VERSION = "pace-1"  # pace-1: a plan or reflect call waits one tick while a player's line awaits its answer (Steering 07:39Z), on 35; 35 = talk-1g (#97): the injection guard sentence on chip lines (Steering 02:17Z); on 34 = talk-1 (#96)
 # 33 = say-3c (#88): an over-long reply is clipped at a sentence or word, not mid-word; on 32
 # 32 = say-3b (#85): answer prompts name people, leave = avoid them, ids said aloud become names; on 31.
 # 31 = say-3 (#78): a spoken answer's words are its own `says` field, the reason stays private; a 3-tick listening hold; on 30.
@@ -797,8 +797,24 @@ class Sim:
             if a["place"] is not None:
                 occupancy[a["place"]].append(a["id"])
         self._occupancy = occupancy
+        # pace-1 (Steering 2026-11-19 07:39Z): while a player's line awaits its answer, a plan or reflect call (the
+        # day's longest) waits one tick, so the say tick and the reply tick aren't paced by it (pt11: line 7 at
+        # 7.8 s with the morning's plans in flight). Keyed on the log only: a say among this tick's acts, or a
+        # villager the player spoke to whose answer is due. A deferred call runs the next tick, whatever then holds.
+        self._talk_hold = self._talk_due(player_actions)
+        for aid, kind in sorted(st.pop("deferred", {}).items()):
+            a = agents[int(aid)]
+            if kind == "plan":
+                self._plan_request(a, occupancy)
+            else:
+                self._reflect_request(a, occupancy)
 
         for a in agents:
+            if a["id"] in self.pending:  # a deferred call filed above is this tick's one request (pace-1)
+                self._body(a, occupancy)
+                self._branch[a["id"]] = "deferred " + self.pending[a["id"]][0].kind
+                self._refuse_acts(a, "busy")
+                continue
             self._body(a, occupancy)
             if a["asleep"]:
                 if tick >= a["wake_tick"]:
@@ -928,8 +944,32 @@ class Sim:
         a["activity"] = "home"
         self._emit("wake", "rule", a["id"], {"place": a["place"]}, [a["rhythm_event"]])
         self._note(a["id"], "woke up")
+        if not self._defer(a, "plan"):
+            self._plan_request(a, occupancy)
+
+    def _plan_request(self, a: dict, occupancy: dict):
         self._request(a, "plan", self._view(a, occupancy), [a["rhythm_event"]],
                       lambda eid, out: self._apply_plan(a, eid, out))
+
+    def _talk_due(self, player_actions) -> bool:
+        """pace-1: a say among this tick's acts (applied in the agent loop), or a villager whose answer to the
+        player's line is due (the occasion its `said` left). Both are in the log; whether a tick was pulled isn't."""
+        if "player" not in self.state:
+            return False
+        if any(act.get("kind") == "act" and act.get("action") in SAY_ACTS and not act.get("late")
+               for act in player_actions):
+            return True
+        me = self.state["player"]["agent"]
+        return any((b["occasion"] or {}).get("why") == "spoken" and (b["occasion"] or {}).get("who") == me
+                   for b in self.state["agents"])
+
+    def _defer(self, a: dict, kind: str) -> bool:
+        """pace-1: hold this plan or reflect call to the next tick, where it runs whatever then holds (never twice)."""
+        if not getattr(self, "_talk_hold", False) or self._possessed(a):  # the player's own body never waits
+            return False
+        self.state.setdefault("deferred", {})[str(a["id"])] = kind
+        self._emit("deferred", "rule", a["id"], {"kind": kind}, [a["rhythm_event"]])
+        return True
 
     def _apply_plan(self, a: dict, eid: int, out: dict | None):
         blocks, dropped = valid_blocks(out)
@@ -939,6 +979,10 @@ class Sim:
 
     def _sleep(self, a: dict, occupancy: dict):
         """The agent reflects on its day; it falls asleep when the reflection is committed."""
+        if not self._defer(a, "reflect"):
+            self._reflect_request(a, occupancy)
+
+    def _reflect_request(self, a: dict, occupancy: dict):
         self._request(a, "reflect", self._view(a, occupancy), [a["rhythm_event"]],
                       lambda eid, out: self._fall_asleep(a, eid, out))
 
