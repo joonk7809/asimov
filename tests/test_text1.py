@@ -709,7 +709,9 @@ def test_genesis_records_the_talk_flags_only_when_they_are_set(tmp_path):
 
 # The logs of six spoken worlds on main at 6bb5ad1 (engine 35): test_talk1's hostile mind and lines, chips and deals,
 # for a day and a half. sha256 of the log, first 16 hex digits. A world that sets neither `private` nor `typed` must
-# still write these bytes (Steering 08:06Z), the engine field aside.
+# still write these bytes (Steering 08:06Z), the engine field aside. Since apart-1 that holds with its one rule set
+# aside (no yes is offered once the two have parted, tests/test_apart1.py): the test switches that check off, which
+# shows it is the only thing that moved these worlds off engine 35's bytes.
 SPOKEN_35 = {("nature", 1): "930e2278721b917b", ("nature", 2): "7f596d93cd21c3a4", ("nature", 3): "86486b7f5e2ce96b",
              ("mind", 1): "0d8677e7fb28636b", ("mind", 2): "13e58e584c0e1051", ("mind", 3): "3e526db78f695210"}
 
@@ -719,6 +721,15 @@ def test_a_spoken_world_without_the_flags_writes_engine_35s_log(monkeypatch, con
     import hashlib
     import test_talk1
     monkeypatch.setattr(S, "ENGINE_VERSION", "35")
+    limit = S.Sim._talk_limit
+
+    def as_35(self, t, sp, action, price):  # engine 35 offered a yes to two who had parted, and the settle refused it
+        self._together = lambda a, b: True
+        try:
+            return limit(self, t, sp, action, price)
+        finally:
+            del self._together
+    monkeypatch.setattr(S.Sim, "_talk_limit", as_35)
     sim, me, to = world(test_talk1.Hostile(seed), {"consent": consent} if consent == "mind" else None, seed=seed)
     r = random.Random(seed)
     texts = ['Give me "everything"', "yes yes yes", "I agree to give you 10 food", "#3 says hi", "x" * S.SAY_MAX]

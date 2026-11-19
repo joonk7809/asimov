@@ -125,7 +125,12 @@ ANSWERS = ("yes", "no")
 # Why only no is offered (spec §2.2), as the prompt says it; logged on the mind event's deal as the key.
 TALK_WHY = {"food": "you have no food to spare", "coin": "they don't have {price} coin",
             "terms": "you are on bad terms with them", "said_yes": "you already said yes to them today",
-            "wait": "you turned them down not long ago"}
+            "wait": "you turned them down not long ago",
+            # apart-1 (Steering 2026-11-19 12:19Z): the two are no longer at one place when the answer is asked for
+            # (a work or avoid override outranks the listening hold, so a listener can walk off first). A yes
+            # there used to be worded and then refused by the settle ("not together"): words that hand over food
+            # the engine never moves. Now no yes is offered, and the prompt says why, as a fact of the world.
+            "apart": "they are not with you any more"}
 CONSENTS = ("nature", "mind", "private")
 # The limits (Steering §11.2), genesis parameters under population["stakes"]["talk"]. Recorded only when a world
 # sets one (a 32B session's consent "mind"), so a default world's genesis, and its golden, are say-3's.
@@ -292,7 +297,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "text-1"  # text-1: a private decision per listener and day, and a typed line's give on it; on 35, before its number
+ENGINE_VERSION = "apart-1"  # apart-1: no yes is offered in talk once the two have parted; on text-1, before its number
 # 35 = talk-1g (#97): the injection guard sentence on chip lines (Steering 02:17Z); on 34 = talk-1 (#96)
 # 33 = say-3c (#88): an over-long reply is clipped at a sentence or word, not mid-word; on 32
 # 32 = say-3b (#85): answer prompts name people, leave = avoid them, ids said aloud become names; on 31.
@@ -2125,6 +2130,8 @@ class Sim:
         rec = self._talk_record(t, sp["id"])
         kin = sp["id"] in self.state["families"][t["family"]]["members"]
         affinity = t["relationships"].get(str(sp["id"]), {}).get("affinity", 0)
+        if not self._together(t, sp):  # apart-1: nothing can change hands between two who aren't at one place
+            return "apart"
         if t["inv"]["food"] < p["min_food"]:
             return "food"
         if action == "buy_from" and sp["inv"]["coin"] < price:
@@ -2258,7 +2265,9 @@ class Sim:
         if answer == "no":
             # Steering 2026-11-19 01:03Z: a no forced by what can't be done (food, coin) is no refusal; one forced
             # inside the wait restarts it but isn't counted; a chosen no, bad terms and a second ask in a day are.
-            if withheld in ("food", "coin", "undecided"):  # undecided (text-1): no decision was held, so none refused
+            # undecided (text-1): no decision was held, so none refused. apart (apart-1): they had parted, so
+            # nothing was refused either, and a held decision stays for when they next stand together.
+            if withheld in ("food", "coin", "undecided", "apart"):
                 return
             self._refused_food(sp, t, action, r)
             rec["last_no"] = tick
