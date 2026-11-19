@@ -123,7 +123,7 @@ def test_no_later_prompt_holds_a_thought_and_the_world_replays(seed, level):
     mind = Thinker(seed)
     sim, me, to = world(mind, thinks(level), seed=seed)
     r, check = random.Random(seed), Checker(sim)
-    for _ in range(TICKS_PER_DAY + TICKS_PER_DAY // 2):  # past a night: reflection and the next day's prompts too
+    for _ in range(2 * TICKS_PER_DAY):  # past a night: reflection and the next day's prompts too
         ag = sim.state["agents"]
         here = [o["id"] for o in ag if o["id"] != me and o["place"] is not None and o["place"] == ag[me]["place"]
                 and not o["asleep"]]
@@ -134,7 +134,7 @@ def test_no_later_prompt_holds_a_thought_and_the_world_replays(seed, level):
                          **r.choice([{}, {}, {"move": "asks_food"}])})
         assert check.step(acts) == [], acts
     asked = [q for q in mind.reqs if q.kind == "decide"]
-    assert len(asked) >= 4, "vacuous: few decisions"
+    assert len(asked) > 5, "vacuous: few decisions"
     assert all(sentence(level) in q.prompt and THINK_DECIDE_LINE in q.prompt for q in asked)
     for q in mind.reqs:
         assert "ZQTHOUGHT" not in q.prompt and all("ZQTHOUGHT" not in p for p in (q.told or {}).values())

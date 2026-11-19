@@ -358,14 +358,16 @@ class Hostile(StubMind):
 @pytest.mark.parametrize("seed", [1, 2, 3])
 @pytest.mark.parametrize("talk", [PRIVATE, {"consent": "private"}, {"typed": 1}], ids=["private", "chips", "nature"])
 def test_hostile_minds_and_lines_keep_every_invariant_and_replay_exactly(seed, talk):
-    """spec §4: hostile minds and a hostile player's lines over a day and a half. The ledgers, the deal invariant
+    """spec §4: hostile minds and a hostile player's lines over two days and a half. The ledgers, the deal invariant
     (every deal cites the listener's own earlier yes to this speaker) and replay hold; with no typed gives, a line
-    with no chip never moves food."""
+    with no chip never moves food. A day and a half until pace-1 (engine 36) moved the day's calls and seed 3's one
+    typed deal with them; the run is longer now so that seeds 2 and 3 each still end in one (Steering 21:40Z: the
+    floor stays, the fuzz grows)."""
     sim, me, to = world(Hostile(seed), dict(talk), seed=seed)
     r = random.Random(seed)
     check = Checker(sim)
     texts = INJECTIONS + ["Could you spare some food?", "#3 says hi", "x" * S.SAY_MAX]
-    for i in range(TICKS_PER_DAY + TICKS_PER_DAY // 2):
+    for i in range(2 * TICKS_PER_DAY + TICKS_PER_DAY // 2):
         ag = sim.state["agents"]
         here = [o["id"] for o in ag if o["id"] != me and o["place"] is not None and o["place"] == ag[me]["place"]
                 and not o["asleep"]]
@@ -394,8 +396,7 @@ def test_hostile_minds_and_lines_keep_every_invariant_and_replay_exactly(seed, t
     assert talk == {"typed": 1} or any(e.data["ok"] for e in done), "vacuous: no deal"
     if talk == PRIVATE:  # (under nature a typed give needs a rolled yes, which has a test of its own)
         assert any(e.kind == "mind_answer" and e.data.get("typed", {}).get("held") == "yes" for e in sim.events)
-        # seed 1 never had one; seed 3 lost its one when pace-1 (engine 36) moved the day's calls, seed 2 still has it
-        assert seed in (1, 3) or any("typed" in e.data and e.data["ok"] for e in done), "vacuous: no typed deal"
+        assert seed == 1 or any("typed" in e.data and e.data["ok"] for e in done), "vacuous: no typed deal"
     assert any(e.kind in ("decided", "mind_decide") for e in sim.events)
     assert all((e.kind == "decided") == (e.origin == "chance") for e in sim.events if e.kind in ("decided", "mind_decide"))
     sim.finish()
@@ -921,7 +922,7 @@ def test_no_later_prompt_holds_the_private_question(seed):
     mind = Keeps(seed)
     sim, me, to = world(mind, dict(PRIVATE), seed=seed)
     r = random.Random(seed)
-    for _ in range(TICKS_PER_DAY):
+    for _ in range(2 * TICKS_PER_DAY):  # one day until pace-1 (engine 36): seed 2 then had 5 decisions, under the floor
         ag = sim.state["agents"]
         here = [o["id"] for o in ag if o["id"] != me and o["place"] is not None and o["place"] == ag[me]["place"]
                 and not o["asleep"]]
@@ -931,7 +932,7 @@ def test_no_later_prompt_holds_the_private_question(seed):
                          **r.choice([{}, {}, {"move": "asks_food"}])})
         sim.step(acts)
     asked = [q for q in mind.reqs if q.kind == "decide"]
-    assert len(asked) >= 4, "vacuous: few decisions"  # 5 at seed 2 since pace-1 (engine 36) moved the day's calls
+    assert len(asked) > 5, "vacuous: few decisions"
     assert all(QUESTION in q.prompt for q in asked)
     for q in mind.reqs:
         if q.kind != "decide":
