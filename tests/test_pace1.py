@@ -53,11 +53,14 @@ def test_a_held_call_runs_the_next_tick_and_never_waits_twice(seed):
     replay(sim.events)  # keyed on the log: a session with holds replays exactly
 
 
-def test_holds_cover_the_say_tick_and_the_reply_tick_only():
-    sim = _talker(5, 60, every=0.3)
+@pytest.mark.parametrize("seed,ticks,every", [(5, 60, 0.3), (2, 200, 0.5)])  # seed 2: a listener sleeps on a line
+def test_holds_cover_the_say_tick_and_the_reply_tick_only(seed, ticks, every):
+    """Review of #99: a listener who fell asleep before answering held the village's dawn plans for hours."""
+    sim = _talker(seed, ticks, every=every)
+    tried = {e.tick for e in sim.events if e.origin == "player" and e.kind == "act" and e.data.get("action") == "say"}
     said = {e.tick for e in sim.events if e.kind == "said"}
-    for e in (e for e in sim.events if e.kind == "deferred"):
-        assert e.tick in said or e.tick - 1 in said, e.tick
+    for e in (e for e in sim.events if e.kind == "deferred"):  # the tick a line is tried in (it may not land), or
+        assert e.tick in tried or e.tick - 1 in said, e.tick     # the tick after one landed
     replay(sim.events)
 
 

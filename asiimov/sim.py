@@ -959,8 +959,11 @@ class Sim:
         if any(act.get("kind") == "act" and act.get("action") in SAY_ACTS and not act.get("late")
                for act in player_actions):
             return True
-        me = self.state["player"]["agent"]
-        return any((b["occasion"] or {}).get("why") == "spoken" and (b["occasion"] or {}).get("who") == me
+        me, last = self.state["player"]["agent"], self.state["tick"] - 1
+        # Only an awake listener whose line was said last tick: a sleeper's occasion waits till morning, and holding
+        # the village's dawn plans for it helps no reply (review of #99).
+        return any(not b["asleep"] and (b["occasion"] or {}).get("why") == "spoken"
+                   and (b["occasion"] or {}).get("who") == me and (b["occasion"] or {}).get("tick") == last
                    for b in self.state["agents"])
 
     def _defer(self, a: dict, kind: str) -> bool:
