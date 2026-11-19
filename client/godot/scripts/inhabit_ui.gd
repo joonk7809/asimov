@@ -195,6 +195,8 @@ static func _line(e: Dictionary, me: Dictionary, names: Dictionary) -> String:
 			var to_you: bool = d.get("with") != null and int(d["with"]) == me_id
 			var line := "%s answers%s: \u201c%s\u201d" % [a, "" if to_you else " " + _who(d.get("with"), me_id, names),
 					w.replace("[", "[lb]")]
+			if to_you and str(d.get("next", "")) == "leave":  # pt11: 5 of 7 lost lines went to someone who had just left
+				line += " %s walks away." % a
 			return "[color=#f0c060]%s[/color]" % line if to_you else line
 		"plan_receipt":
 			return "You plan your day." if d.get("ok", false) else ""
@@ -222,7 +224,7 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Di
 		var gone := _who(d.get("to"), me_id, names) if d.get("to") != null else "them"
 		match why:
 			"target not here":
-				return "[color=#e07070]Your words didn't reach %s: they had left.[/color]" % gone
+				return "[color=#e07070]%s has gone; your words didn't reach them.[/color]" % gone.capitalize()
 			"target asleep":
 				return "[color=#e07070]%s is asleep and didn't hear you.[/color]" % gone.capitalize()
 	if str(d.get("action", "")) == "go_to":  # go-to-1: where you're walking, and when you'll be there
