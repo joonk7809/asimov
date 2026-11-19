@@ -1,0 +1,133 @@
+"""Turn a recorded world log into a playback pack for the Godot client (G7).
+
+    python client/godot/tools/make_playback.py LOG OUT.json.gz [--engine DIR] [--expected FILE --every 10]
+
+LOG is events.jsonl(.gz) or a run directory. The pack holds the log's events (without mind records, which
+the client doesn't draw) and every villager's holdings after each tick, taken from the engine's own replay
+of the log: every event is checked against the record as it replays, so a pack is only written for a log
+this engine reproduces. The client plays the pack back and computes no world rule.
+
+A log replays only on the engine that wrote it. For an older log, pass --engine a checkout of that engine
+(git worktree add DIR COMMIT). A live run's log has no end event; it replays as far as it was recorded.
+
+--expected writes the engine's state at every Nth view tick (positions, places, holdings, who is at each
+place), for tests/test_playback.gd.
+"""
+import argparse
+import gzip
+import hashlib
+import json
+import os
+import sys
+from collections import defaultdict
+
+FORMAT = 1
+
+
+def read_log(path: str) -> bytes:
+    if os.path.isdir(path):
+        path = os.path.join(path, "events.jsonl")
+    with (gzip.open if path.endswith(".gz") else open)(path, "rb") as f:
+        return f.read()
+
+
+def replay_frames(raw: bytes, every: int):
+    """Replay the log tick by tick. Returns (events, holdings, expected, last_tick): holdings is
+    [[tick, id, food, coin], ...], a villager's state after that tick ran, listed only when it changed
+    (tick -1 is the start); expected is the engine's state at every `every`th view tick and the last."""
+    from asiimov.events import Event
+    from asiimov.minds import ReplayDivergence, ReplayMind
+    from asiimov.sim import ENGINE_VERSION, Sim
+
+    events = [Event(**json.loads(l)) for l in raw.split(b"\n") if l.strip()]
+    genesis = events[0]
+    if genesis.kind != "genesis":
+        raise SystemExit("not a world log: the first event isn't genesis")
+    engine = genesis.data.get("engine")
+    if engine != ENGINE_VERSION:
+        raise SystemExit(f"log was written by engine {engine}, this checkout is engine {ENGINE_VERSION}: "
+                         f"pass --engine a checkout of engine {engine}")
+    ended = events[-1].kind == "end"
+    stop = events[-1].tick if ended else events[-1].tick + 1  # the view tick the log reaches
+    player = defaultdict(list)
+    for e in events:
+        if e.origin == "player":
+            player[e.tick].append({"kind": e.kind, **e.data})
+    pop = genesis.data["population"]
+    sim = Sim(genesis.data["seed"], len(pop["agents"]), ReplayMind([e for e in events if e.origin == "mind"]),
+              genesis=pop, expected=events, order=genesis.data["order"])
+    holdings, last = [], {}
+    expected = {"ticks": [], "pos": [], "place": [], "food": [], "coin": [], "present": []}
+
+    def record(tick):
+        for a in sim.state["agents"]:
+            now = (a["inv"]["food"], a["inv"]["coin"])
+            if last.get(a["id"]) != now:
+                last[a["id"]] = now
+                holdings.append([tick, a["id"], *now])
+
+    def expect():
+        agents = sim.state["agents"]
+        present = defaultdict(list)
+        for a in agents:
+            if a["place"] is not None:
+                present[a["place"]].append(a["id"])
+        expected["ticks"].append(sim.state["tick"])
+        expected["pos"].append([list(sim._pos(a)) for a in agents])
+        expected["place"].append([a["place"] for a in agents])
+        expected["food"].append([a["inv"]["food"] for a in agents])
+        expected["coin"].append([a["inv"]["coin"] for a in agents])
+        expected["present"].append(dict(present))
+
+    record(-1)
+    while sim.state["tick"] < stop:
+        if sim.state["tick"] % every == 0:
+            expect()
+        tick = sim.state["tick"]
+        sim.step(player.get(tick, []))
+        record(tick)
+    expect()
+    if ended:
+        sim.finish()
+    if len(sim.events) != len(events):
+        raise ReplayDivergence(f"replay produced {len(sim.events)} events, log has {len(events)}")
+    return events, holdings, expected, stop - 1
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("log", help="events.jsonl(.gz) or a run directory")
+    ap.add_argument("out", help="the pack: .json.gz (or .json)")
+    ap.add_argument("--engine", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."),
+                    help="a checkout of the engine that wrote the log (default: this one)")
+    ap.add_argument("--expected", help="also write the engine's state at every --every'th view tick")
+    ap.add_argument("--every", type=int, default=10)
+    args = ap.parse_args(argv)
+    sys.path.insert(0, os.path.abspath(args.engine))
+    raw = read_log(args.log)
+    events, holdings, expected, last_tick = replay_frames(raw, args.every)
+    rows = []
+    for e in events:
+        row = json.loads(e.to_json())
+        del row["mind"]
+        rows.append(row)
+    pack = {"playback": FORMAT, "engine": events[0].data["engine"], "last_tick": last_tick,
+            "source": {"events": len(events), "sha256": hashlib.sha256(raw).hexdigest()},
+            "events": rows, "holdings": holdings}
+    text = json.dumps(pack, sort_keys=True, separators=(",", ":")).encode()
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    if args.out.endswith(".gz"):
+        with open(args.out, "wb") as f, gzip.GzipFile(filename="", fileobj=f, mode="wb", mtime=0) as z:  # same log, same bytes
+            z.write(text)
+    else:
+        with open(args.out, "wb") as f:
+            f.write(text)
+    if args.expected:
+        with open(args.expected, "w") as f:
+            json.dump(expected, f)
+    print(f"{args.out}: engine {pack['engine']}, {len(rows)} events, view ticks 0-{last_tick + 1}, "
+          f"{len(holdings)} holdings changes, {os.path.getsize(args.out)} bytes")
+
+
+if __name__ == "__main__":
+    main()

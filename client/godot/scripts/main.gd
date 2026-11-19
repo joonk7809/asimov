@@ -5,6 +5,10 @@
 #   ... --ui-scale 1.5                                            everything larger (default 1.25, times the screen's
 #                                                                 own scale); Ctrl/Cmd + and - change it while playing
 #   godot --path client/godot -- --log runs/demo/events.jsonl   a recorded log
+#   ... --log PACK.json.gz                                        a playback pack (tools/make_playback.py): the log
+#                                                                 plus the engine's holdings; click a place to see
+#                                                                 who is there and what they hold
+#   an exported build with res://bundled/playback.json.gz plays that pack when given no --url or --log (G7)
 #   ... --log LOG --at TICK --screenshot out.png                  save one frame and quit (needs a display: xvfb-run;
 #                                                                 live, it waits about 3 s first)
 # Interpolation between ticks is for drawing only. Nothing drawn here is sent to the engine.
@@ -15,6 +19,8 @@ const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
 const Plan := preload("res://scripts/plan_queue.gd")
 const Art := preload("res://scripts/art.gd")
+const PICKED_W := 380.0  # recorded mode: the "who is here" column
+const BUNDLED := "res://bundled/playback.json.gz"  # the world an export carries (CI puts it there before it exports)
 const COLORS := {"sleep": Color(0.35, 0.35, 0.5), "home": Color(0.6, 0.6, 0.7), "work": Color(0.85, 0.6, 0.2),
 		"shop": Color(0.3, 0.7, 0.4), "socialize": Color(0.8, 0.4, 0.7), "rest": Color(0.5, 0.7, 0.9),
 		"explore": Color(0.9, 0.9, 0.5)}  # sim.py ACTIVITIES plus sleep; anything newer is drawn white
@@ -50,6 +56,8 @@ var bubbles := []           # inhabitant: words shown over their speaker (V3) {w
 var drawn_at := {}          # inhabitant: id -> where that villager was drawn this frame (for bubbles)
 const BUBBLE_S := 6.0       # a bubble shows this long, then fades; the line stays in "Said near you"
 var say_once := ""          # --say TEXT (dev, screenshots): say it once to the first villager here, awake
+var picked := ""            # recorded mode: the place clicked, shown in the "who is here" panel
+var announced := false      # recorded mode: "playing" printed once, for the export's smoke test
 
 
 func _ready() -> void:
@@ -62,14 +70,23 @@ func _ready() -> void:
 	get_window().size_changed.connect(_layout)  # the window, not the viewport: in canvas_items mode the viewport keeps its units
 	get_window().dpi_changed.connect(_layout)  # moved to a screen of another scale (review of #92)
 	_build_ui()
-	if args.has("log"):
+	var log_path: String = args.get("log", "")
+	if log_path == "" and not args.has("url") and FileAccess.file_exists(BUNDLED):
+		log_path = BUNDLED  # an export with a world in it plays that world, with no engine to connect to
+		playing = true
+	if log_path != "":
 		model = WorldModel.new()
-		for line in FileAccess.get_file_as_string(args["log"]).split("\n", false):
-			var e = JSON.parse_string(line)
-			if typeof(e) == TYPE_DICTIONARY:  # a torn last line is skipped
-				model.add_event(e)
-		ui["status"].text = "recorded log, %d events" % model.events.size()
+		var err := model.load_file(log_path)
+		if err != "":
+			ui["status"].text = err
+			printerr("playback: " + err)
+		else:
+			ui["status"].text = "recorded world, engine %s, %d events%s" % [model.engine, model.events.size(),
+					"" if not model.holdings.is_empty() else " (a bare log: no holdings)"]
+			print("playback: ready, engine %s, %d villagers, view ticks 0-%d" % [model.engine, model.agents.size(), model.last_tick + 1])
 		replay_tick = float(args.get("at", "0"))
+		picked = str(args.get("pick", ""))
+		_build_playback_ui()
 	else:
 		client = LiveClient.new()
 		model = client.model
@@ -90,7 +107,7 @@ func _ready() -> void:
 		ui["status"].text = "connecting"
 	say_once = str(args.get("say", ""))
 	if args.has("screenshot"):  # live: wait for the welcome and a few ticks first
-		shot = {"path": args["screenshot"], "frames": 5 if args.has("log") else 180}
+		shot = {"path": args["screenshot"], "frames": 5 if log_path != "" else 180}
 
 
 func _args() -> Dictionary:
@@ -181,6 +198,43 @@ func _build_ui() -> void:
 	scroll.add_child(menu)
 	ui = {"slider": slider, "clock": clock, "family": fam, "status": status, "menu": menu, "fire": fire, "play": play,
 			"menu_scroll": scroll, "layer": layer}
+
+
+func _build_playback_ui() -> void:
+	## Recorded mode: no divine verbs, and a panel for the place clicked.
+	for k in ["family", "fire", "menu_scroll"]:
+		ui[k].visible = false
+	ui["status"].visible = false  # its text heads the panel instead, clear of the map
+	var box := PanelContainer.new()  # the right-hand column; the map keeps the rest (PICKED_W in _draw)
+	box.set_anchors_and_offsets_preset(Control.PRESET_RIGHT_WIDE)
+	box.offset_left = -PICKED_W
+	box.offset_top = 8
+	box.offset_right = -8
+	box.offset_bottom = -48
+	ui["layer"].add_child(box)
+	var body := RichTextLabel.new()  # scrolls when a place is crowded
+	body.bbcode_enabled = true
+	box.add_child(body)
+	ui["picked"] = body
+
+
+func _refresh_picked() -> void:
+	## Who is at the picked place at the tick shown, and what each holds: the pack's rows, nothing worked out here.
+	if not ui.has("picked"):
+		return
+	var lines := ["[color=#9fb4d8]%s[/color]" % ui["status"].text, ""]
+	if not model.places.has(picked):
+		ui["picked"].text = "\n".join(lines + ["Click a place to see who is there."])
+		return
+	var t := int(_tick_shown())
+	var ids := model.present(picked, t)
+	lines.append("[b]%s[/b]: %d here" % [picked.replace("_", " "), ids.size()])
+	for id in ids:
+		var a: Dictionary = model.agents[id]
+		var h := model.holding_at(id, t)
+		lines.append("%s, %s, %s%s" % [a["name"], a.get("role", ""), model.state_at(id, t)[3],
+				"" if h.is_empty() else ": %d food, %d coin" % [h[1], h[2]]])
+	ui["picked"].text = "\n".join(lines)
 
 
 func _panel(parent: Control, title: String, expand := false) -> RichTextLabel:
@@ -654,6 +708,12 @@ func _unhandled_input(ev: InputEvent) -> void:
 		_layout()
 		get_viewport().set_input_as_handled()
 		return
+	if client == null and ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		picked = ""  # recorded mode: a click picks the place under it, or nothing
+		for name in map_rects:
+			if map_rects[name].has_point(ev.position):
+				picked = name
+		return
 	if client == null or client.scope != "inhabitant" or not (ev is InputEventMouseButton) or not ev.pressed:
 		return
 	if ev.position.x >= map_w:
@@ -798,6 +858,11 @@ func _process(delta: float) -> void:
 		client.poll()
 	elif playing:
 		replay_tick = minf(replay_tick + delta * 6.0, model.last_tick + 1)
+		if not announced and replay_tick >= 10.0:
+			announced = true
+			print("playback: playing, view tick %d" % int(replay_tick))
+	if client == null:
+		_refresh_picked()
 	if client and client.scope == "inhabitant" and ui.has("wait"):
 		ui["wait"].text = _wait_text()
 	var newest := client.view_tick if client else model.last_tick + 1
@@ -829,6 +894,8 @@ func _draw() -> void:
 	if model == null or model.places.is_empty():
 		return
 	var size := get_viewport_rect().size
+	if ui.has("picked"):
+		size.x -= PICKED_W
 	var lo := Vector2(INF, INF)
 	var hi := Vector2(-INF, -INF)
 	for p in model.places.values():
@@ -852,6 +919,9 @@ func _draw() -> void:
 		var r = model.places[name]["rect"]
 		var an = model.places[name]["anchor"]
 		at_anchor[Vector2(an[0], an[1])] = Rect2(to_screen.call(Vector2(r[0], r[1])), Vector2(r[2], r[3]) * k)
+		map_rects[name] = at_anchor[Vector2(an[0], an[1])]
+	if map_rects.has(picked):
+		draw_rect(map_rects[picked].grow(2), Color(1, 0.9, 0.4), false, 2.0)
 	var vpx := maxf(k * 1.6, 9.0)
 	for a in model.agents:
 		var aid := int(a["id"])
@@ -883,6 +953,8 @@ func _draw_inhabitant() -> void:
 	if client.places.is_empty() or client.view.is_empty():
 		return
 	var size := get_viewport_rect().size
+	if ui.has("picked"):
+		size.x -= PICKED_W
 	var lo := Vector2(INF, INF)
 	var hi := Vector2(-INF, -INF)
 	for p in client.places.values():

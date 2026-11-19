@@ -3,15 +3,17 @@ on:
   push:
     branches: [main]
   pull_request:
+env:
+  # The same pinned build as the cloud environment's setup script. Each SHA-512 is that file's line in the
+  # release's own SHA512-SUMS.txt (github.com/godotengine/godot/releases/tag/4.3-stable).
+  GODOT_URL: https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+  GODOT_SHA512: fd52bb4ba8acc30ca5accd1c566d470ad7282f891ccc0995dfafabcf92bcf76280ce182bf9d80ebd885f3ed2165d01e1fc3f2928436b15498dfbd98656c2a45a
+  GODOT_VERSION: 4.3.stable.official.77dcf97d8
+  TEMPLATES_URL: https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz
+  TEMPLATES_SHA512: 476366caf0fd45a8f24136cf9cf1dc0bc2b96f7c82d53e5f82200b55aefd07b286d283fd6f1ce29e0de70648c5a51d3b12f96c6d4fafd4e8c4878ecda6406d6a
 jobs:
   headless:
     runs-on: ubuntu-latest
-    env:
-      # The same pinned build as the cloud environment's setup script. The SHA-512 is the Linux x86-64
-      # zip's line in the release's own SHA512-SUMS.txt (github.com/godotengine/godot/releases/tag/4.3-stable).
-      GODOT_URL: https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
-      GODOT_SHA512: fd52bb4ba8acc30ca5accd1c566d470ad7282f891ccc0995dfafabcf92bcf76280ce182bf9d80ebd885f3ed2165d01e1fc3f2928436b15498dfbd98656c2a45a
-      GODOT_VERSION: 4.3.stable.official.77dcf97d8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +31,11 @@ jobs:
         run: |
           python client/godot/tests/make_fixture.py "$RUNNER_TEMP/fx" --agents 100 --days 3 --seed 4
           godot --headless --path client/godot --script res://tests/test_positions.gd -- "$RUNNER_TEMP/fx"
+      - name: A playback pack equals the engine's replay at every 10th tick, on positions, holdings and who is where (G7)
+        run: |
+          python -m asiimov.run --out "$RUNNER_TEMP/world" --agents 100 --days 3 --seed 17 --fire 3@1
+          python client/godot/tools/make_playback.py "$RUNNER_TEMP/world" "$RUNNER_TEMP/pack.json.gz" --expected "$RUNNER_TEMP/expected.json"
+          godot --headless --path client/godot --script res://tests/test_playback.gd -- "$RUNNER_TEMP/pack.json.gz" "$RUNNER_TEMP/expected.json"
       - name: Live client against the live runner, every tick checked against the engine's view
         run: |
           python -m asiimov.live --out "$RUNNER_TEMP/live" --agents 25 --paused --port 8765 &
@@ -71,3 +78,69 @@ jobs:
           for i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8770) 2>/dev/null && break; sleep 0.2; done
           python scripts/s16b.py op ws://127.0.0.1:8770/ "" step --until 60
           python tests/aiplay_smoke.py ws://127.0.0.1:8770/ "$RUNNER_TEMP/aiplay" "$RUNNER_TEMP/aiplay-work"
+
+  # G7: the client as a stranger gets it. Built from this checkout alone, with a recorded world inside, and
+  # run with no engine behind it: the Linux build under xvfb, the web build in headless Chrome.
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the pinned Godot
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o "$RUNNER_TEMP/godot.zip" "$GODOT_URL"
+          echo "$GODOT_SHA512  $RUNNER_TEMP/godot.zip" | sha512sum -c -
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          sudo install -m 755 "$RUNNER_TEMP/godot/Godot_v4.3-stable_linux.x86_64" /usr/local/bin/godot
+          test "$(godot --headless --version)" = "$GODOT_VERSION"
+      - uses: actions/cache@v4
+        id: templates
+        with:
+          path: ~/.local/share/godot/export_templates/4.3.stable
+          key: godot-templates-4.3-stable-476366ca-web-linux-windows-macos
+      - name: Install the pinned export templates (1 GB; cached after the first run)
+        if: steps.templates.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o "$RUNNER_TEMP/templates.tpz" "$TEMPLATES_URL"
+          echo "$TEMPLATES_SHA512  $RUNNER_TEMP/templates.tpz" | sha512sum -c -
+          mkdir -p ~/.local/share/godot/export_templates/4.3.stable
+          unzip -q -j "$RUNNER_TEMP/templates.tpz" templates/version.txt templates/web_nothreads_release.zip \
+            templates/linux_release.x86_64 templates/windows_release_x86_64.exe \
+            templates/windows_release_x86_64_console.exe templates/macos.zip \
+            -d ~/.local/share/godot/export_templates/4.3.stable
+      - name: Bundle a recorded world (a stub world today; the v0 log when it exists)
+        run: |
+          python -m asiimov.run --out "$RUNNER_TEMP/world" --agents 100 --days 3 --seed 17 --fire 3@1
+          python client/godot/tools/make_playback.py "$RUNNER_TEMP/world" client/godot/bundled/playback.json.gz
+      - name: Export web, Linux, Windows and macOS
+        run: |
+          mkdir -p build/web build/linux build/windows build/macos
+          for p in Web Linux Windows macOS; do godot --headless --path client/godot --export-release "$p"; done
+          test -s build/web/index.wasm -a -s build/web/index.pck -a -s build/linux/asiimov.x86_64 \
+            -a -s build/windows/asiimov.exe -a -s build/macos/asiimov.zip
+      - name: The Linux build plays its bundled world
+        run: |
+          cd "$RUNNER_TEMP"  # away from the checkout: the build has only what is inside it
+          xvfb-run -a -s "-screen 0 1600x900x24" "$GITHUB_WORKSPACE/build/linux/asiimov.x86_64" -- --at 200 --pick plaza --screenshot "$RUNNER_TEMP/linux.png" | tee linux.log
+          grep -q "^playback: ready, engine " linux.log
+          test -s "$RUNNER_TEMP/linux.png"
+      - name: The web build plays its bundled world in a browser, with no engine and nothing fetched from elsewhere
+        run: |
+          npm install --no-save --no-audit --no-fund playwright-core@1.49.1
+          WEB_SMOKE_CHANNEL=chrome node client/godot/tests/web_smoke.js build/web "$RUNNER_TEMP/web.png"
+      - name: Pack the builds
+        run: |
+          cp "$RUNNER_TEMP/linux.png" "$RUNNER_TEMP/web.png" build/
+          (cd build/web && zip -q -r ../asiimov-web.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asiimov-client-${{ github.sha }}
+          path: |
+            build/asiimov-web.zip
+            build/linux/asiimov.x86_64
+            build/windows/asiimov.exe
+            build/macos/asiimov.zip
+            build/linux.png
+            build/web.png
