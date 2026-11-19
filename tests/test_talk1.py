@@ -230,6 +230,19 @@ def test_under_consent_nature_the_roll_answers_and_only_its_answer_is_offered():
     assert seen == {"yes", "no"}
 
 
+@pytest.mark.parametrize("raw", ["not json", json.dumps({"answer": "YES", "says": "Sure.", "next": "carry_on"}),
+                                 json.dumps({"says": "Sure.", "next": "carry_on"})])
+def test_with_both_answers_offered_an_answer_outside_them_is_no(raw):
+    """Steering 01:13Z: under consent mind, with yes and no offered, a reply outside the offer is a no."""
+    mind = Says(raw=raw)
+    sim, me, to = world(mind, {"consent": "mind"})
+    hold(sim, me, to)
+    sim.state["agents"][to]["inv"]["food"] = 4
+    evs = say(sim, to)
+    assert next(e for e in evs if e.kind == "mind_answer").data["offered"] == ["yes", "no"]
+    assert next(e for e in evs if e.kind == "reply").data["answer"] == "no" and not deals(evs)
+
+
 def test_under_nature_a_failed_reply_keeps_the_rolled_answer():
     """Review of #96: one answer offered is the answer; a reply that's broken, or says otherwise, only fails to word it."""
     for seed in range(1, 30):
