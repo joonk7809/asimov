@@ -13,7 +13,7 @@ import pytest
 from asiimov import sim as S
 from asiimov.invariants import Checker, deal_violations, state_violations
 from asiimov.llm import HEAR_LINE, Hearer, LLMMind, hear_prompt, schema_for
-from asiimov.memory import ANSWER_LINE, DECIDE_LINE, GIVES_ANSWER_LINE, MOVE_ANSWER_LINE
+from asiimov.memory import ANSWER_LINE, DECIDE_LINE, GIVES_ANSWER_LINE, MOVE_ANSWER_LINE, prompt_hash
 from asiimov.minds import MindReply, MindRequest, ScriptMind, StubMind
 from asiimov.replay import replay
 from asiimov.sim import TICKS_PER_DAY, Sim
@@ -79,7 +79,7 @@ def test_a_typed_ask_under_a_private_yes_moves_one_food_and_the_deal_cites_the_d
                         "facts": [int(ag[me]["inv"]["food"] - 1 > 0), 0]}  # the facts when it was asked
     me_name = ag[me]["name"]
     assert DECIDE_LINE in dreq.prompt and "# Now (decide)" in dreq.prompt and ag[to]["soul"] in dreq.prompt
-    assert f"Would you hand {me_name} 1 of your food now if they asked for it? answer is your own choice: yes or no." in dreq.prompt
+    assert f"{me_name} asks you for 1 of your food. Do you hand it to them now? answer is your own choice: yes or no." in dreq.prompt
     assert f"You carry {g0} food and" in dreq.prompt and f"- {me_name}: affinity 0" in dreq.prompt
     assert f"{me_name} ({ag[me]['role']}) is here with you. They carry " in dreq.prompt
     assert f"Today you have given {me_name} 0 food and refused them 0 times." in dreq.prompt
@@ -94,7 +94,8 @@ def test_a_typed_ask_under_a_private_yes_moves_one_food_and_the_deal_cites_the_d
             " 1 food now. gives is food if their words ask you for food, and nothing if they don't.") in areq.prompt
     assert "Nothing else changes hands in this talk: no coin, and nothing later." in areq.prompt
     ans = next(e for e in evs if e.kind == "mind_answer")
-    assert ans.data["typed"] == {"offered": ["food", "nothing"], "held": "yes", "decided": dec.id}
+    assert ans.data["typed"] == {"offered": ["food", "nothing"], "held": "yes", "decided": dec.id,
+                                 "told": {g: prompt_hash(p) for g, p in areq.told.items()}}
     assert "offered" not in ans.data and "deal" not in ans.data
     reply = next(e for e in evs if e.kind == "reply")
     assert reply.data["gives"] == "food" and "answer" not in reply.data
@@ -220,7 +221,7 @@ def test_a_sale_has_its_own_decision_about_its_price():
     ask, buy = mind.of("decide", to)
     name = ag[me]["name"]
     assert f"{name} offers {price} coin for 1 of your food. Would you sell it to them now?" in buy.prompt
-    assert "Would you hand" in ask.prompt and "offers" not in ask.prompt
+    assert f"{name} asks you for 1 of your food. Do you hand it to them now?" in ask.prompt and "offers" not in ask.prompt
     [d] = deals(evs)
     dec = [e for e in sim.events if e.kind == "mind_decide"][-1]
     assert dec.data["move"] == "wants_to_buy_food" and dec.data["price"] == price
@@ -739,3 +740,130 @@ def test_a_spoken_world_without_the_flags_writes_engine_35s_log(monkeypatch, con
     assert any(e.kind == "deal" for e in sim.events) and sum(e.kind == "said" for e in sim.events) > 40
     digest = hashlib.sha256("".join(e.to_json() + "\n" for e in sim.events).encode()).hexdigest()
     assert digest[:16] == SPOKEN_35[(consent, seed)]
+
+
+# ---------------------------------------------------------------- after the first pilot: hear first, then the words
+# (Steering 2026-11-19 12:36Z.) Hearing inside the answer took a plain line for an ask (6 of 66); the separate hearing
+# took none. So the minds arm hears as the script arm does, and writes its words on the engine's prompt for what it
+# heard.
+class Minds(Mind):
+    """A private yes, with every answer that offers a give sent through an LLMMind that hears first."""
+
+    def __init__(self, serve, hear=True):
+        super().__init__(decide="yes")
+        self.client = Client(serve)
+        if hear:
+            self.client.hear = Hearer(self.client)
+
+    def decide(self, req):
+        if req.kind == "answer" and req.view.get("gives"):
+            self.reqs.append(req)
+            return self.client.decide(req)
+        return super().decide(req)
+
+
+def server(hear, words='{"says":"Here you are.","next":"carry_on"}'):
+    def serve(body):
+        kind = body["response_format"]["json_schema"]["name"]
+        return hear if kind == "hear" else words
+    return serve
+
+
+def test_the_engine_writes_the_prompt_for_each_thing_a_hearing_can_find():
+    mind = Mind(decide="yes", gives="food")
+    sim, me, to, ag = ready(mind)
+    typed(sim, to)
+    [areq] = mind.of("answer", to)
+    name = ag[me]["name"]
+    assert set(areq.told) == {"food", "nothing"} == set(areq.view["gives"])
+    yes = (f" You have already made up your mind about {name} today: if they are asking you for food, you hand them"
+           " 1 food now. gives is food if their words ask you for food, and nothing if they don't.")
+    told = {"food": f" {name} is asking you for food, and you have already made up your mind about them today: you"
+                    " hand them 1 food now.",
+            "nothing": f" {name} is not asking you for food, and you hand them nothing now."}
+    assert areq.prompt.count(yes) == 1 and areq.prompt.count(GIVES_ANSWER_LINE) == 1
+    for g, p in areq.told.items():
+        # the request's own prompt with the reply rule and the one sentence changed, and nothing else
+        assert p == areq.prompt.replace(GIVES_ANSWER_LINE, ANSWER_LINE).replace(yes, told[g])
+        assert "gives" not in p and p.endswith(S.SAYS_NEXT)
+        assert f"Today you have given {name} 0 food and refused them 0 times." in p
+        assert "Nothing else changes hands in this talk: no coin, and nothing later." in p
+    ans = next(e for e in sim.events if e.kind == "mind_answer" and e.actor == to)
+    assert ans.data["typed"]["told"] == {g: prompt_hash(p) for g, p in areq.told.items()}
+
+
+@pytest.mark.parametrize("mind", [Mind(decide="no"), Mind(decide_raw="garbage"), Mind(decide="yes")],
+                         ids=["no", "undecided", "yes-but-no-food"])
+def test_no_told_prompt_where_no_give_is_offered(mind):
+    sim, me, to, ag = ready(mind, food=1 if mind.private == "yes" else 4)
+    typed(sim, to)
+    [areq] = mind.of("answer", to)
+    assert areq.told is None and "gives" not in areq.view
+    ans = next(e for e in sim.events if e.kind == "mind_answer" and e.actor == to)
+    assert "told" not in ans.data["typed"]
+
+
+def test_the_minds_arm_hears_first_and_writes_its_words_to_what_it_heard():
+    mind = Minds(server('{"gives":"food"}'))
+    sim, me, to, ag = ready(mind)
+    f0 = ag[me]["inv"]["food"]
+    evs = typed(sim, to)
+    [areq] = mind.of("answer", to)
+    hear, words = mind.client.bodies
+    # the hearing: the reply rules and "# Now (answer)" only, and nothing but `gives` to write
+    assert hear["response_format"]["json_schema"]["name"] == "hear"
+    assert hear["messages"][0]["content"] == hear_prompt(areq.prompt)
+    assert hear["response_format"]["json_schema"]["schema"]["required"] == ["gives"]
+    assert ag[to]["soul"] not in hear["messages"][0]["content"]
+    # the words: the engine's prompt for what was heard, and no `gives` to write
+    assert words["messages"][0]["content"] == areq.told["food"]
+    schema = words["response_format"]["json_schema"]["schema"]
+    assert "gives" not in schema["properties"] and schema["required"] == ["says", "next"]
+    ans = next(e for e in evs if e.kind == "mind_answer")
+    assert json.loads(ans.mind["raw_output"]) == {"gives": "food", "says": "Here you are.", "next": "carry_on"}
+    assert ans.mind["sampling"]["told"] == "food" and ans.mind["sampling"]["hear"]["model"] == "hear-model"
+    reply = next(e for e in evs if e.kind == "reply")
+    assert reply.data["gives"] == "food" and reply.data["says"] == "Here you are."
+    [d] = deals(evs)
+    assert d.data["ok"] and d.data["typed"] == 1 and ag[me]["inv"]["food"] == f0 + 1
+    assert deal_violations(sim.events, 0, me) == []
+
+
+@pytest.mark.parametrize("hear", ['{"gives":"nothing"}', '{"gives":"coin"}', '{"gives":["food"]}', "garbage", "[]",
+                                  RuntimeError("down"), ValueError("bad")],
+                         ids=["nothing", "coin", "list", "garbage", "array", "down", "bad"])
+def test_anything_but_a_heard_food_writes_to_nothing_and_moves_nothing(hear):
+    # the words try to give anyway: a `gives` of their own is dropped
+    mind = Minds(server(hear, '{"gives":"food","says":"Take it.","next":"stay"}'))
+    sim, me, to, ag = ready(mind)
+    f0 = ag[me]["inv"]["food"]
+    evs = typed(sim, to, "Lovely morning.")
+    [areq] = mind.of("answer", to)
+    assert mind.client.bodies[-1]["messages"][0]["content"] == areq.told["nothing"]
+    ans = next(e for e in evs if e.kind == "mind_answer")
+    assert json.loads(ans.mind["raw_output"])["gives"] == "nothing" and ans.mind["sampling"]["told"] == "nothing"
+    assert ("error" in ans.mind["sampling"]["hear"]) == (isinstance(hear, Exception) or hear == "garbage")
+    assert next(e for e in evs if e.kind == "reply").data["gives"] == "nothing"
+    assert deals(evs) == [] and ag[me]["inv"]["food"] <= f0
+
+
+@pytest.mark.parametrize("words", ["garbage", "[]", '{"says":"cut'])
+def test_words_that_are_no_reply_move_nothing_even_after_a_heard_ask(words):
+    mind = Minds(server('{"gives":"food"}', words))
+    sim, me, to, ag = ready(mind)
+    f0 = ag[me]["inv"]["food"]
+    evs = typed(sim, to)
+    ans = next(e for e in evs if e.kind == "mind_answer")
+    assert ans.mind["raw_output"] == words
+    assert deals(evs) == [] and ag[me]["inv"]["food"] <= f0
+
+
+def test_a_model_mind_with_no_hearer_answers_in_one_call_as_before():
+    mind = Minds(lambda body: '{"gives":"food","says":"Here.","next":"carry_on"}', hear=False)
+    sim, me, to, ag = ready(mind)
+    evs = typed(sim, to)
+    [areq] = mind.of("answer", to)
+    [body] = mind.client.bodies
+    assert body["messages"][0]["content"] == areq.prompt
+    assert body["response_format"]["json_schema"]["schema"]["required"][0] == "gives"
+    assert [d.data["ok"] for d in deals(evs)] == [True]

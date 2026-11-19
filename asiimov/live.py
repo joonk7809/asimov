@@ -1121,6 +1121,10 @@ def main(argv=None):
         raise SystemExit(f"{args.out} was started with consent {consent!r}; --consent applies to a new world")
     if args.typed and not params["typed"]:
         raise SystemExit(f"{args.out} was started without --typed; it applies to a new world")
+    if kind == "llm" and params["typed"]:  # the minds arm hears as the script arm does: its own call, on its own model
+        from .llm import Hearer
+        mind.hear = Hearer(mind)
+        print(f"hearing: {mind.hear.model}", file=sys.stderr, flush=True)
     if args.hear_url:
         if not params["typed"]:
             raise SystemExit("--hear-url is for a --typed world: nothing is heard where typed lines move nothing")

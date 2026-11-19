@@ -200,12 +200,27 @@ def typed_choice(held: str | None, why: str | None, name: str, given: int, refus
     return text + talk_record_line(name, given, refused) + " Nothing else changes hands in this talk: no coin, and nothing later."
 
 
+def typed_told(gives: str, name: str, given: int, refused: int) -> str:
+    """text-1, after the first pilot (Steering 2026-11-19 12:36Z): typed_choice's part of the tail once the line has
+    been heard (llm.Hearer), for a mind that writes its words after the hearing. What it does now is stated, so the
+    words are written to the act and choose nothing. Hearing inside the answer took one plain line for an ask (6 of
+    66); the separate hearing took none."""
+    if gives == "food":
+        text = (f" {name} is asking you for food, and you have already made up your mind about them today: you hand"
+                " them 1 food now.")
+    else:
+        text = f" {name} is not asking you for food, and you hand them nothing now."
+    return text + talk_record_line(name, given, refused) + " Nothing else changes hands in this talk: no coin, and nothing later."
+
+
 def decide_ask(name: str, move: str, price) -> str:
-    """The private decision's question (text-1). Its wording is the engine's; the speaker's words are never near it."""
+    """The private decision's question (text-1). Its wording is the engine's; the speaker's words are never near it.
+    The ask is stated as it would stand, not as an "if" (Steering 2026-11-19 12:36Z: asked "would you ... if they
+    asked for it", 32B said yes to .02 of 240). The answer is used only once a line has been heard as an ask."""
     if move == "wants_to_buy_food":
         return (f" {name} offers {price} coin for 1 of your food. Would you sell it to them now?"
                 " answer is your own choice: yes or no.")
-    return f" Would you hand {name} 1 of your food now if they asked for it? answer is your own choice: yes or no."
+    return f" {name} asks you for 1 of your food. Do you hand it to them now? answer is your own choice: yes or no."
 
 
 ID_REF = re.compile(r"#(\d+)\b")
@@ -537,7 +552,7 @@ class Sim:
             sp = agents[occ["who"]]
             fam = ", ".join(agents[m]["name"] for m in self.state["families"][sp["family"]]["members"]
                             if m != sp["id"])
-            move, price, ask, choice = occ.get("move"), occ.get("price"), "", ""
+            move, price, ask, choice, told = occ.get("move"), occ.get("price"), "", "", {}
             if move:  # talk-1: what is offered is decided here, from the state the prompt shows
                 answers, why, roll = self._talk_offer(a, sp, move, price)
                 view["answers"], view["deal"] = answers, {"move": move, **({"price": price} if price is not None else {}),
@@ -551,9 +566,12 @@ class Sim:
                 held = None if why is not None else self._talk_decision(a, sp["id"], TYPED_MOVE)
                 view["typed"] = ({"withheld": why} if why is not None else {"withheld": "undecided"} if held is None
                                  else {"held": held["answer"], "decided": held["event"]})
+                rec = self._talk_record(a, sp["id"])
                 if held is not None and held["answer"] == "yes":
                     view["gives"] = ["food", "nothing"]
-                rec = self._talk_record(a, sp["id"])
+                    told = {g: answer_tail(sp["name"], occ["detail"], fam, "", typed_told(g, sp["name"], rec["yes"],
+                                                                                         rec["no"]))
+                            for g in view["gives"]}
                 choice = typed_choice(held and held["answer"], TALK_WHY[why] if why is not None else None, sp["name"],
                                       rec["yes"], rec["no"])
             tail = answer_tail(sp["name"], occ["detail"], fam, ask, choice)
@@ -566,9 +584,16 @@ class Sim:
         prompt, counts = assemble_prompt(a, self.state, kind, situation, actions=actions,
                                          move=kind == "answer" and bool(view.get("answers")),
                                          gives=kind == "answer" and bool(view.get("gives")))
+        if kind == "answer" and told:  # text-1: the same prompt with each thing a hearing can find stated in the tail
+            # (each fits "Here:" to its own room, on a copy: what the request's own prompt showed stays the view's)
+            told = {g: assemble_prompt(a, self.state, kind, self._situation(a, json.loads(json.dumps(view)), kind, t))[0]
+                    for g, t in told.items()}
+            view["typed"]["told"] = {g: prompt_hash(p) for g, p in told.items()}
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
         req = MindRequest(kind, a["id"], self.state["tick"], prompt, prompt_hash(prompt), view)
+        if kind == "answer" and told:
+            req.told = told
         self.pending[a["id"]] = (req, list(parents), sum(counts.values()), apply)
 
     def _order(self, ids) -> list[int]:

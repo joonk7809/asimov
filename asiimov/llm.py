@@ -122,6 +122,11 @@ class LLMMind:
         self.timeout, self.retries, self.structured = timeout, retries, structured
         self.api_key = api_key
         self.calls: list[dict] = []  # {kind, latency_s, prompt_tokens, completion_tokens}
+        # text-1, after the first pilot (Steering 2026-11-19 12:36Z): hear(req) -> ("food" | "nothing" | None, how), a
+        # Hearer on this same model. Set, an answer that offers a typed give is two calls: the hearing, with nothing of
+        # the mind, and then the words, on the engine's prompt for what was heard (req.told). None: one call, `gives`
+        # first in the answer's own reply.
+        self.hear = None
 
     def body(self, req: MindRequest) -> dict:
         b = {
@@ -167,6 +172,30 @@ class LLMMind:
         raise RuntimeError(f"LLM server unreachable after {self.retries + 1} tries: {last}")
 
     def decide(self, req: MindRequest) -> MindReply:
+        if req.kind == "answer" and self.hear is not None and req.view.get("gives") and req.told:
+            return self._heard(req)
+        return self._ask(req)
+
+    def _heard(self, req: MindRequest) -> MindReply:
+        """Hear, then answer: the reply is the words' own JSON with what was heard put first, as one output. Anything
+        but a heard "food" is nothing, a `gives` in the words' own JSON is dropped, and words that aren't a JSON
+        object go back as they came, so the world reads no `gives` from them."""
+        gives, how = self.hear(req)
+        gives = gives if gives in req.view["gives"] and gives in req.told else "nothing"
+        prompt = req.told[gives]
+        reply = self._ask(MindRequest("answer", req.agent_id, req.tick, prompt, prompt_hash(prompt),
+                                      {k: v for k, v in req.view.items() if k != "gives"}, seed=req.seed))
+        try:
+            out = json.loads(reply.raw_output)
+        except ValueError:
+            out = None
+        if not isinstance(out, dict):
+            return MindReply(reply.raw_output, reply.model, {**reply.sampling, "hear": how, "told": gives},
+                             reply.finish_reason)
+        raw = json.dumps({"gives": gives, **{k: v for k, v in out.items() if k != "gives"}})  # only the hearing's
+        return MindReply(raw, reply.model, {**reply.sampling, "hear": how, "told": gives}, reply.finish_reason)
+
+    def _ask(self, req: MindRequest) -> MindReply:
         body = self.body(req)
         t0 = time.monotonic()
         resp = self.post("/v1/chat/completions", body)
