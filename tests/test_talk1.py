@@ -230,6 +230,20 @@ def test_under_consent_nature_the_roll_answers_and_only_its_answer_is_offered():
     assert seen == {"yes", "no"}
 
 
+def test_under_nature_a_failed_reply_keeps_the_rolled_answer():
+    """Review of #96: one answer offered is the answer; a reply that's broken, or says otherwise, only fails to word it."""
+    for seed in range(1, 30):
+        mind = Says(raw="not json")
+        sim, me, to = world(mind, seed=seed)
+        hold(sim, me, to)
+        sim.state["agents"][to]["inv"]["food"] = 4
+        evs = say(sim, to)
+        if next(e for e in evs if e.kind == "mind_answer").data["offered"] == ["yes"]:
+            assert next(e for e in evs if e.kind == "reply").data["answer"] == "yes" and len(deals(evs)) == 1
+            return
+    raise AssertionError("no rolled yes")
+
+
 def test_a_line_without_a_chip_is_say3_and_never_moves_goods_whatever_the_mind_says():
     mind = Says(raw=json.dumps({"answer": "yes", "heard": "asks_food", "says": "Here, take two.", "next": "stay",
                                 "food": 2}))

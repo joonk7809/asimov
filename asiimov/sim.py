@@ -2336,9 +2336,11 @@ class Sim:
         yes or no, and an offered yes moves 1 food after the words (_settle_talk); no other answer moves goods."""
         offered = self.events[eid].data.get("offered")
         answer = None
-        if offered is not None:  # an answer outside what was offered is read as no, as `next` is read as carry_on
+        if offered is not None:  # an answer outside what was offered is read as no, as `next` is read as carry_on;
+            # one answer offered (consent nature's roll, or a withheld yes) is the answer, whatever the reply holds:
+            # the mind only words it (review of #96: a failed reply lost a rolled yes and counted a no)
             answer = (out or {}).get("answer")
-            answer = answer if isinstance(answer, str) and answer in offered else "no"
+            answer = offered[0] if len(offered) == 1 else answer if isinstance(answer, str) and answer in offered else "no"
         self._reply(a, occ, eid, out, answer)
         if answer is not None:
             self._settle_talk(a, occ, eid, answer, self.events[eid].data["deal"].get("withheld"))

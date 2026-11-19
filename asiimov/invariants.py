@@ -75,7 +75,8 @@ def presence_violations(events: list[Event], start: int, where: dict) -> list[st
 def deal_violations(events: list[Event], start: int = 0, possessed=None) -> list[str]:
     """talk-1 (spec §3): a `deal` that moved goods cites the listener's own `mind_answer`, whose request offered
     yes and whose recorded reply says yes, and the player's `said` line that carried the move; it moves exactly
-    1 food, from a villager who is never the possessed body. A failed deal moves nothing, so cites only."""
+    1 food, from a villager who is never the possessed body. (With yes the only answer offered, consent nature's
+    roll, the reply only words it.) A failed deal moves nothing, so cites only."""
     import json
     out = []
     for e in events[start:]:
@@ -95,7 +96,8 @@ def deal_violations(events: list[Event], start: int = 0, possessed=None) -> list
                 said_yes = json.loads(mind.mind["raw_output"]).get("answer") == "yes"
             except (ValueError, AttributeError, TypeError, RecursionError):
                 said_yes = False
-            if not (said_yes and "yes" in mind.data.get("offered", [])):
+            offered = mind.data.get("offered", [])
+            if not ("yes" in offered and (said_yes or offered == ["yes"])):  # one answer offered is the answer
                 out.append(f"event {e.id}: deal on an answer that wasn't an offered yes")
     return out
 

@@ -225,3 +225,46 @@ def test_a_long_voiced_reply_is_clipped_at_a_word_on_the_script_arm():
     sim.step()
     got = next(e for e in sim.events if e.kind == "reply").data["says"]
     assert len(got) <= 140 and got.endswith("…") and long.startswith(got[:-1]) and long[len(got) - 1] == " "
+
+
+@pytest.mark.parametrize("roll_yes", [True, False])
+@pytest.mark.parametrize("words", [None, "Right you are."])
+def test_on_a_chip_line_the_voice_is_told_the_stubs_answer_and_a_fallback_says_it(roll_yes, words):
+    """Review of #96: the script arm voiced a chip answer blind ("I've got things to do." over a yes that handed
+    food over). The voice now gets the answer and what moved; with no words, the stub's own sentence for it."""
+    from tests.test_talk1 import world, hold, say as say1
+    voice = Voice(says=words)
+    for seed in range(1, 30):
+        mind = ScriptMind(voice)
+        sim, me, to = world(mind, seed=seed)
+        hold(sim, me, to)
+        sim.state["agents"][to]["inv"]["food"] = 4
+        voice.asked.clear()
+        evs = say1(sim, to, "Could you spare some food?")
+        m = next(e for e in evs if e.kind == "mind_answer")
+        if (m.data["offered"] == ["yes"]) != roll_yes:
+            continue
+        reply = next(e for e in evs if e.kind == "reply")
+        _, _, facts = voice.asked[-1]
+        if roll_yes:
+            assert facts["deal"] == "yes, and they hand them 1 food now" and any(e.kind == "deal" for e in evs)
+        else:
+            assert facts["deal"] == "no, and nothing changes hands" and not any(e.kind == "deal" for e in evs)
+        want = words or ("Here, take one." if roll_yes else "I can't spare any.")
+        assert reply.data["says"] == want and reply.data["answer"] == ("yes" if roll_yes else "no")
+        return
+    raise AssertionError("no seed rolled that answer")
+
+
+def test_the_voices_prompt_states_the_answer_on_a_chip_line_and_only_there():
+    n = narrate.LLMNarrator.__new__(narrate.LLMNarrator)
+    facts = {"place": "plaza", "hour": 9, "role": "guard", "price": 6}
+    n.client = SeqClient("Here you go.")
+    n.reply("Spare some food?", "end the talk and go on with their day",
+            {**facts, "deal": "yes, and they hand them 1 food now"})
+    p = n.client.prompts[0]
+    assert "their answer, already decided, is yes, and they hand them 1 food now" in p
+    assert "Goods don't change hands in talk" not in p
+    n.client = SeqClient("Nice day.")
+    n.reply("Hello", "end the talk and go on with their day", facts)
+    assert "Goods don't change hands in talk" in n.client.prompts[0] and "already decided, is" not in n.client.prompts[0]

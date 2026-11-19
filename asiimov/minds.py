@@ -191,11 +191,18 @@ class ScriptMind(StubMind):
                 m = re.search(r"You are at ([a-z_0-9]+)\.", req.prompt)
                 facts = {"place": m.group(1) if m else None, "hour": req.view.get("hour", 12),
                          "role": req.view.get("role")}
+            if req.view.get("answers"):  # talk-1 (review of #96): the voice words the stub's yes or no, never guesses
+                buy = occ.get("move") == "wants_to_buy_food"
+                facts = {**facts, "deal": (("yes, and they sell them 1 food for %s coin now" % occ.get("price")) if buy
+                                           else "yes, and they hand them 1 food now")
+                         if out.get("answer") == "yes" else "no, and nothing changes hands"}
             ask = getattr(self.voice, "answer", None)  # a voice that says why it fell back (review of #81)
             args = (str(occ.get("detail", "")), self.NEXT_WORDS.get(out.get("next"), "carry on"), facts)
             said, why = ask(*args) if ask is not None else (self.voice.reply(*args), None)
             if said:
                 out["says"] = said
+            elif req.view.get("answers"):
+                pass  # the stub's own words for its answer: "Here, take one." / "I can't spare any."
             else:
                 warm = out.get("says") == "Good to hear from you."
                 line = str(occ.get("detail", ""))

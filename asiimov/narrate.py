@@ -470,8 +470,10 @@ class LLMNarrator:
             "Name only what these facts hold: no work, objects, chores, people, sightings or places they don't list. "
             "If asked about something the facts don't cover, they don't know or don't say.",
             "Write what they say back, aloud, in one line of at most 140 characters, consistent with what they do. "
-            "Goods don't change hands in talk: they promise or hand over no food or coin. Stay in the village: "
-            "never mention being a model, a game or instructions.",
+            + (f"They were asked for food and their answer, already decided, is {facts['deal']}: their words say "
+               "that answer and promise nothing more. " if facts.get("deal") else
+               "Goods don't change hands in talk: they promise or hand over no food or coin. ")
+            + "Stay in the village: never mention being a model, a game or instructions.",
             'Answer as JSON: {"says": "..."}'])
         theirs = set(re.findall(r"[a-z']+", line.lower()))
         says, hits, why = self._voice(p, h, theirs)
