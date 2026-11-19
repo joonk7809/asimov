@@ -22,6 +22,9 @@ class MindRequest:
     seed: int | None = None  # sampling seed; None lets the mind derive one from the prompt
     attempt: int = 0   # 1 for the engine's one retry of a cut-off reflection (T21); 2 for a private decision (text-1)
     frequency_penalty_milli: int = 0  # thousandths; the T21 retry asks at 1000 (integers in the core)
+    # text-1: an answer that offers a typed give also carries the engine's prompt for each thing a hearing can find
+    # ({"food": ..., "nothing": ...}), for a mind that hears first and then writes its words to what it heard.
+    told: dict | None = None
 
 
 @dataclass

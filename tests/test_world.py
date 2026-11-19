@@ -212,7 +212,8 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "34": "7a0862cc1928d90fd89ead9e29f37b49be5f42a485ffed890865625a77c064de",  # talk-1 (#96), an ask with a chip; no say: only the engine field differs
           "talk-1g": "3682d85d16595b3669729027e7243f23a5af50095fe478074fdd4b239e21f1f4",  # talk-1g: the injection guard on chip lines, on 34, before its number; no say: only the engine field differs
           "35": "bb18713cb07e55973a6dd3cd1fc1783c10d87e43cbd3cef3f68632fec9d12de0",  # talk-1g (#97), the injection guard; no say: only the engine field differs
-          "text-1": "a1a1cef15b280cd20c28f256310021048dc20a9b5cc3a9d871f788baf02054cb"}  # text-1: a private decision and a typed line's give, on 35, before its number; no say: only the engine field differs
+          "text-1": "a1a1cef15b280cd20c28f256310021048dc20a9b5cc3a9d871f788baf02054cb",  # text-1: a private decision and a typed line's give, on 35, before its number; no say: only the engine field differs
+          "apart-1": "f44c05e0c7390243a435a973ea22852b19cfe2b15983a70e12621e4255810e5c"}  # apart-1: no yes offered in talk once the two have parted, on text-1, before its number; no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():

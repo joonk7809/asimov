@@ -125,13 +125,26 @@ ANSWERS = ("yes", "no")
 # Why only no is offered (spec §2.2), as the prompt says it; logged on the mind event's deal as the key.
 TALK_WHY = {"food": "you have no food to spare", "coin": "they don't have {price} coin",
             "terms": "you are on bad terms with them", "said_yes": "you already said yes to them today",
-            "wait": "you turned them down not long ago"}
+            "wait": "you turned them down not long ago",
+            # apart-1 (Steering 2026-11-19 12:19Z): the two are no longer at one place when the answer is asked for
+            # (a work or avoid override outranks the listening hold, so a listener can walk off first). A yes
+            # there used to be worded and then refused by the settle ("not together"): words that hand over food
+            # the engine never moves. Now no yes is offered, and the prompt says why, as a fact of the world.
+            "apart": "they are not with you any more"}
 CONSENTS = ("nature", "mind", "private")
 # The limits (Steering §11.2), genesis parameters under population["stakes"]["talk"]. Recorded only when a world
 # sets one (a 32B session's consent "mind"), so a default world's genesis, and its golden, are say-3's.
 # consent nature: today's roll answers, and the prompt offers only that answer; mind: the mind picks yes or no.
 TALK_DEFAULTS = {"consent": "nature", "min_food": 2, "min_affinity": -300, "yes_per_day": 1, "yes_per_day_kin": 2,
-                 "no_wait_ticks": 12, "typed": 0, "hungry_at": 550}
+                 "no_wait_ticks": 12, "typed": 0, "hungry_at": 550, "think": 0}
+# think-1 (joon 2026-11-19 20:39Z/20:47Z; Steering 20:50Z): with consent private, think 1 or 2 has the private decision
+#   think first, in its own character: its reply is {"thought", "answer"}, the thought written before the answer, in
+#   one short sentence (1) or two or three (2). The engine reads `answer` and nothing else. The thought is in the
+#   mind event's recorded output and nowhere else: not in the listener's state, its memory or any later prompt. The
+#   server's own thinking budget wasn't used: vLLM 0.19 didn't hold it for Qwen3-32B (loop 2x2, C5 void), and a
+#   maxLength in the grammar decodes ~15x slower (llm.SCHEMAS), so the length is asked for in words and max_tokens
+#   bounds it; a reply cut there has no answer, and is a no.
+THINK_ASK = {1: "one short sentence", 2: "two or three sentences"}
 # text-1 (plan/text-1-build-spec.md; Steering 2026-11-19 07:40Z). A crafted line got a hand .79 against .40 for honest
 # asks when one call both read the words and chose (talk-1b), so the choice moves to a call that never sees them.
 # consent private: when the player's line lands, the listener's mind is asked `decide`, from engine-written text
@@ -200,12 +213,28 @@ def typed_choice(held: str | None, why: str | None, name: str, given: int, refus
     return text + talk_record_line(name, given, refused) + " Nothing else changes hands in this talk: no coin, and nothing later."
 
 
-def decide_ask(name: str, move: str, price) -> str:
-    """The private decision's question (text-1). Its wording is the engine's; the speaker's words are never near it."""
+def typed_told(gives: str, name: str, given: int, refused: int) -> str:
+    """text-1, after the first pilot (Steering 2026-11-19 12:36Z): typed_choice's part of the tail once the line has
+    been heard (llm.Hearer), for a mind that writes its words after the hearing. What it does now is stated, so the
+    words are written to the act and choose nothing. Hearing inside the answer took one plain line for an ask (6 of
+    66); the separate hearing took none."""
+    if gives == "food":
+        text = (f" {name} is asking you for food, and you have already made up your mind about them today: you hand"
+                " them 1 food now.")
+    else:
+        text = f" {name} is not asking you for food, and you hand them nothing now."
+    return text + talk_record_line(name, given, refused) + " Nothing else changes hands in this talk: no coin, and nothing later."
+
+
+def decide_ask(name: str, move: str, price, think: int = 0) -> str:
+    """The private decision's question (text-1). Its wording is the engine's; the speaker's words are never near it.
+    The ask is stated as it would stand, not as an "if" (Steering 2026-11-19 12:36Z: asked "would you ... if they
+    asked for it", 32B said yes to .02 of 240). The answer is used only once a line has been heard as an ask."""
+    first = (f" thought is what goes through your mind first, in {THINK_ASK[think]}. Nobody hears it." if think else "")
     if move == "wants_to_buy_food":
-        return (f" {name} offers {price} coin for 1 of your food. Would you sell it to them now?"
+        return (f" {name} offers {price} coin for 1 of your food. Would you sell it to them now?{first}"
                 " answer is your own choice: yes or no.")
-    return f" Would you hand {name} 1 of your food now if they asked for it? answer is your own choice: yes or no."
+    return f" {name} asks you for 1 of your food. Do you hand it to them now?{first} answer is your own choice: yes or no."
 
 
 ID_REF = re.compile(r"#(\d+)\b")
@@ -277,7 +306,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "text-1"  # text-1: a private decision per listener and day, and a typed line's give on it; on 35, before its number
+ENGINE_VERSION = "apart-1"  # apart-1: no yes is offered in talk once the two have parted; on text-1, before its number
 # 35 = talk-1g (#97): the injection guard sentence on chip lines (Steering 02:17Z); on 34 = talk-1 (#96)
 # 33 = say-3c (#88): an over-long reply is clipped at a sentence or word, not mid-word; on 32
 # 32 = say-3b (#85): answer prompts name people, leave = avoid them, ids said aloud become names; on 31.
@@ -401,6 +430,9 @@ class Sim:
                 or not _is_int(talk["hungry_at"]) or (talk["consent"] == "mind" and talk["typed"]):
             # mind + typed would be talk-1b: the mind that reads the words also chooses, which failed twice
             raise ValueError(f"talk: consent is one of {CONSENTS}, typed is 0 or 1, and typed never goes with mind")
+        if not (_is_int(talk["think"]) and talk["think"] in (0, *THINK_ASK)) \
+                or (talk["think"] and talk["consent"] != "private"):
+            raise ValueError("talk: think is 0, 1 or 2, and only the private decision thinks (consent private)")
         if "sick" in self.state.get("stakes", {}):  # who is sick until when, who is immune, the source events (B5)
             self.state["sick"] = {"ill": {}, "immune": {}, "src": {}, "asked": {}}
             if "neighbor" in self.state["stakes"]:  # who knows of whose sickness, and who carries word (neighbor-1)
@@ -537,7 +569,7 @@ class Sim:
             sp = agents[occ["who"]]
             fam = ", ".join(agents[m]["name"] for m in self.state["families"][sp["family"]]["members"]
                             if m != sp["id"])
-            move, price, ask, choice = occ.get("move"), occ.get("price"), "", ""
+            move, price, ask, choice, told = occ.get("move"), occ.get("price"), "", "", {}
             if move:  # talk-1: what is offered is decided here, from the state the prompt shows
                 answers, why, roll = self._talk_offer(a, sp, move, price)
                 view["answers"], view["deal"] = answers, {"move": move, **({"price": price} if price is not None else {}),
@@ -551,9 +583,12 @@ class Sim:
                 held = None if why is not None else self._talk_decision(a, sp["id"], TYPED_MOVE)
                 view["typed"] = ({"withheld": why} if why is not None else {"withheld": "undecided"} if held is None
                                  else {"held": held["answer"], "decided": held["event"]})
+                rec = self._talk_record(a, sp["id"])
                 if held is not None and held["answer"] == "yes":
                     view["gives"] = ["food", "nothing"]
-                rec = self._talk_record(a, sp["id"])
+                    told = {g: answer_tail(sp["name"], occ["detail"], fam, "", typed_told(g, sp["name"], rec["yes"],
+                                                                                         rec["no"]))
+                            for g in view["gives"]}
                 choice = typed_choice(held and held["answer"], TALK_WHY[why] if why is not None else None, sp["name"],
                                       rec["yes"], rec["no"])
             tail = answer_tail(sp["name"], occ["detail"], fam, ask, choice)
@@ -566,9 +601,16 @@ class Sim:
         prompt, counts = assemble_prompt(a, self.state, kind, situation, actions=actions,
                                          move=kind == "answer" and bool(view.get("answers")),
                                          gives=kind == "answer" and bool(view.get("gives")))
+        if kind == "answer" and told:  # text-1: the same prompt with each thing a hearing can find stated in the tail
+            # (each fits "Here:" to its own room, on a copy: what the request's own prompt showed stays the view's)
+            told = {g: assemble_prompt(a, self.state, kind, self._situation(a, json.loads(json.dumps(view)), kind, t))[0]
+                    for g, t in told.items()}
+            view["typed"]["told"] = {g: prompt_hash(p) for g, p in told.items()}
         # The mind gets a copy: whatever it does to the view must not reach world state.
         view = json.loads(json.dumps(view))
         req = MindRequest(kind, a["id"], self.state["tick"], prompt, prompt_hash(prompt), view)
+        if kind == "answer" and told:
+            req.told = told
         self.pending[a["id"]] = (req, list(parents), sum(counts.values()), apply)
 
     def _order(self, ids) -> list[int]:
@@ -2100,6 +2142,8 @@ class Sim:
         rec = self._talk_record(t, sp["id"])
         kin = sp["id"] in self.state["families"][t["family"]]["members"]
         affinity = t["relationships"].get(str(sp["id"]), {}).get("affinity", 0)
+        if not self._together(t, sp):  # apart-1: nothing can change hands between two who aren't at one place
+            return "apart"
         if t["inv"]["food"] < p["min_food"]:
             return "food"
         if action == "buy_from" and sp["inv"]["coin"] < price:
@@ -2173,8 +2217,9 @@ class Sim:
                      f"Hunger {t['needs']['hunger']}/1000. You carry {t['inv']['food']} food and {t['inv']['coin']} coin. "
                      f"{sp['name']} ({sp['role']}{', your family' if kin else ''}) is here with you. "
                      f"They carry {'food' if facts[0] else 'no food'}." + (" They look hungry." if facts[1] else "")
-                     + talk_record_line(sp["name"], rec["yes"], rec["no"]) + decide_ask(sp["name"], move, price))
-        return assemble_decide(t, known, situation)
+                     + talk_record_line(sp["name"], rec["yes"], rec["no"])
+                     + decide_ask(sp["name"], move, price, self._talk_params()["think"]))
+        return assemble_decide(t, known, situation, think=bool(self._talk_params()["think"]))
 
     def _talk_decide(self, t: dict, sp: dict, sid: int, move: str | None, price):
         """text-1: when the player's line `sid` lands on `t` in a held world, decide once for the day whether `t`
@@ -2196,7 +2241,8 @@ class Sim:
                 return
             redo = 1
         data = {"with": sp["id"], "move": move, **({"price": price} if price is not None else {}), "facts": facts,
-                **({"redo": 1} if redo else {})}
+                **({"redo": 1} if redo else {}),
+                **({"think": p["think"]} if p["think"] and p["consent"] == "private" else {})}
         hold = lambda eid, answer: self._talk_hold(t, sp["id"], move, price, answer, eid, facts, redo)
         if p["consent"] != "private":  # nature: the roll is the decision (the pair's script arm, ruling (e))
             stream, idx, roll = self._ask_roll(f"talk:{t['id']}:{sp['id']}")
@@ -2233,7 +2279,9 @@ class Sim:
         if answer == "no":
             # Steering 2026-11-19 01:03Z: a no forced by what can't be done (food, coin) is no refusal; one forced
             # inside the wait restarts it but isn't counted; a chosen no, bad terms and a second ask in a day are.
-            if withheld in ("food", "coin", "undecided"):  # undecided (text-1): no decision was held, so none refused
+            # undecided (text-1): no decision was held, so none refused. apart (apart-1): they had parted, so
+            # nothing was refused either, and a held decision stays for when they next stand together.
+            if withheld in ("food", "coin", "undecided", "apart"):
                 return
             self._refused_food(sp, t, action, r)
             rec["last_no"] = tick

@@ -41,6 +41,8 @@ MOVE_ANSWER_LINE = 'For kind=answer: {"answer":"yes|no","says":"...","next":"sta
 # it would (its private yes); `gives` only says whether the words ask for food. And the private decision's own kind.
 GIVES_ANSWER_LINE = 'For kind=answer: {"gives":"food|nothing","says":"...","next":"stay|carry_on|leave"}'
 DECIDE_LINE = 'For kind=decide: {"answer":"yes|no"}'
+# think-1: the private decision thinks first; the engine reads only `answer`.
+THINK_DECIDE_LINE = 'For kind=decide: {"thought":"...","answer":"yes|no"}'
 DELIBERATE_LINE = ('For kind=deliberate: {"action":"' + E9_ACTIONS + '","target":ID_or_null,"reason":"...",'
                    '"goal":"..." or "","then":[{"do":"...","target":ID_or_null}]}')
 assert SCHEMA.count(DELIBERATE_LINE) == 1
@@ -268,12 +270,13 @@ def render_files(agent: dict, state: dict, named: bool = False) -> dict[str, str
     }
 
 
-def assemble_decide(agent: dict, known: str, situation: str) -> tuple[str, dict]:
+def assemble_decide(agent: dict, known: str, situation: str, think: bool = False) -> tuple[str, dict]:
     """text-1: the private decision's prompt, from text the engine wrote and nothing else: the SCHEMA with the decide
     line, the soul, the one "People I know" line for the speaker, and the situation. No Today, Earlier, core memories,
     beliefs, plan or intent: those can hold a quoted line or words a mind wrote, and this prompt must be the same
     bytes whatever anyone said (Steering 2026-11-19 07:34Z, point 6)."""
-    sections = {"schema": SCHEMA.replace(DELIBERATE_LINE, DECIDE_LINE, 1), "soul": agent["soul"],
+    line = THINK_DECIDE_LINE if think else DECIDE_LINE
+    sections = {"schema": SCHEMA.replace(DELIBERATE_LINE, line, 1), "soul": agent["soul"],
                 "relationships": "# People I know\n" + known, "situation": f"# Now (decide)\n{situation}"}
     return "\n\n".join(sections.values()), {name: tokens(text) for name, text in sections.items()}
 
