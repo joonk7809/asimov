@@ -211,7 +211,9 @@ GOLDEN = {"1": "fa6d1e9898c97fe570590e1ad322d952375b2941c4828001b5ea933c6e4d369b
           "talk-1": "e21c7dfef34ffdb72df958131890a3fe4e5041f0335a9fe3d261b53e44c2a370",  # talk-1: an ask with a chip, a yes moves food, on 33, before its number; no say: only the engine field differs
           "34": "7a0862cc1928d90fd89ead9e29f37b49be5f42a485ffed890865625a77c064de",  # talk-1 (#96), an ask with a chip; no say: only the engine field differs
           "talk-1g": "3682d85d16595b3669729027e7243f23a5af50095fe478074fdd4b239e21f1f4",  # talk-1g: the injection guard on chip lines, on 34, before its number; no say: only the engine field differs
-          "35": "bb18713cb07e55973a6dd3cd1fc1783c10d87e43cbd3cef3f68632fec9d12de0"}  # talk-1g (#97), the injection guard; no say: only the engine field differs
+          "35": "bb18713cb07e55973a6dd3cd1fc1783c10d87e43cbd3cef3f68632fec9d12de0",
+          "pace-1": "061d34b0c2d8ea7c4c33c89a9495a9060285c37188a758923d9ee6797f12442b",  # pace-1: plan/reflect wait a tick for a player's answer, on 35, before its number; no say: only the engine field differs
+          "36": "5300954a78dcdc78cf3f08227dec4738e738c5c8621235ff500a142a64d74c56"}  # pace-1 (#99), plan/reflect wait a tick for a player's answer; no say: only the engine field differs  # talk-1g (#97), the injection guard; no say: only the engine field differs
 
 
 def test_log_changes_bump_the_engine_version():
