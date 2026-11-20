@@ -796,3 +796,18 @@ def test_star_imports_walks_path_order_local_clocks_environment_and_thread_ids_a
 
 def test_dunder_true_division_is_flagged():
     assert [f.line for f in found("a = x.__truediv__(y)\nb = x.__floordiv__(y)\n", "int")] == [1]
+
+
+@pytest.mark.parametrize("stmt", ["import simhelpers\n", "try:\n    import simhelpers as _sh\nexcept ImportError:\n    _sh = None\n",
+                                  "def _late():\n    from simhelpers import half\n    return half\n", "import numpy.random\n"])
+def test_an_engine_import_from_outside_the_package_and_stdlib_is_a_finding(tmp_path, stmt):
+    pkg = _copy(tmp_path)
+    (pkg / "events.py").write_text((pkg / "events.py").read_text() + "\n" + stmt)
+    found = [x for x in lint.lint_package(str(pkg)) if x.rule == "core"]
+    assert len(found) == 1 and found[0].path.endswith("events.py"), found
+
+
+def test_stdlib_and_package_imports_in_the_engine_are_not_foreign(tmp_path):
+    pkg = _copy(tmp_path)
+    (pkg / "events.py").write_text((pkg / "events.py").read_text() + "\nimport json\nfrom asiimov import rng as _r\n")
+    assert lint.foreign_imports(str(pkg)) == []

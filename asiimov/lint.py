@@ -887,8 +887,30 @@ def unclassed(pkg: str = PKG) -> list[Finding]:
     return out
 
 
+def foreign_imports(pkg: str = PKG) -> list[Finding]:
+    """An engine file importing anything but the standard library or the package itself: such a module (a
+    repo-root helper, a third-party library) would run on the replay path without being linted. Imports
+    inside functions or try/except count too."""
+    out, top, rel = [], os.path.basename(pkg), os.path.dirname(pkg)
+    for name in core_files(pkg):
+        p = os.path.join(pkg, name)
+        for node in ast.walk(_parse(p)):
+            if isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                mods = [node.module]
+            else:
+                continue
+            for m in mods:
+                root = m.split(".")[0]
+                if root != top and root not in sys.stdlib_module_names:
+                    out.append(Finding(os.path.relpath(p, rel), node.lineno, "core",
+                                       f"the engine imports {m}, which is neither stdlib nor {top}"))
+    return out
+
+
 def lint_package(pkg: str = PKG) -> list[Finding]:
-    out = set(unclassed(pkg))
+    out = set(unclassed(pkg)) | set(foreign_imports(pkg))
     rel = os.path.dirname(pkg)
     core = core_files(pkg)
 
