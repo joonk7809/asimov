@@ -6,7 +6,7 @@ the live runner calls it between ticks, and test_inhabitant checks the log still
 """
 import json
 
-from .sim import ANSWER_ACTS, OCCASION_TICKS, PERSON_STEPS, TICKS_PER_DAY
+from .sim import ANSWER_ACTS, OCCASION_TICKS, PERSON_STEPS, TALK_WHY, TICKS_PER_DAY
 from .worldmap import position
 
 # The per-tick view's keys, as the spec lists them. A new field needs a spec line, and bar 5 checks this.
@@ -99,6 +99,21 @@ def view(sim, aid: int) -> dict:
     return out
 
 
+def cant_give(log, e: dict, aid: int) -> dict:
+    """aipt3 (Steering 2026-11-20 09:07Z): why a villager answering `aid` could give nothing, as the engine told that
+    villager's own prompt: `why`, a TALK_WHY key (and the `price` a "coin" names). Read from the answer's mind event,
+    the reply's parent, and only what the engine withheld: a villager's own no has no reason here, its words are
+    its reason, and "undecided" is no reason either. {} for any other event."""
+    if e["kind"] != "reply" or e["data"].get("with") != aid or not e["parents"]:
+        return {}
+    d = log[e["parents"][0]].data
+    deal = d.get("deal") or {}
+    why = (d.get("typed") or {}).get("withheld") or deal.get("withheld")
+    if why not in TALK_WHY:
+        return {}
+    return {"why": why, **({"price": deal["price"]} if why == "coin" and "price" in deal else {})}
+
+
 def _ev(e) -> dict:
     return {"actor": e.actor, "kind": e.kind, "data": e.data, "parents": e.parents}
 
@@ -177,5 +192,7 @@ def scrub(e: dict, aid: int, log=None) -> dict:
         said = says(log, e, aid) if log is not None else None
         if said:
             data["says"] = said
+        if log is not None:
+            data.update(cant_give(log, e, aid))
     return {"id": e["id"], "tick": e["tick"], "kind": e["kind"], "origin": e["origin"], "actor": e["actor"],
             "data": data, "parents": e["parents"]}

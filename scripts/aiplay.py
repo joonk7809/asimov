@@ -11,6 +11,7 @@ the agent can and can't see or do is the client's own UI (plan/ai-playtest.md).
     python scripts/aiplay.py scroll DIR X Y 5              # 5 wheel notches down at X, Y (negative: up)
     python scripts/aiplay.py type DIR "hello there" --shot
     python scripts/aiplay.py key DIR Return
+    python scripts/aiplay.py key DIR ctrl+a                          # a key with ctrl, shift, alt or cmd held: here, select the Talk line whole
     python scripts/aiplay.py resize DIR 1440x1100          # make the window bigger or smaller, as a person drags it
     python scripts/aiplay.py stop DIR                      # close the client (the player leaves) and the screen
 
@@ -237,6 +238,28 @@ def _key(dpy, keysym: int):
     return True
 
 
+MODS = {"ctrl": "Control_L", "control": "Control_L", "shift": "Shift_L", "alt": "Alt_L", "cmd": "Super_L",
+        "meta": "Super_L", "super": "Super_L"}
+
+
+def _chord(dpy, name: str) -> bool:
+    """A key with modifiers held, as `ctrl+a` (aipt3: the tester had no way to select a kept line whole, and typed
+    into the middle of it). The last part is the key; the parts before it are held while it is pressed."""
+    from Xlib import X, XK
+    *mods, key = name.split("+")
+    held = []
+    for m in mods:
+        if m.lower() not in MODS:
+            raise SystemExit(f"unknown modifier {m!r} in {name!r}; one of {sorted(MODS)}")
+        held.append(dpy.keysym_to_keycode(XK.string_to_keysym(MODS[m.lower()])))
+    for code in held:
+        _fake(dpy, X.KeyPress, code)
+    ok = _key(dpy, keysym(key))
+    for code in reversed(held):
+        _fake(dpy, X.KeyRelease, code)
+    return ok
+
+
 def keysym(name: str) -> int:
     """A key's name (Return, BackSpace, Escape, Tab, Down, a, ...) or a single character."""
     from Xlib import XK
@@ -269,7 +292,8 @@ def do(a):
             print(f"not on this keyboard, left out: {''.join(missed)!r}", file=sys.stderr)
     elif a.cmd == "key":
         for name in a.keys:
-            if not _key(dpy, keysym(name)):
+            chord = len(name) > 2 and "+" in name[1:-1]  # ctrl+a; "+" and "a" alone are plain keys
+            if not (_chord(dpy, name) if chord else _key(dpy, keysym(name))):
                 raise SystemExit(f"no key for {name!r}")
         rec.update(keys=a.keys)
     dpy.close()

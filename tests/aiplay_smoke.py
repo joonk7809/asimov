@@ -3,7 +3,8 @@
     python tests/aiplay_smoke.py ws://127.0.0.1:8770/ RUN_DIR WORK_DIR
 
 Against a paused stub world it inhabits a villager who has company, types a line into the client's Talk box
-through the virtual keyboard, and checks the server received exactly that line as a `say`, that the
+through the virtual keyboard (over a first line it selects whole with ctrl+a, so the second replaces it), and
+checks the server received exactly that line as a `say`, that the
 screenshot shows the client, and that stopping the session reads as the player leaving.
 
 The Talk line's place is the client's layout: since the P-pass (#92) the foot of the middle column, drawn at
@@ -64,6 +65,8 @@ async def main(url: str, run_dir: str, work: str):
     assert company(view, body), "the body's company left as it was possessed; pick another seed or tick"
     await asyncio.sleep(1.5)
     aiplay("click", work, *TALK)
+    aiplay("type", work, "a line I think better of")  # aipt3: ctrl+a selects the line whole, and typing replaces it
+    aiplay("key", work, "ctrl+a")
     aiplay("type", work, TEXT)
     aiplay("key", work, "Return")
     await asyncio.sleep(1.0)

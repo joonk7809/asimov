@@ -18,6 +18,7 @@ const WorldModel := preload("res://scripts/world_model.gd")
 const LiveClient := preload("res://scripts/live_client.gd")
 const Words := preload("res://scripts/inhabit_ui.gd")
 const Plan := preload("res://scripts/plan_queue.gd")
+const TalkBox := preload("res://scripts/talk_box.gd")
 const Art := preload("res://scripts/art.gd")
 const PICKED_W := 380.0  # recorded mode: the "who is here" column
 const BUNDLED := "res://bundled/playback.json.gz"  # the world an export carries (CI puts it there before it exports)
@@ -45,6 +46,8 @@ var plan_sent := 0          # the view tick the head step was sent at
 var plan_failed := 0        # the view tick the head step failed at (it is skipped a tick later)
 var leaving := {}           # inhabitant: villager id -> the tick they answered you and walked away (pt11); off the Talk list that tick and the next two
 var last_said := {}         # inhabitant: villager id -> the last line said to them, put back if it didn't reach them
+var talk := TalkBox.new()   # inhabitant: whom the Talk box's line is for (aipt3: only the player's pick changes a pick)
+var asked := {}             # inhabitant: villager id -> whether your last line to them asked for food (a chip, or it read so)
 var heard_recent := []      # inhabitant: keys of the last overheard exchanges, so a word-for-word repeat isn't shown
 var map_rects := {}         # inhabitant: place name -> its rect on screen, for clicks
 const CROWD_MAX := 12        # polish: at most this many people drawn at your place; the rest are "+N more here"
@@ -333,12 +336,18 @@ func _build_inhabit_ui() -> void:
 	talk_head.text = "Talk"
 	talk_head.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
 	feed_box.add_child(talk_head)
-	var talk := HBoxContainer.new()
-	feed_box.add_child(talk)
+	var row := HBoxContainer.new()
+	feed_box.add_child(row)
 	var who := OptionButton.new()
 	who.custom_minimum_size = Vector2(120, 0)
 	who.clip_text = true
-	talk.add_child(who)
+	who.item_selected.connect(func(i):
+		talk.pick(who.get_item_id(i))
+		_refresh_talk())
+	# aipt3: the list is left alone while it is open (a rebuild under the click sent lines to the wrong villager);
+	# it catches up as it closes.
+	who.get_popup().popup_hide.connect(func(): _refresh_talk.call_deferred())
+	row.add_child(who)
 	ui["talk_who"] = who
 	var line := LineEdit.new()
 	line.max_length = 140
@@ -348,12 +357,12 @@ func _build_inhabit_ui() -> void:
 	line.text_changed.connect(func(_t):
 		line.select_all_on_focus = false  # a typed edit keeps the box's text
 		_ask_hint())
-	talk.add_child(line)
+	row.add_child(line)
 	ui["talk_line"] = line
 	var say := Button.new()
 	say.text = "Say"
 	say.pressed.connect(_say)
-	talk.add_child(say)
+	row.add_child(say)
 	ui["talk_say"] = say
 	# talk-1: a chip says what the line asks for; the villager answers yes or no, and a yes moves the food. Just
 	# talk (the default) asks nothing, whatever the words say.
@@ -372,7 +381,7 @@ func _build_inhabit_ui() -> void:
 	chip.tooltip_text = "What your line asks for. They answer yes or no; a yes hands the food over."
 	chips.add_child(chip)
 	feed_box.add_child(chips)
-	feed_box.move_child(chips, talk.get_index())
+	feed_box.move_child(chips, row.get_index())
 	ui["talk_chip"] = chip
 	chip.item_selected.connect(func(_i): _ask_hint())
 	var hint := Label.new()  # the chip hint: shown only while a typed line reads like an ask and no chip is picked
@@ -380,14 +389,28 @@ func _build_inhabit_ui() -> void:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.visible = false
 	feed_box.add_child(hint)
-	feed_box.move_child(hint, talk.get_index())
+	feed_box.move_child(hint, row.get_index())
 	ui["talk_hint"] = hint
+	# aipt3: whom Say sends to, or why it can't and that the line is kept. Always one line high, so the Talk row
+	# under it doesn't move when it changes (a click meant for the list once hit "Plan ahead").
+	var note := Label.new()
+	note.add_theme_color_override("font_color", Color(0.65, 0.75, 0.9))
+	note.clip_text = true
+	note.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	feed_box.add_child(note)
+	feed_box.move_child(note, row.get_index())
+	ui["talk_note"] = note
 
 
 func _ask_hint() -> void:
 	var hint: Label = ui["talk_hint"]
-	hint.text = Words.ask_hint(str(ui["talk_line"].text), int(ui["talk_chip"].selected))
+	hint.text = Words.ask_hint(str(ui["talk_line"].text), int(ui["talk_chip"].selected), _typed())
 	hint.visible = hint.text != ""
+
+
+func _typed() -> bool:
+	## text-1: whether this world gives on plain words (the welcome's talk.typed), so the chip hint would be false.
+	return client != null and int(client.welcome.get("talk", {}).get("typed", 0)) == 1
 
 
 var _menu_key := ""
@@ -424,6 +447,9 @@ func _catch_up() -> void:
 
 func _feed(evs: Array) -> void:
 	for e in evs:
+		if e["kind"] == "reply" and e["data"].has("why") and not asked.get(int(e["actor"]), true):
+			e = e.duplicate(true)  # why they can't give is said under an ask for food, not under small talk
+			e["data"].erase("why")
 		var line := Words.describe(e, client.me, names)
 		if line != "":
 			var at := "[color=#8a93a6]%s[/color]  %s\n" % [Words.clock(int(e["tick"]), client.ticks_per_day()).split(", ")[1], line]
@@ -533,9 +559,11 @@ func _on_ack(m: Dictionary) -> void:
 			plan_act = int(m["event"])
 			_take_receipts(client.seen_events.filter(func(e): return int(e["tick"]) >= int(pending["tick"])))
 	elif m["status"] == "rejected" and pending.get("id") == m["id"]:
-		ui["feed"].append_text("[color=#e07070]Not sent: %s (%s).[/color]\n" % [pending["label"], m.get("reason", "")])
+		_append(ui["feed"], "[color=#e07070]Not sent: %s (%s).[/color]\n" % [pending["label"], m.get("reason", "")])
 		if pending.get("step", false):
 			plan_state = "failed: " + str(m.get("reason", "rejected"))
+		if pending.has("say_to"):  # aipt3: a refused line isn't dropped either
+			_return_line(int(pending["say_to"]))
 		pending = {}
 		_refresh_inhabit()
 
@@ -609,10 +637,11 @@ func _plan_run() -> void:
 
 
 var _talk_key := ""
+var _talk_to := -1
 
 
-func _refresh_talk() -> void:
-	## Who you can talk to: the people here and awake (the server checks again when it applies).
+func _hearers() -> Array:
+	## Who can hear you now: the people here and awake (the server checks again when it applies).
 	var v: Dictionary = client.view
 	var ids := []
 	if not v.get("asleep", true):
@@ -621,72 +650,106 @@ func _refresh_talk() -> void:
 			# would arrive after they'd gone (pt11, Steering 2026-11-18 23:52Z).
 			if not p.get("asleep", false) and int(v["tick"]) - int(leaving.get(int(p["id"]), -99)) > 2:
 				ids.append(int(p["id"]))
-	var key := JSON.stringify(ids)
+	return ids
+
+
+func _refresh_talk() -> void:
+	## Whom the line goes to is the Talk box's own rule (talk_box.gd): a pick stays the pick, and a line being
+	## written keeps its listener.
+	var v: Dictionary = client.view
+	var ids := _hearers()
+	var box: LineEdit = ui["talk_line"]
+	var has_text := str(box.text).strip_edges() != ""
+	var was := _talk_to
+	_talk_to = talk.settle(ids, has_text)
 	var who: OptionButton = ui["talk_who"]
-	if key != _talk_key:
+	var key := JSON.stringify([ids, _talk_to])
+	if key != _talk_key and not who.get_popup().visible:
 		_talk_key = key
-		var keep := who.get_selected_id() if who.item_count > 0 else -1
 		who.clear()
 		for i in ids:
-			who.add_item(names.get(i, "#%d" % i), i)
-		var at := who.get_item_index(keep) if keep >= 0 else -1
-		if at >= 0:
-			who.select(at)
-	var none: bool = ids.is_empty()
+			who.add_item(TalkBox.who(i, names, roles), i)
+		who.select(who.get_item_index(_talk_to) if _talk_to >= 0 else -1)
+	if not who.get_popup().visible:  # the list names each one's role; the button, the name alone (the note has both)
+		who.text = str(names.get(_talk_to, "")) if _talk_to >= 0 else ("Pick who" if not ids.is_empty() else "")
+	ui["talk_note"].text = talk.note(ids, has_text, names, roles)
+	ui["talk_note"].tooltip_text = ui["talk_note"].text
+	if was >= 0 and _talk_to < 0 and has_text and not box.has_focus():
+		box.select_all_on_focus = true  # a line left waiting for someone who has gone: the next click selects it whole
 	# aipt2 x5: Enter while a line was on its way kept the text, and the next words were typed onto it. The box
-	# waits with the button until the line has landed.
-	var waiting: bool = not pending.is_empty() and str(pending.get("label", "")).begins_with("Say to ")
-	ui["talk_line"].editable = not none and not waiting
-	ui["talk_line"].placeholder_text = "Nobody here to talk to." if none else \
-			("Waiting to be heard..." if waiting else "Say something...")
-	ui["talk_say"].disabled = none or not pending.is_empty()
+	# waits with the button until the line has landed. aipt3: with nobody to hear, it stays open, so a line typed
+	# as they left is kept and can still be changed.
+	var waiting: bool = not pending.is_empty() and pending.has("say_to")
+	box.editable = not waiting
+	box.placeholder_text = "Waiting to be heard..." if waiting else \
+			("Nobody here to talk to." if ids.is_empty() else "Say something...")
+	ui["talk_say"].disabled = _talk_to < 0 or not pending.is_empty()
 	var chip: OptionButton = ui["talk_chip"]
 	var price := int(v.get("food_price", 0))
 	chip.set_item_text(2, "Buy food for %d coin" % price)
 	chip.set_item_disabled(2, int(v.get("coin", 0)) < price)  # greyed when the coin is short
 	if chip.selected == 2 and int(v.get("coin", 0)) < price:
 		chip.select(0)
-	chip.disabled = none or waiting
+	chip.disabled = _talk_to < 0 or waiting
 
 
 func _say() -> void:
-	var who: OptionButton = ui["talk_who"]
-	var text := str(ui["talk_line"].text).strip_edges()
-	if text == "" or who.item_count == 0 or not pending.is_empty():
+	var box: LineEdit = ui["talk_line"]
+	var text := str(box.text).strip_edges()
+	if text == "":
 		return
-	var t := who.get_selected_id()
+	_refresh_talk()
+	var why := talk.unsent(_hearers(), names, roles, not pending.is_empty())
+	if why != "":
+		# aipt3: Say with nobody to hear (they had left, or the timetable had moved you) did nothing and said nothing,
+		# and the next words were typed into the old line. Now the log says so, and the kept line is selected whole,
+		# so typing replaces it and Say still sends it as it is.
+		_append(ui["feed"], "[color=#e07070]%s[/color]\n" % why)
+		box.select_all_on_focus = true
+		box.release_focus()  # a focused box ignores select_all_on_focus: the next click must focus it anew
+		box.select_all()
+		return
+	var t := _talk_to
 	var chip: OptionButton = ui["talk_chip"]
 	var move: String = ["", "asks_food", "wants_to_buy_food"][maxi(0, chip.selected)]
 	var price := int(client.view.get("food_price", 0)) if move == "wants_to_buy_food" else -1
 	pending = {"id": client.act("say", t, "", text, move, price), "label": "Say to %s" % names.get(t, "#%d" % t),
-			"tick": int(client.view["tick"])}
+			"tick": int(client.view["tick"]), "say_to": t}
+	asked[t] = move != "" or Words.reads_like_ask(text)
 	chip.select(0)  # one ask per line: the next line just talks unless a chip is picked again
 	last_said[t] = text
-	ui["talk_line"].text = ""
-	ui["talk_line"].select_all_on_focus = false
+	box.text = ""
+	box.select_all_on_focus = false
 	_ask_hint()
 	_refresh_inhabit()
 
 
+func _return_line(t: int) -> void:
+	## A line that was sent and not heard: back in the box, or, with a newer line there, written out in the log.
+	if not last_said.has(t):
+		return
+	var box: LineEdit = ui["talk_line"]
+	var back := TalkBox.lost(str(box.text), str(last_said[t]), str(names.get(t, "them")))
+	if back["returned"]:
+		# aipt2 x12: a click put the caret inside the old line and new words went into its middle. The
+		# returned line is selected whole, and a click selects it again, so typing replaces it.
+		box.text = back["box"]
+		box.select_all_on_focus = true
+		box.release_focus()  # a focused box ignores select_all_on_focus: the next click must focus it anew
+		box.select_all()
+		_ask_hint()
+	_append(ui["feed"], "[color=#8a93a6]%s[/color]\n" % back["log"])
+	last_said.erase(t)
+
+
 func _lost_lines(evs: Array) -> void:
-	## aipt1 fix 4: a line that didn't reach its listener goes back in the box (the log says why).
+	## aipt1 fix 4: a line that didn't reach its listener goes back in the box (the log says why). aipt3: with a
+	## newer line in the box it used to be dropped; now the log keeps its words.
 	for e in evs:
 		var d: Dictionary = e.get("data", {})
 		if e["kind"] == "receipt" and e.get("actor") != null and int(e["actor"]) == int(client.me["id"]) \
 				and str(d.get("action", "")) == "say" and not d.get("ok", false) and d.get("to") != null:
-			var t := int(d["to"])
-			if last_said.has(t) and str(ui["talk_line"].text) == "":
-				# aipt2 x12: a click put the caret inside the old line and new words went into its middle. The
-				# returned line is selected whole, and a click selects it again, so typing replaces it.
-				var box: LineEdit = ui["talk_line"]
-				box.text = last_said[t]
-				box.select_all_on_focus = true
-				box.release_focus()  # a focused box ignores select_all_on_focus: the next click must focus it anew
-				box.select_all()
-				_ask_hint()
-				_append(ui["feed"], "[color=#8a93a6]Your line is back in the Talk box: Say sends it again, "
-						+ "typing replaces it.[/color]\n")
-			last_said.erase(t)
+			_return_line(int(d["to"]))
 
 
 func _choose(action: String, target: int, place: String, label: String) -> void:
@@ -1017,8 +1080,8 @@ func _draw_inhabitant() -> void:
 	# Polish (aipt2: "the villagers cluster so I can't tell who is who"): a crowd draws at most CROWD_MAX people,
 	# whoever you're talking with and whoever is speaking first, then family, then by id; the rest are a "+N" tag.
 	var talking := -1
-	if ui.has("talk_who") and ui["talk_who"].item_count > 0:
-		talking = ui["talk_who"].get_selected_id()
+	if ui.has("talk_who"):
+		talking = _talk_to
 	var now := Time.get_ticks_msec() / 1000.0
 	var speaking := {}
 	for b in bubbles:
