@@ -180,8 +180,10 @@ def held_log(seed):
 
 @pytest.mark.parametrize("seed", sorted(HELD))
 def test_the_held_typed_path_with_pace_2_on_is_pinned(monkeypatch, seed):
+    from asiimov import replay as R
     from asiimov import sim as S
     monkeypatch.setattr(S, "ENGINE_VERSION", "pace-2")
+    monkeypatch.setattr(R, "ENGINE_VERSION", "pace-2")
     log, flown, sim = held_log(seed)
     assert flown > 20, "not vacuous: calls flew"
     assert any(e.kind == "mind_answer" for e in sim.events) and any(e.kind == "mind_decide" for e in sim.events)
