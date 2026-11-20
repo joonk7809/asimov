@@ -205,6 +205,9 @@ static func _line(e: Dictionary, me: Dictionary, names: Dictionary) -> String:
 					w.replace("[", "[lb]")]
 			if to_you and str(d.get("next", "")) == "leave":  # pt11: 5 of 7 lost lines went to someone who had just left
 				line += " %s walks away." % a
+			var cant := why_not(d, a) if to_you else ""
+			if cant != "":  # aipt3: 22 of 46 typed asks went to someone with nothing to spare, and no reply said so
+				return "[color=#f0c060]%s[/color]\n    [color=#8a93a6]%s[/color]" % [line, cant]
 			return "[color=#f0c060]%s[/color]" % line if to_you else line
 		"plan_receipt":
 			return "You plan your day." if d.get("ok", false) else ""
@@ -264,6 +267,24 @@ static func _receipt(e: Dictionary, d: Dictionary, mine: bool, a: String, me: Di
 	return ("Done: %s, %s." if d.get("ok", false) else "Didn't work: %s, because %s.") % [doing, said]
 
 
+# aipt3 (Steering 2026-11-20 09:07Z): why a villager could give nothing, as the engine told that villager's own
+# prompt (sim.TALK_WHY), with the persons turned round for the one who asked. The keys are TALK_WHY's and
+# tests/test_text1.py pins each line beside the engine's. A villager's own no has no line here: its words say it.
+const WHY_NOT := {"food": "%s has no food to spare", "coin": "you don't have %d coin",
+		"terms": "%s is on bad terms with you", "said_yes": "%s already said yes to you today",
+		"wait": "%s turned you down not long ago", "apart": "%s is not with you any more"}
+
+
+static func why_not(d: Dictionary, name: String) -> String:
+	## The line under a villager's answer to you when the engine ruled a yes out, or "".
+	var why := str(d.get("why", ""))
+	if not WHY_NOT.has(why):
+		return ""
+	var s: String = WHY_NOT[why]
+	s = s % int(d.get("price", 0)) if "%d" in s else s % name
+	return s[0].to_upper() + s.substr(1) + "."
+
+
 const DEAL_WHY := {"not together": "you're no longer together", "asleep": "they fell asleep",
 		"nothing to spare": "they have nothing to spare now", "no coin": "you don't have the coin now"}
 
@@ -288,7 +309,7 @@ static func deal_line(d: Dictionary, me_id: int, names: Dictionary) -> String:
 # talk-1's chip hint (Steering 2026-11-19 02:22Z): 32B replies to chipless asks claimed a handover in .27 of samples
 # (bar .10), so the say box suggests the chip when a typed line reads like an ask. A client hint only: the line is
 # sent as typed, and the engine never reads the words for consent.
-const HINT_FOOD := "\\b(food|eat|eaten|eating|meal|meals|bite|loaf|loaves|bread|hungry|starving|starve|snack|feed me)\\b"
+const HINT_FOOD := "\\b(food|eat|eaten|eating|meal|meals|bite|loaf|loaves|bread|crust|supper|breakfast|dinner|hungry|famished|starving|starve|snack|feed me)\\b"
 const HINT_BUY := "\\b(buy|sell|pay|paid|coin|coins|trade|price)\\b"
 const HINT_ASK := "\\?|\\b(can|could|would|will|give|spare|share|hand|let|need|please|any chance|have)\\b"
 const HINT_ASK_TEXT := "Asking for food? Pick \"Ask for food\" above. Without it this line only talks, and nothing changes hands."
@@ -299,13 +320,20 @@ static func _has(pattern: String, text: String) -> bool:
 	return RegEx.create_from_string("(?i)" + pattern).search(text) != null
 
 
-static func ask_hint(text: String, chip: int) -> String:
+static func ask_hint(text: String, chip: int, typed := false) -> String:
 	## The hint under the chip row while "Nothing, just talk" is picked and the typed line reads like an ask.
-	if chip != 0 or not _has(HINT_FOOD, text):
+	## Quiet in a typed world (text-1; aipt3: there it was false, plain words had just been given food).
+	if typed or chip != 0 or not _has(HINT_FOOD, text):
 		return ""
 	if _has(HINT_BUY, text):
 		return HINT_BUY_TEXT
 	return HINT_ASK_TEXT if _has(HINT_ASK, text) else ""
+
+
+static func reads_like_ask(text: String) -> bool:
+	## Whether a typed line reads like asking for food or to buy it: the chip hint's own reading. For display only
+	## (whether "they have no food to spare" is worth a line under the answer); the engine never sees it.
+	return _has(HINT_FOOD, text) and (_has(HINT_ASK, text) or _has(HINT_BUY, text))
 
 
 static func status(v: Dictionary, me: Dictionary, per_day: int) -> String:

@@ -939,3 +939,77 @@ def test_no_later_prompt_holds_the_private_question(seed):
             assert QUESTION not in q.prompt and "asks you for 1 of your food" not in q.prompt
             assert all(QUESTION not in p for p in (q.told or {}).values())
     assert QUESTION not in json.dumps(sim.state)
+
+
+# aipt3 (Steering 2026-11-20 09:07Z): "a refusal shows the engine's reason, using TALK_WHY's wording". The player's
+# client is sent the reason key with the reply; the words it shows are TALK_WHY's with the persons turned round.
+def sent_reply(sim, me, to):
+    from asiimov import inhabitant
+    from asiimov.live import event_dicts
+    seen = [inhabitant.scrub(e, me, sim.events) for e in event_dicts(sim.events) if inhabitant.witnessed(e, me, set(), -1)]
+    return [e for e in seen if e["kind"] == "reply" and e["actor"] == to][-1]
+
+
+@pytest.mark.parametrize("why", ["food", "terms", "said_yes"])
+def test_the_player_is_sent_why_a_villager_could_not_give(why):
+    mind = Mind(decide="yes", gives="food")
+    sim, me, to, ag = ready(mind, food=1 if why == "food" else 4)
+    if why == "terms":
+        sim._rel(ag[to], me)["affinity"] = -300
+    if why == "said_yes":  # the day's one yes is given first, and that reply carries no reason
+        typed(sim, to)
+        assert [d.data["ok"] for d in deals(sim.events)] == [True] and "why" not in sent_reply(sim, me, to)["data"]
+    given = len(deals(sim.events))
+    typed(sim, to)
+    r = sent_reply(sim, me, to)
+    assert r["data"]["why"] == why and "price" not in r["data"] and len(deals(sim.events)) == given
+    # the key sent is the reason the villager's own prompt gave, in TALK_WHY's words
+    assert f"You can't give food now, as {S.TALK_WHY[why]}." in mind.of("answer", to)[-1].prompt
+
+
+@pytest.mark.parametrize("held", ["yes", "no"])
+def test_a_villagers_own_answer_is_sent_with_no_reason(held):
+    """Its private no is its own: nothing but its words says why. A yes that gave has no reason to show."""
+    sim, me, to, ag = ready(Mind(decide=held, gives="food"))
+    typed(sim, to)
+    assert "why" not in sent_reply(sim, me, to)["data"]
+    assert [d.data["ok"] for d in deals(sim.events)] == ([True] if held == "yes" else [])
+
+
+def test_a_chip_buy_the_player_cant_pay_is_sent_the_price():
+    sim, me, to, ag = ready(Mind(decide="yes"))
+    sim._price = lambda: 10_000  # more than the body has or earns
+    price = 10_000
+    say(sim, to, "Sell me one?", "wants_to_buy_food", price)
+    r = sent_reply(sim, me, to)
+    assert (r["data"]["why"], r["data"]["price"], r["data"]["answer"]) == ("coin", price, "no")
+
+
+def test_the_reason_is_sent_to_nobody_else_and_changes_no_log():
+    from asiimov import inhabitant
+    from asiimov.live import event_dicts
+    sim, me, to, ag = ready(Mind(decide="yes"), food=1)
+    typed(sim, to)
+    other = next(a["id"] for a in ag if a["id"] not in (me, to))
+    for e in event_dicts(sim.events):
+        if e["kind"] == "reply":
+            assert "why" not in inhabitant.scrub(e, other, sim.events)["data"]
+            assert "why" not in inhabitant.scrub(e, to, sim.events)["data"]  # its own event: as the log has it
+            assert "why" not in e["data"]
+
+
+def test_the_clients_reasons_are_talk_whys_with_the_persons_turned_round():
+    """The client's table (inhabit_ui.gd WHY_NOT) has TALK_WHY's keys and no others; each engine wording is pinned
+    here beside the client's, so a reworded engine reason fails until the client's line is reworded with it."""
+    import pathlib
+    import re
+    pairs = {"food": ("you have no food to spare", "%s has no food to spare"),
+             "coin": ("they don't have {price} coin", "you don't have %d coin"),
+             "terms": ("you are on bad terms with them", "%s is on bad terms with you"),
+             "said_yes": ("you already said yes to them today", "%s already said yes to you today"),
+             "wait": ("you turned them down not long ago", "%s turned you down not long ago"),
+             "apart": ("they are not with you any more", "%s is not with you any more")}
+    assert {k: v[0] for k, v in pairs.items()} == S.TALK_WHY
+    gd = (pathlib.Path(__file__).parent.parent / "client/godot/scripts/inhabit_ui.gd").read_text()
+    table = re.search(r"const WHY_NOT := \{(.*?)\}", gd, re.S).group(1)
+    assert dict(re.findall(r'"(\w+)": "([^"]*)"', table)) == {k: v[1] for k, v in pairs.items()}
