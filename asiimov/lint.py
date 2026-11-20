@@ -10,21 +10,33 @@ through the module's imports (`import time as t` is `time`), and nothing is infe
 
 Rules:
   int     simulation arithmetic is integer-only (sim core)
-  rng     randomness only through Rng; no wall clock, process ids, hash(), id(), dynamic imports, set or
-          directory order (sim core)
+  rng     randomness only through Rng; no wall clock, process or thread ids, environment, hash(), id(), dynamic
+          or star imports, set or directory order (sim core)
   keyed   T22: a counter draw (Rng.draw/normal_milli) in the tick loop only on a registered own-actor stream,
           and a pick never indexes a list (or pops from it) with a draw (sim core)
   order   mind replies are fetched and applied only in Sim._commit, inside a loop over `self._order(...)` (or a
           list built from it in _commit), and only Sim._order reads the order setting (sim.py)
 
-The sim core is SIM_CORE plus the class bodies of every Sim subclass anywhere in the package (ArmSim is run
-and replayed by fork.py; ProbeSim and AuthorshipSim replay logs), all four rules.
+The sim core is every package module the engine imports (CORE_ROOTS and what they import, by any import
+form: `from .x import y`, `from . import x`, `from asiimov import x`, `import asiimov.x [as y]`, subpackages
+included), minus MIND_SIDE; each must be listed in SIM_CORE, or `python -m asiimov.lint` reports it. Plus the
+class bodies of every Sim subclass anywhere in the package (ArmSim is run and replayed by fork.py; ProbeSim and
+AuthorshipSim replay logs), all four rules; bases are resolved through imports, aliases and attributes
+(`from .sim import Sim as Engine`, `sim.Sim`, `asiimov.sim.Sim`). tests/test_lints.py checks both sets
+against what Python itself imports and defines (a subprocess), not against this module.
+
+Known limits (replay and the invariants cover them): taint is per local name, not through attributes
+(`self.k = rng.at(...)`; `xs[self.k]` is not seen) or across calls (a helper that returns a draw or a float);
+`_from_order` accepts a loop over any list built from `self._order(...)` without checking that the order is the
+sort key; names bound by assignment rather than import (`h = hash`, `ask = dispatch`) are not followed, except
+module-level aliases of a Sim base.
 
 A false positive is allowed on its own line with a comment, its reason mandatory:
     x = path / "events.jsonl"  # lint: allow int -- pathlib join, not a division
 An unknown rule, a missing reason, or a suppression that suppresses nothing is itself a finding.
 """
 import ast
+import functools
 import io
 import os
 import re
@@ -37,15 +49,13 @@ PKG = os.path.dirname(os.path.abspath(__file__))
 # The sim core: what runs or rebuilds a world (asiimov.sim's imports within the package, plus replay and
 # persist). tests/test_lints.py checks this against the actual import graph, so a new module the engine
 # imports has to be put here or in MIND_SIDE.
-SIM_CORE = ("sim.py", "rng.py", "params.py", "worldmap.py", "memory.py", "events.py", "replay.py", "persist.py")
+SIM_CORE = ("__init__.py", "sim.py", "rng.py", "params.py", "worldmap.py", "memory.py", "events.py", "replay.py", "persist.py")
 # Imported by the engine but on the far side of the mind interface: what a mind returns is origin "mind",
 # recorded verbatim and replayed from the log, so it may sample (NoisyMind uses os.urandom; a reply carries
 # float sampling settings). Not checked by int/rng/keyed. tests/test_lints.py pins this to exactly minds.py.
 MIND_SIDE = ("minds.py",)
 # Roots of the engine's import graph.
 CORE_ROOTS = ("sim.py", "replay.py", "persist.py")
-# Not linted for Sim subclasses: this module (its tables name the banned calls).
-NOT_SCANNED = ("lint.py",)
 
 # keyed: streams a counter draw may use in the tick loop, by f-string prefix. A counter on such a stream is
 # moved only by draws made for the stream's own agent. How many draws it takes may depend on who is around,
@@ -91,10 +101,14 @@ FLOAT_CALLS = ("operator.truediv", "operator.itruediv", "operator.__truediv__", 
 POW_CALLS = ("pow", "builtins.pow", "operator.pow", "operator.ipow", "operator.__pow__")
 ENTROPY_MODULES = ("random", "secrets", "uuid", "numpy")
 CLOCK = {"time": ("time", "time_ns", "monotonic", "monotonic_ns", "perf_counter", "perf_counter_ns",
-                  "process_time", "process_time_ns"),
-         "datetime": ("now", "utcnow", "today"), "date": ("today",),
-         "os": ("urandom", "getrandom", "getpid", "getppid")}
-DIR_ORDER = {"os": ("listdir", "scandir"), "glob": ("glob", "iglob")}
+                  "process_time", "process_time_ns", "localtime", "gmtime", "ctime", "asctime"),
+         "datetime": ("now", "utcnow", "today", "fromtimestamp", "utcfromtimestamp"),
+         "date": ("today", "fromtimestamp"),
+         "os": ("urandom", "getrandom", "getpid", "getppid", "environ", "environb", "getenv", "getenvb"),
+         "threading": ("get_ident", "get_native_id"), "_thread": ("get_ident", "get_native_id")}
+DIR_ORDER = {"os": ("listdir", "scandir", "walk"), "glob": ("glob", "iglob")}
+PATH_ORDER = ("iterdir", "glob", "rglob", "walk")  # pathlib.Path methods, on any object
+TRUEDIV_DUNDER = ("__truediv__", "__rtruediv__", "__itruediv__")
 DYNAMIC_IMPORT = ("__import__", "importlib.import_module", "importlib.__import__")
 SET_OPS = (ast.BitOr, ast.BitAnd, ast.Sub, ast.BitXor)
 SET_METHODS = ("union", "intersection", "difference", "symmetric_difference", "copy")
@@ -402,6 +416,33 @@ def _named(cx, node):
     return (c, c.split(".")) if c else None
 
 
+def _builtin(c: str | None) -> str | None:
+    """`builtins.hash` is `hash`."""
+    return c[len("builtins."):] if c and c.startswith("builtins.") else c
+
+
+def _call_name(cx, node) -> str | None:
+    """The canonical name a call calls (`from builtins import hash as h; h(x)` is `hash`)."""
+    return _builtin(cx.canon(node.func)) if isinstance(node, ast.Call) else None
+
+
+def _imported_as(cx, node, name) -> bool:
+    """`node` names `name`: bare, or through an import (`from .minds import dispatch as ask`, `minds.dispatch`,
+    `asiimov.minds.dispatch`). An attribute of a non-imported object (`self.dispatch`) is not it."""
+    d = _dotted(node)
+    if d is None:
+        return False
+    if d == name and d not in cx.alias:
+        return True
+    head = d.split(".")[0]
+    return head in cx.alias and (cx.canon(node) or "").split(".")[-1] == name
+
+
+def _in_sorted(node) -> bool:
+    return any(isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "sorted"
+               for a in _ancestors(node))
+
+
 def _nonneg_int(e) -> bool:
     return isinstance(e, ast.Constant) and type(e.value) is int and e.value >= 0
 
@@ -422,11 +463,13 @@ def check_int(cx) -> list[Finding]:
         elif isinstance(node, (ast.BinOp, ast.AugAssign)) and isinstance(node.op, ast.Pow):
             if not _nonneg_int(node.right if isinstance(node, ast.BinOp) else node.value):
                 f(node, "`**` with an exponent that is not a non-negative int literal (can give a float)")
-        elif isinstance(node, ast.Call) and cx.canon(node.func) in ("float", "complex"):
-            f(node, f"`{cx.canon(node.func)}(` call")
-        elif isinstance(node, ast.Call) and cx.canon(node.func) in POW_CALLS and len(node.args) == 2 \
-                and not node.keywords and not _nonneg_int(node.args[1]):
+        elif isinstance(node, ast.Call) and _call_name(cx, node) in ("float", "complex"):
+            f(node, f"`{_call_name(cx, node)}(` call")
+        elif isinstance(node, ast.Call) and (_call_name(cx, node) in POW_CALLS or cx.canon(node.func) in POW_CALLS) \
+                and len(node.args) == 2 and not node.keywords and not _nonneg_int(node.args[1]):
             f(node, f"`{cx.canon(node.func)}(x, e)` with an exponent that is not a non-negative int literal")
+        elif isinstance(node, ast.Attribute) and node.attr in TRUEDIV_DUNDER:
+            f(node, f"`.{node.attr}` is true division")
         elif isinstance(node, ast.Import):
             for a in node.names:
                 if _module_root(a.name) in FLOAT_MODULES and a.name not in ("math", "cmath"):  # math: uses checked
@@ -460,6 +503,8 @@ def check_rng(cx) -> list[Finding]:
         elif isinstance(node, ast.ImportFrom):
             if _module_root(node.module) in ENTROPY_MODULES:
                 f(node, f"import from `{node.module}` (draw through Rng)")
+            if any(a.name == "*" for a in node.names):
+                f(node, f"`from {'.' * node.level}{node.module or ''} import *` hides which names the sim core uses")
             for a in node.names:
                 if a.name in CLOCK.get(_module_root(node.module), ()) or a.name in DIR_ORDER.get(node.module, ()):
                     f(node, f"import of `{node.module}.{a.name}`")
@@ -467,16 +512,20 @@ def check_rng(cx) -> list[Finding]:
             c, parts = n
             if c in DYNAMIC_IMPORT:
                 f(node, f"`{c}`: a dynamic import hides what the sim core runs")
-            elif len(parts) >= 2 and parts[-1] in CLOCK.get(parts[-2], ()):
-                f(node, f"`{c}`: wall clock, process id or OS entropy in the sim core")
+            elif any(parts[i] in CLOCK.get(parts[i - 1], ()) for i in range(1, len(parts))):
+                f(node, f"`{c}`: wall clock, process or thread id, environment or OS entropy in the sim core")
             elif len(parts) >= 2 and parts[-1] in DIR_ORDER.get(parts[-2], ()):
-                if not any(isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "sorted"
-                           for a in _ancestors(node)):
-                    f(node, f"`{c}` order is the filesystem's: wrap it in sorted()")
+                if c == "os.walk" or not _in_sorted(node):
+                    f(node, f"`{c}` order is the filesystem's: wrap it in sorted()"
+                            + (" (and sort each step's lists)" if c == "os.walk" else ""))
             elif (len(parts) >= 2 and parts[0] in ("random", "secrets", "uuid")) or parts[:2] == ["numpy", "random"]:
                 f(node, f"`{c}` (draw through Rng)")
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and cx.canon(node.func) in ("hash", "id"):
-            f(node, f"`{node.func.id}(` varies between processes (PYTHONHASHSEED, addresses)")
+        if isinstance(node, ast.Call) and _call_name(cx, node) in ("hash", "id"):
+            f(node, f"`{cx.canon(node.func)}(` varies between processes (PYTHONHASHSEED, addresses)")
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in PATH_ORDER
+              and node.func.attr not in DIR_ORDER.get(_dotted(node.func.value) and cx.canon(node.func.value), ())
+              and not _in_sorted(node)):  # Path(...).iterdir()/glob()/rglob()/walk(); os.walk, glob.glob are above
+            f(node, f"`.{node.func.attr}(` order is the filesystem's: wrap it in sorted()")
         if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)) and cx.is_set(node.iter):
             f(node.iter, "iterating a set: its order is not the log's (sort it)")
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ORDERED_CONSUMERS \
@@ -574,8 +623,9 @@ def check_order(cx) -> list[Finding]:
             continue
         fn = cx.func(node)
         reach = fn in ("_commit", *ORDER_MIND_REACH)
-        if isinstance(node, ast.Name) and node.id == "dispatch" and isinstance(node.ctx, ast.Load) and fn != "_commit":
-            f(node, f"`dispatch` used in `{fn}`: mind requests are sent only from Sim._commit")
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load) and _outer(node) \
+                and _imported_as(cx, node, "dispatch") and fn != "_commit":
+            f(node, f"`{_dotted(node)}` (dispatch) used in `{fn}`: mind requests are sent only from Sim._commit")
         elif isinstance(node, ast.Attribute) and node.attr == "decide" and isinstance(node.ctx, ast.Load) \
                 and fn not in ORDER_MIND_REACH:
             f(node, "`.decide` called directly: go through dispatch in Sim._commit")
@@ -590,7 +640,7 @@ def check_order(cx) -> list[Finding]:
                 and not (isinstance(node.ctx, ast.Store) or fn == node.attr):
             f(node, f"`self.{node.attr}` used in `{fn}`: it reaches the mind, and only "
                     f"{', '.join(ORDER_CALLERS[node.attr])} may call it")
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_parse":
+        elif isinstance(node, ast.Call) and _imported_as(cx, node.func, "_parse"):
             loop = next((a for a in _ancestors(node) if isinstance(a, (ast.For, ast.AsyncFor))), None)
             func = next((a for a in _ancestors(node) if isinstance(a, FUNCS)), None)
             if fn != "_commit" or loop is None or not _from_order(cx, loop.iter, func):
@@ -646,72 +696,217 @@ def lint_source(src: str, path: str, rules=RULES, classes=None) -> list[Finding]
             used.add((x.line, x.rule))
         else:
             out.append(x)
+    spans = [(r.lineno, r.end_lineno) for r in roots] if classes is not None else [(1, float("inf"))]
     for line, rule in sorted(set(sup) - used):
-        out.append(Finding(path, line, "suppress", f"suppression of `{rule}` suppresses nothing: remove it"))
+        if rule in rules and any(a <= line <= b for a, b in spans):
+            out.append(Finding(path, line, "suppress", f"suppression of `{rule}` suppresses nothing: remove it"))
     return sorted(out, key=lambda x: (x.line, x.rule, x.message))
+
+
+@functools.lru_cache(maxsize=512)
+def _tree(src: str):
+    """A parsed module, by source text (the package walk reads each file more than once). Read-only use."""
+    return ast.parse(src)
 
 
 def _parse(path):
     with open(path) as fh:
-        return ast.parse(fh.read())
+        src = fh.read()
+    try:
+        return _tree(src)
+    except SyntaxError:
+        return ast.parse(src, filename=path)  # the error with its file name
+
+
+def _py_files(pkg: str) -> list[str]:
+    """Every .py file under the package, subpackages included: paths relative to it, '/'-separated, sorted."""
+    out = []
+    for d, dirs, files in os.walk(pkg):
+        dirs[:] = sorted(x for x in dirs if x != "__pycache__" and not x.startswith("."))
+        out += [os.path.relpath(os.path.join(d, x), pkg).replace(os.sep, "/") for x in files if x.endswith(".py")]
+    return sorted(out)
+
+
+def _modname(pkg: str, rel: str) -> str:
+    """'sub/x.py' -> 'asiimov.sub.x'; '__init__.py' -> 'asiimov'."""
+    parts = rel[:-3].split("/")
+    return ".".join([os.path.basename(pkg)] + (parts[:-1] if parts[-1] == "__init__" else parts))
+
+
+def _modfile(pkg: str, mod: str) -> str | None:
+    """'asiimov.sub.x' -> 'sub/x.py' (or 'sub/x/__init__.py'), if it is a module of the package."""
+    head, *parts = mod.split(".")
+    if head != os.path.basename(pkg):
+        return None
+    rel = "/".join(parts)
+    for cand in ([rel + ".py"] if parts else []) + [(rel + "/" if parts else "") + "__init__.py"]:
+        if os.path.isfile(os.path.join(pkg, cand)):
+            return cand
+    return None
+
+
+def _from_base(pkg: str, rel: str, node) -> str | None:
+    """The absolute module an ImportFrom imports from (relative levels resolved against `rel`)."""
+    if node.level == 0:
+        return node.module
+    here = _modname(pkg, rel).split(".")
+    if not rel.endswith("__init__.py"):
+        here = here[:-1]  # a module's package
+    if node.level - 1 > len(here) - 1:
+        return None
+    base = here[:len(here) - (node.level - 1)]
+    return ".".join(base + ([node.module] if node.module else []))
+
+
+def _module_aliases(pkg: str, rel: str, tree) -> dict[str, str]:
+    """Local name -> absolute dotted name, for every import in the module (relative ones resolved)."""
+    out = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                out[a.asname or a.name.split(".")[0]] = a.name if a.asname else a.name.split(".")[0]
+        elif isinstance(n, ast.ImportFrom) and (base := _from_base(pkg, rel, n)):
+            for a in n.names:
+                if a.name != "*":
+                    out[a.asname or a.name] = f"{base}.{a.name}"
+    return out
+
+
+def _imported_modules(pkg: str, rel: str, tree) -> set[str]:
+    """Package modules (file names) a module imports, in any form, with the packages they sit in."""
+    mods = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            mods |= {a.name for a in n.names}
+        elif isinstance(n, ast.ImportFrom) and (base := _from_base(pkg, rel, n)):
+            mods.add(base)
+            mods |= {f"{base}.{a.name}" for a in n.names if a.name != "*"}  # a submodule, if it is one
+    files = set()
+    for m in mods:
+        parts = m.split(".")
+        for i in range(1, len(parts) + 1):  # importing a.b.c runs a and a.b first
+            if (f := _modfile(pkg, ".".join(parts[:i]))) is not None:
+                files.add(f)
+    return files
 
 
 def core_imports(pkg: str = PKG) -> set[str]:
-    """Package modules reachable from CORE_ROOTS by relative imports (file names)."""
+    """Package modules (paths relative to the package) reachable from CORE_ROOTS through every import form,
+    with the package __init__ files Python runs on the way."""
     seen, todo = set(), list(CORE_ROOTS)
     while todo:
-        name = todo.pop()
-        if name in seen:
+        rel = todo.pop()
+        if rel in seen:
             continue
-        seen.add(name)
-        for n in ast.walk(_parse(os.path.join(pkg, name))):
-            if isinstance(n, ast.ImportFrom) and n.level == 1 and n.module:
-                todo.append(n.module.split(".")[0] + ".py")
-            elif isinstance(n, ast.ImportFrom) and n.level == 1:
-                todo += [a.name + ".py" for a in n.names]
-            elif isinstance(n, ast.ImportFrom) and (n.module or "").startswith("asiimov."):
-                todo.append(n.module.split(".")[1] + ".py")
+        seen.add(rel)
+        parts = rel.split("/")
+        todo += [f for i in range(len(parts)) if os.path.isfile(os.path.join(pkg, f := "/".join(parts[:i] + ["__init__.py"])))]
+        todo += sorted(_imported_modules(pkg, rel, _parse(os.path.join(pkg, rel))))
     return seen
 
 
+def core_files(pkg: str = PKG) -> list[str]:
+    """The files lint_package checks whole: what the engine imports minus MIND_SIDE (plus SIM_CORE, which is
+    reported if it disagrees)."""
+    have = [n for n in SIM_CORE if os.path.isfile(os.path.join(pkg, n))]
+    return sorted((core_imports(pkg) - set(MIND_SIDE)) | set(have))
+
+
 def sim_subclasses(pkg: str = PKG) -> dict[str, list[str]]:
-    """file name -> names of the classes in it that subclass Sim (directly or through another), outside SIM_CORE."""
-    classes = []  # (file, class name, base last names)
-    for name in sorted(os.listdir(pkg)):
-        if name.endswith(".py") and name not in NOT_SCANNED:
-            for n in ast.walk(_parse(os.path.join(pkg, name))):
-                if isinstance(n, ast.ClassDef):
-                    bases = [(_dotted(b) or "").split(".")[-1] for b in n.bases]
-                    classes.append((name, n.name, bases))
-    subs, changed = {"Sim"}, True
+    """file -> names of the classes in it that subclass sim.Sim (directly or through another), anywhere in the
+    package. Bases are resolved through each module's imports and module-level aliases, so `Engine` after
+    `from .sim import Sim as Engine`, `sim.Sim` and `asiimov.sim.Sim` are all Sim."""
+    name = os.path.basename(pkg)
+    classes, alias = {}, {}  # qualified class -> (file, class name, qualified bases); module -> {local: qualified}
+    for rel in _py_files(pkg):
+        tree = _parse(os.path.join(pkg, rel))
+        mod = _modname(pkg, rel)
+        local = _module_aliases(pkg, rel, tree)
+        found = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+        defined = {n.name for n in found}
+        for n in tree.body:  # Engine = Sim / Engine = sim.Sim at module level
+            if isinstance(n, ast.Assign) and (d := _dotted(n.value)) is not None:
+                for t in n.targets:
+                    if isinstance(t, ast.Name):
+                        local[t.id] = d
+        alias[mod] = local
+
+        def qual(d, local=local, defined=defined, mod=mod):
+            head, _, rest = d.partition(".")
+            if head in defined and head not in local:
+                return f"{mod}.{d}"
+            for _ in range(8):  # module-level aliases chain (Engine = Base; Base = sim.Sim)
+                if head not in local or local[head] == d:
+                    break
+                d = local[head] + (f".{rest}" if rest else "")
+                head, _, rest = d.partition(".")
+                if head in defined:
+                    return f"{mod}.{d}"
+            return d
+
+        for n in found:
+            classes[f"{mod}.{n.name}"] = (rel, n.name, [qual(d) for b in n.bases if (d := _dotted(b))])
+
+    def resolve(q):
+        """Follow re-exports (`from .sim import Sim` in another module, then `that_module.Sim`)."""
+        for _ in range(16):
+            if q in classes:
+                return q
+            mod, _, attr = q.rpartition(".")
+            nxt = alias.get(mod, {}).get(attr)
+            if nxt is None or nxt == q:
+                return q
+            q = nxt
+        return q
+
+    root = f"{name}.sim.Sim"
+    subs, changed = {root}, True
     while changed:
         changed = False
-        for _, cls, bases in classes:
-            if cls not in subs and subs & set(bases):
-                subs.add(cls)
+        for q, (_, _, bases) in classes.items():
+            if q not in subs and any(resolve(b) in subs for b in bases):
+                subs.add(q)
                 changed = True
     out = {}
-    for file, cls, bases in classes:
-        if cls != "Sim" and cls in subs and file not in SIM_CORE:
-            out.setdefault(file, []).append(cls)
+    for q, (rel, cls, _) in classes.items():
+        if q != root and q in subs:
+            out.setdefault(rel, []).append(cls)
+    return {k: v for k, v in sorted(out.items())}
+
+
+def unclassed(pkg: str = PKG) -> list[Finding]:
+    """A module the engine imports that is neither SIM_CORE nor MIND_SIDE, or a SIM_CORE entry it doesn't."""
+    out, imported, rel = [], core_imports(pkg), os.path.dirname(pkg)
+    for name in core_files(pkg):
+        path = os.path.relpath(os.path.join(pkg, name), rel)
+        if name not in SIM_CORE:
+            out.append(Finding(path, 1, "core", "the engine imports this module but it is not classed: add it to "
+                                                "SIM_CORE (checked) or MIND_SIDE in asiimov/lint.py"))
+        elif name not in imported:
+            out.append(Finding(path, 1, "core", f"in SIM_CORE but not imported from {', '.join(CORE_ROOTS)}: remove it"))
     return out
 
 
 def lint_package(pkg: str = PKG) -> list[Finding]:
-    out = []
+    out = set(unclassed(pkg))
     rel = os.path.dirname(pkg)
-    for name in SIM_CORE:
+    core = core_files(pkg)
+
+    def read(name):
         p = os.path.join(pkg, name)
         with open(p) as fh:
-            src = fh.read()
+            return fh.read(), os.path.relpath(p, rel)
+
+    for name in core:
+        src, path = read(name)
         rules = ("int", "rng", "keyed") + (("order",) if name == "sim.py" else ())
-        out += lint_source(src, os.path.relpath(p, rel), rules)
-    for name, classes in sorted(sim_subclasses(pkg).items()):
-        p = os.path.join(pkg, name)
-        with open(p) as fh:
-            src = fh.read()
-        out += lint_source(src, os.path.relpath(p, rel), RULES, classes=set(classes))
-    return out
+        out.update(lint_source(src, path, rules))
+    for name, classes in sim_subclasses(pkg).items():
+        if name == "sim.py":
+            continue  # all four rules already run on the whole of sim.py
+        src, path = read(name)
+        out.update(lint_source(src, path, ("order",) if name in core else RULES, classes=set(classes)))
+    return sorted(out, key=lambda x: (x.path, x.line, x.rule, x.message))
 
 
 if __name__ == "__main__":

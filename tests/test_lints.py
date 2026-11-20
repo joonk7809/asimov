@@ -2,9 +2,12 @@
 shown failing on a planted violation (a snippet, and the same edit made to the real sim.py) and passing
 on a compliant one: a check that has never been seen to fail proves nothing."""
 import functools
+import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import textwrap
 
 import pytest
@@ -22,9 +25,68 @@ def test_the_package_is_clean():
     assert [str(f) for f in lint.lint_package()] == []
 
 
+# What Python itself imports and defines, asked in a fresh interpreter (-I: no cwd, no PYTHONPATH), so these
+# tests don't take lint's word for the file sets it checks.
+PROBE = r"""
+import importlib, json, os, sys
+root = sys.argv[1]
+sys.path.insert(0, root)
+pkg = os.path.join(root, "asiimov")
+def rel(m):
+    f = os.path.abspath(m.__file__)
+    assert f.startswith(pkg + os.sep), f
+    return os.path.relpath(f, pkg).replace(os.sep, "/")
+def ours():
+    return {n: m for n, m in list(sys.modules.items()) if n == "asiimov" or n.startswith("asiimov.")}
+for r in ("sim", "replay", "persist"):
+    importlib.import_module("asiimov." + r)
+core = sorted(rel(m) for m in ours().values())
+failed = []
+for d, dirs, files in os.walk(pkg):
+    dirs[:] = sorted(x for x in dirs if x != "__pycache__")
+    for f in sorted(files):
+        if f.endswith(".py"):
+            parts = os.path.relpath(os.path.join(d, f), pkg)[:-3].split(os.sep)
+            name = ".".join(["asiimov"] + (parts[:-1] if parts[-1] == "__init__" else parts))
+            try:
+                importlib.import_module(name)
+            except Exception as e:
+                failed.append([name, repr(e)])
+from asiimov.sim import Sim
+subs, todo = {}, list(Sim.__subclasses__())
+while todo:
+    c = todo.pop()
+    todo += c.__subclasses__()
+    m = sys.modules[c.__module__]
+    if c.__module__.startswith("asiimov"):
+        subs.setdefault(rel(m), set()).add(c.__name__)
+print(json.dumps({"core": core, "failed": failed, "subs": {k: sorted(v) for k, v in subs.items()}}))
+"""
+
+
+def runtime(root):
+    """The engine's import closure (files), and the Sim subclasses defined, per Python, for the package in root."""
+    r = subprocess.run([sys.executable, "-I", "-c", PROBE, str(root)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["failed"] == [], out["failed"]  # every module imports, so the subclass census is complete
+    return set(out["core"]), out["subs"]
+
+
+@functools.lru_cache(1)
+def real_runtime():
+    core, subs = runtime(os.path.dirname(lint.PKG))
+    return frozenset(core), subs
+
+
 def test_the_sim_core_is_what_the_engine_imports():
-    """A module the engine comes to import has to be classed as core (checked) or mind side (not)."""
-    assert lint.core_imports() == set(lint.SIM_CORE) | set(lint.MIND_SIDE)
+    """A module the engine comes to import has to be classed as core (checked) or mind side (not). Checked
+    against what Python imports, not against lint's own import walk."""
+    core, _ = real_runtime()
+    assert {"sim.py", "events.py", "rng.py", "minds.py"} <= core
+    assert set(lint.core_files()) == core - set(lint.MIND_SIDE)
+    assert set(lint.SIM_CORE) == core - set(lint.MIND_SIDE)
+    assert lint.core_imports() == core
 
 
 def test_the_mind_side_is_only_minds_py():
@@ -35,9 +97,11 @@ def test_the_mind_side_is_only_minds_py():
 
 
 def test_every_sim_subclass_in_the_package_is_found():
-    """ArmSim is run and replayed by fork.py; ProbeSim and AuthorshipSim replay logs. Their bodies are linted."""
-    assert lint.sim_subclasses() == {"scorecard.py": ["ArmSim"], "probe.py": ["ProbeSim"],
-                                     "authorship.py": ["AuthorshipSim"]}
+    """ArmSim is run and replayed by fork.py; ProbeSim and AuthorshipSim replay logs. Their bodies are linted.
+    The AST finder must agree with Sim.__subclasses__() after importing every module."""
+    _, subs = real_runtime()
+    assert lint.sim_subclasses() == subs == {"scorecard.py": ["ArmSim"], "probe.py": ["ProbeSim"],
+                                             "authorship.py": ["AuthorshipSim"]}
 
 
 # ---- every rule is applied to every file it covers (B1) ----------------------------------------------
@@ -80,8 +144,10 @@ def _line(text, needle):
 def test_a_violation_planted_in_every_covered_file_is_reported(tmp_path):
     pkg = tmp_path / "asiimov"
     shutil.copytree(lint.PKG, pkg, ignore=shutil.ignore_patterns("__pycache__"))
-    core = lint.core_imports(str(pkg)) - {"minds.py"}
-    assert {"sim.py", "memory.py", "params.py", "rng.py"} <= core
+    core, subs = real_runtime()
+    core = core - {"minds.py"}  # the import closure per Python, not per lint
+    assert {"sim.py", "memory.py", "params.py", "rng.py", "events.py"} <= core
+    assert {k: v[0] for k, v in subs.items()} == SUBCLASSES
     expected = set()
     for name in sorted(core):
         path = pkg / name
@@ -551,3 +617,182 @@ def test_a_bad_or_unused_suppression_is_a_finding(comment, why):
 def test_suppression_text_inside_a_string_is_not_a_suppression():
     src = 'p = a / b\ns = "# lint: allow int -- in a string"\n'
     assert [(f.line, f.rule) for f in lint.lint_source(src, "asiimov/sim.py", ("int",))] == [(1, "int")]
+
+
+# ---- the import closure follows every import form, subpackages too (round 2, B1) --------------------
+
+HELPER = "def half(x):\n    return x / 2\n"
+IMPORT_FORMS = [
+    ("helpers.py", "from asiimov import helpers"),
+    ("helpers.py", "import asiimov.helpers"),
+    ("helpers.py", "import asiimov.helpers as h"),
+    ("helpers.py", "from . import helpers"),
+    ("helpers.py", "from .helpers import half"),
+    ("helpers.py", "from asiimov.helpers import half"),
+    ("sub/helpers.py", "from .sub import helpers"),
+    ("sub/helpers.py", "import asiimov.sub.helpers"),
+    ("sub/helpers.py", "from asiimov.sub.helpers import half"),
+]
+
+
+def _only_py(d, names):
+    return [n for n in names if n == "__pycache__" or (not n.endswith(".py") and not os.path.isdir(os.path.join(d, n)))]
+
+
+def _copy(tmp_path):
+    pkg = tmp_path / "asiimov"
+    shutil.copytree(lint.PKG, pkg, ignore=_only_py)
+    return pkg
+
+
+@pytest.mark.parametrize("where,stmt", IMPORT_FORMS, ids=[s for _, s in IMPORT_FORMS])
+def test_a_module_the_engine_imports_in_any_form_is_linted_and_must_be_classed(tmp_path, where, stmt):
+    pkg = _copy(tmp_path)
+    (pkg / where).parent.mkdir(exist_ok=True)
+    if where.startswith("sub/"):
+        (pkg / "sub" / "__init__.py").write_text("")
+    (pkg / where).write_text(HELPER)
+    sim = (pkg / "sim.py").read_text()
+    head = sim.index("\nfrom .minds import")
+    (pkg / "sim.py").write_text(sim[:head] + "\n" + stmt + sim[head:])
+    rel = f"asiimov/{where}"
+    assert where in lint.core_files(str(pkg))  # linted whole by lint_package (the plant test proves that)
+    want = {rel} | ({"asiimov/sub/__init__.py"} if where.startswith("sub/") else set())
+    assert {f.path for f in lint.unclassed(str(pkg))} == want
+    if stmt == IMPORT_FORMS[0][1]:  # once, end to end
+        hits = {(f.path, f.line, f.rule) for f in lint.lint_package(str(pkg))}
+        assert (rel, 2, "int") in hits and (rel, 1, "core") in hits, hits
+
+
+def test_the_closure_with_a_subpackage_matches_python(tmp_path):
+    """One copy with several forms at once, checked against what Python imports."""
+    pkg = _copy(tmp_path)
+    (pkg / "sub").mkdir()
+    (pkg / "sub" / "__init__.py").write_text("from . import deep\n")
+    (pkg / "sub" / "deep.py").write_text("from ..helpers import half\n")
+    (pkg / "helpers.py").write_text(HELPER)
+    (pkg / "other.py").write_text("X = 1\n")
+    sim = (pkg / "sim.py").read_text()
+    head = sim.index("\nfrom .minds import")
+    (pkg / "sim.py").write_text(sim[:head] + "\nimport asiimov.sub as s\nfrom asiimov import other" + sim[head:])
+    core, _ = runtime(tmp_path)
+    assert {"sub/__init__.py", "sub/deep.py", "helpers.py", "other.py"} <= core
+    assert lint.core_imports(str(pkg)) == core
+
+
+# ---- Sim subclasses through aliases, attributes and subpackages (round 2, B3) ------------------------
+
+ARMS = {
+    "arm2.py": "from .sim import Sim as Engine\nclass Arm2(Engine):\n{body}",
+    "arm3.py": "from asiimov import sim\nclass Arm3(sim.Sim):\n{body}",
+    "arm4.py": "import asiimov.sim\nclass Arm4(asiimov.sim.Sim):\n{body}",
+    "arm5.py": "import asiimov.sim as core\nBase = core.Sim\nclass Arm5(Base):\n{body}",
+    "arm6.py": "from .scorecard import ArmSim as A\nclass Arm6(A):\n{body}",
+    "arm7.py": "from . import arm2\nclass Arm7(arm2.Engine):\n{body}",
+    "sub/arm8.py": "from ..sim import Sim\nclass Arm8(Sim):\n{body}",
+}
+ARM_BODY = "    def _lint_plant(self):\n        return 7 / 2\n"
+
+
+def test_sim_subclasses_are_found_through_aliases_attributes_and_subpackages(tmp_path):
+    pkg = _copy(tmp_path)
+    (pkg / "sub").mkdir()
+    (pkg / "sub" / "__init__.py").write_text("")
+    for name, src in ARMS.items():
+        (pkg / name).write_text(src.format(body=ARM_BODY))
+    want = {name: [re.search(r"class (\w+)", src).group(1)] for name, src in ARMS.items()}
+    found_ast = lint.sim_subclasses(str(pkg))
+    _, found_rt = runtime(tmp_path)
+    assert found_rt == found_ast
+    assert {k: v for k, v in found_ast.items() if k in ARMS} == want
+    hits = {(f.path, f.rule) for f in lint.lint_package(str(pkg))}
+    assert {(f"asiimov/{name}", "int") for name in ARMS} <= hits, hits
+
+
+# ---- calls canonicalised through the import table (round 2, B4) --------------------------------------
+
+CANON_RNG_BAD = """
+from builtins import hash as h
+from builtins import id as ident
+import builtins
+import builtins as b
+a = h(x)
+c = ident(x)
+d = builtins.hash(x)
+e = b.id(x)
+"""
+CANON_RNG_GOOD = """
+a = self.hash(x)
+b = obj.id(x)
+"""
+
+
+def test_hash_and_id_are_flagged_through_builtins_and_aliases():
+    assert sorted(f.line for f in found(CANON_RNG_BAD, "rng")) == [6, 7, 8, 9]
+    assert found(CANON_RNG_GOOD, "rng") == []
+
+
+CANON_ORDER_BAD = """
+from .minds import dispatch as ask_all
+from . import minds
+from .sim import _parse as p
+from asiimov import sim
+class Sim:
+    def _tick(self, reqs):
+        a = ask_all(m, reqs, 1)
+        b = minds.dispatch(m, reqs, 1)
+        p(r)
+        sim._parse(r)
+"""
+CANON_ORDER_GOOD = """
+from .minds import dispatch as ask_all
+from .sim import _parse as p
+class Sim:
+    def _commit(self):
+        replies = ask_all(self.mind, reqs, self.workers)
+        for aid in self._order(aids):
+            apply(eid, p(replies[aid]))
+    def _tick(self):
+        self.dispatch(x)
+        self._parse(x)
+"""
+
+
+def test_dispatch_and_parse_are_flagged_through_aliases():
+    assert sorted(f.line for f in found(CANON_ORDER_BAD, "order")) == [8, 9, 10, 11]
+    assert found(CANON_ORDER_GOOD, "order") == []
+
+
+# ---- more nondeterminism sources (round 2, non-blocking) -------------------------------------------
+
+MORE_RNG_BAD = """
+from .events import *
+for d, ds, fs in os.walk(root):
+    pass
+xs = sorted(os.walk(root))
+ps = list(Path(root).iterdir())
+gs = [p for p in Path(root).glob("*.json")]
+rs = root.rglob("*")
+lt = time.localtime()
+gt = time.gmtime(0)
+ct = time.ctime()
+ft = datetime.datetime.fromtimestamp(0)
+ev = os.environ.get("SEED")
+ge = os.getenv("SEED")
+ti = threading.get_ident()
+"""
+MORE_RNG_GOOD = """
+ps = sorted(Path(root).iterdir())
+gs = sorted(Path(root).glob("*.json"))
+fs = sorted(glob.glob("*.json"))
+"""
+
+
+def test_star_imports_walks_path_order_local_clocks_environment_and_thread_ids_are_flagged():
+    lines = sorted(f.line for f in found(MORE_RNG_BAD, "rng"))
+    assert lines == [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], lines  # 4 is `pass`
+    assert found(MORE_RNG_GOOD, "rng") == []
+
+
+def test_dunder_true_division_is_flagged():
+    assert [f.line for f in found("a = x.__truediv__(y)\nb = x.__floordiv__(y)\n", "int")] == [1]
