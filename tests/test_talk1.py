@@ -442,6 +442,13 @@ def test_crowded_plaza_keeps_the_head():
         a["place"], a["route"] = "plaza", None
         return real(a, eid, target)
     sim._say = beside
+    act = sim._act
+
+    def stays(a):  # and off it again before the answer is asked: parted, no yes would be offered (apart-1)
+        act(a)
+        if a["id"] == me:
+            a["place"], a["route"] = "plaza", None
+    sim._act = stays
     say(sim, to, text=line.strip())
     reqs = [r for r in mind.reqs]
     assert any(r.kind == "deliberate" for r in reqs)

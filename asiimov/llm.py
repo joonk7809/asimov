@@ -11,8 +11,9 @@ import time
 import urllib.error
 import urllib.request
 
+from .memory import GIVES_ANSWER_LINE, prompt_hash
 from .minds import MindReply, MindRequest
-from .sim import ACTIVITIES as _ACTIVITIES, STEP_DOS
+from .sim import ACTIVITIES as _ACTIVITIES, SAYS_NEXT, STEP_DOS
 
 ACTIVITIES = list(_ACTIVITIES)
 
@@ -32,6 +33,9 @@ SCHEMAS = {
     "answer": {"type": "object",
                "properties": {"says": {"type": "string"}, "next": {"type": "string", "enum": ["stay", "carry_on", "leave"]}},
                "required": ["says", "next"], "additionalProperties": False},
+    # text-1: the private decision, a yes or a no and nothing else. Its prompt never holds the speaker's words.
+    "decide": {"type": "object", "properties": {"answer": {"type": "string", "enum": ["yes", "no"]}},
+               "required": ["answer"], "additionalProperties": False},
     "plan": {
         "type": "object",
         # minItems: a whole waking day, not one short block (one-block plans were 700/700 at eccd95d).
@@ -75,6 +79,18 @@ def schema_for(req: MindRequest) -> dict:
         return {"type": "object", "properties": {"answer": {"type": "string", "enum": list(req.view["answers"])},
                                                  **base["properties"]},
                 "required": ["answer"] + base["required"], "additionalProperties": False}
+    if req.kind == "answer" and req.view.get("gives"):  # text-1: a typed line under a held yes; what was heard, first
+        base = SCHEMAS["answer"]
+        return {"type": "object", "properties": {"gives": {"type": "string", "enum": list(req.view["gives"])},
+                                                 **base["properties"]},
+                "required": ["gives"] + base["required"], "additionalProperties": False}
+    if req.kind == "hear":  # text-1: the script arm's hearing call (Hearer)
+        return {"type": "object", "properties": {"gives": {"type": "string", "enum": list(req.view["gives"])}},
+                "required": ["gives"], "additionalProperties": False}
+    if req.kind == "decide" and req.view.get("decide", {}).get("think"):  # think-1: the thought first, then the answer
+        base = SCHEMAS["decide"]
+        return {"type": "object", "properties": {"thought": {"type": "string"}, **base["properties"]},
+                "required": ["thought"] + base["required"], "additionalProperties": False}
     if req.kind != "deliberate":
         return SCHEMAS[req.kind]
     people = _ids(req.view, "people")
@@ -110,6 +126,11 @@ class LLMMind:
         self.timeout, self.retries, self.structured = timeout, retries, structured
         self.api_key = api_key
         self.calls: list[dict] = []  # {kind, latency_s, prompt_tokens, completion_tokens}
+        # text-1, after the first pilot (Steering 2026-11-19 12:36Z): hear(req) -> ("food" | "nothing" | None, how), a
+        # Hearer on this same model. Set, an answer that offers a typed give is two calls: the hearing, with nothing of
+        # the mind, and then the words, on the engine's prompt for what was heard (req.told). None: one call, `gives`
+        # first in the answer's own reply.
+        self.hear = None
 
     def body(self, req: MindRequest) -> dict:
         b = {
@@ -124,7 +145,7 @@ class LLMMind:
             "chat_template_kwargs": {"enable_thinking": False},
         }
         if self.answer_first:
-            b["priority"] = 0 if req.kind == "answer" else 1
+            b["priority"] = 0 if req.kind in ("answer", "decide", "hear") else 1  # text-1: the decision the next answer waits on
         if req.frequency_penalty_milli:  # only the T21 reflect retry; every first ask is unchanged
             b["frequency_penalty"] = req.frequency_penalty_milli / 1000
         if self.structured:
@@ -155,6 +176,30 @@ class LLMMind:
         raise RuntimeError(f"LLM server unreachable after {self.retries + 1} tries: {last}")
 
     def decide(self, req: MindRequest) -> MindReply:
+        if req.kind == "answer" and self.hear is not None and req.view.get("gives") and req.told:
+            return self._heard(req)
+        return self._ask(req)
+
+    def _heard(self, req: MindRequest) -> MindReply:
+        """Hear, then answer: the reply is the words' own JSON with what was heard put first, as one output. Anything
+        but a heard "food" is nothing, a `gives` in the words' own JSON is dropped, and words that aren't a JSON
+        object go back as they came, so the world reads no `gives` from them."""
+        gives, how = self.hear(req)
+        gives = gives if gives in req.view["gives"] and gives in req.told else "nothing"
+        prompt = req.told[gives]
+        reply = self._ask(MindRequest("answer", req.agent_id, req.tick, prompt, prompt_hash(prompt),
+                                      {k: v for k, v in req.view.items() if k != "gives"}, seed=req.seed))
+        try:
+            out = json.loads(reply.raw_output)
+        except ValueError:
+            out = None
+        if not isinstance(out, dict):
+            return MindReply(reply.raw_output, reply.model, {**reply.sampling, "hear": how, "told": gives},
+                             reply.finish_reason)
+        raw = json.dumps({"gives": gives, **{k: v for k, v in out.items() if k != "gives"}})  # only the hearing's
+        return MindReply(raw, reply.model, {**reply.sampling, "hear": how, "told": gives}, reply.finish_reason)
+
+    def _ask(self, req: MindRequest) -> MindReply:
         body = self.body(req)
         t0 = time.monotonic()
         resp = self.post("/v1/chat/completions", body)
@@ -181,3 +226,40 @@ class LLMMind:
         return {"calls": len(lat), "latency_p50_s": lat[len(lat) // 2], "latency_p95_s": lat[int(len(lat) * .95)],
                 "wall_s_in_model": round(sum(lat), 1), "prompt_tokens": pt, "completion_tokens": ct,
                 "truncated": sum(1 for c in self.calls if c["finish_reason"] == "length")}
+
+
+# text-1 (Steering 2026-11-19 07:40Z, ruling (e)): the pair's script arm hears a typed ask with the same model and the
+# same stated decision as the minds arm, and nothing of a mind: no soul, no diary, no memory, no words to write.
+HEAR_LINE = 'For kind=answer: {"gives":"food|nothing"}'
+NOW_ANSWER = "\n\n# Now (answer)\n"
+
+
+def hear_prompt(prompt: str) -> str:
+    """An answer request's prompt cut to what hearing needs: the reply rules and the "# Now" section, where the
+    engine states the held yes and quotes the line. Everything between (soul, core, plan, people, beliefs, Earlier,
+    Today) is left out, and so is the sentence on `says` and `next`, which a hearing doesn't write. The line is
+    printable text on one line (Sim._player), so it can't forge the section break this cuts at."""
+    if GIVES_ANSWER_LINE not in prompt or NOW_ANSWER not in prompt or not prompt.endswith(SAYS_NEXT):
+        raise ValueError("not an answer prompt that offers a give")
+    head = prompt.split("\n\n", 1)[0].replace(GIVES_ANSWER_LINE, HEAR_LINE, 1)
+    return head + prompt[prompt.rindex(NOW_ANSWER):-len(SAYS_NEXT)]
+
+
+class Hearer:
+    """ScriptMind's `hear`: asks a model whether the player's words ask for food. It never chooses: the world offers
+    a give only where the stub's roll was already yes, and anything but a parsed "food" gives nothing."""
+
+    def __init__(self, client: LLMMind):
+        self.client = client
+        self.model = client.model
+
+    def __call__(self, req: MindRequest) -> tuple[str | None, dict]:
+        try:
+            prompt = hear_prompt(req.prompt)
+            reply = self.client.decide(MindRequest("hear", req.agent_id, req.tick, prompt, prompt_hash(prompt),
+                                                   {"gives": list(req.view["gives"])}))
+            out = json.loads(reply.raw_output)
+            gives = out.get("gives") if isinstance(out, dict) else None
+            return (gives if isinstance(gives, str) else None), {"model": reply.model, **reply.sampling}
+        except (RuntimeError, ValueError, RecursionError) as e:  # a dead server or a bad reply: nothing is given
+            return None, {"model": self.model, "error": f"{type(e).__name__}: {str(e)[:120]}"}
