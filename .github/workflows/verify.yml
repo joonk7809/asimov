@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+# This job runs the PR's own code (verification/ and asiimov/), so it gets no write access and no secrets.
+permissions:
+  contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
