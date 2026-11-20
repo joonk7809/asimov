@@ -7,6 +7,8 @@ The Python engine is the only source of truth, over protocol 2 (`plan/client-pro
     godot --path client/godot -- --url ws://127.0.0.1:8765/           # live client
     godot --path client/godot -- --log runs/demo/events.jsonl         # a recorded log, with a scrubber
     xvfb-run -a godot --path client/godot --rendering-driver opengl3 -- --log LOG --at 230 --screenshot out.png
+    python client/godot/tools/make_playback.py runs/demo runs/demo/playback.json.gz   # a playback pack (G7)
+    godot --path client/godot -- --log runs/demo/playback.json.gz     # the same world with holdings; click a place
 
 - `scripts/world_model.gd` rebuilds who is where from events alone. The engine moves villagers only in
   `activity` and `arrive` events, and positions use worldmap.position's integer math. Interpolation between
@@ -29,4 +31,25 @@ by `make_fixture.py`, never against the viewer. `test_live.gd` steps a paused li
 tick's rebuilt positions against the engine's `pos` in that tick's view, and that one `fire` is acked as
 applied with its event's id.
 
-Not done yet: web export (it needs export templates, which aren't installed) and sprites.
+`test_playback.gd` (G7's bar) checks a playback pack, as the client reads it, against the engine's replay at
+every 10th view tick: positions, holdings and who is at each place.
+
+## Playback packs and exports (G7)
+
+A log alone doesn't carry what villagers hold. `tools/make_playback.py LOG OUT.json.gz` replays the log on the
+engine, every event checked against the record, and writes a pack: the events without their mind records, plus
+each villager's food and coin after every tick where they changed. The client reads the rows and works out
+nothing. A log replays only on the engine that wrote it, so an older log needs `--engine DIR`, a checkout of
+that engine (`git worktree add DIR COMMIT`). A live run's log, which has no end event, replays as far as it goes.
+
+`export_presets.cfg` has four presets: Web (no threads, so any static host serves it with no special headers),
+Linux, Windows and macOS (universal, ad-hoc signed: a downloaded copy needs right-click, Open). An export that
+finds `res://bundled/playback.json.gz` plays it when started with no `--url` or `--log`; the folder is not in
+git, CI fills it before it exports. With the 4.3 export templates installed:
+
+    python client/godot/tools/make_playback.py runs/demo client/godot/bundled/playback.json.gz
+    mkdir -p build/web && godot --headless --path client/godot --export-release Web
+    node client/godot/tests/web_smoke.js build/web shot.png   # serves build/web, opens it in headless Chromium
+
+CI (`godot.yml`, job `export`) does this from a clean checkout on every push to main and every PR, runs the
+Linux build and the web build with no engine behind them, and uploads all four builds as one artifact.
