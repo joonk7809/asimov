@@ -985,7 +985,9 @@ class Sim:
 
         for a in agents:
             flight = st.get("inflight", {}).get(str(a["id"]))
-            if flight is not None:  # pace-2: its plan or reflection is out until its due tick; it still answers the player
+            # pace-2: its plan or reflection is out until its due tick; it still answers the player. A body the player
+            # took while its call was out is the player's at once (it never waits); the call still lands when due.
+            if flight is not None and not self._possessed(a):
                 self._body(a, occupancy)
                 self._branch[a["id"]] = "in flight " + flight["kind"]
                 self._refuse_acts(a, "busy")

@@ -187,3 +187,28 @@ def test_the_held_typed_path_with_pace_2_on_is_pinned(monkeypatch, seed):
     assert any(e.kind == "mind_answer" for e in sim.events) and any(e.kind == "mind_decide" for e in sim.events)
     assert log == HELD[seed]
     replay(sim.events)
+
+
+def test_a_body_possessed_while_its_call_is_in_flight_is_the_players_at_once():
+    """Review of #104: the player's own body never waits. A villager whose plan is out, taken by the player, acts on
+    the player's word at once; its plan still lands at its due tick, and the world replays."""
+    sim = held_world(1)
+    sim.run_until(TICKS_PER_DAY - 6)
+    first = next(a["id"] for a in sim.state["agents"] if a["role"] == "guard")
+    sim.step([{"kind": "possess", "agent": first}])
+    for _ in range(60):
+        out = {int(k): f for k, f in sim.state.get("inflight", {}).items()
+               if f["kind"] == "plan" and f["due"] > sim.state["tick"] and int(k) != first}
+        if out:
+            break
+        sim.step([])
+    assert out, "not vacuous: a plan was in flight"
+    to, flight = min(out.items())
+    tick = sim.state["tick"]
+    sim.step([{"kind": "possess", "agent": to}, {"kind": "act", "action": "rest"}])
+    assert [e.data["ok"] for e in sim.events if e.kind == "receipt" and e.tick == tick and e.actor == to] == [True]
+    sim.run_until(flight["due"] + 1)
+    plan = next(e for e in sim.events if e.kind == "mind_plan" and e.actor == to and e.tick >= tick)
+    assert plan.tick == flight["due"] and plan.data["filed"] == flight["due"] - 2
+    sim.finish()
+    replay(sim.events)
