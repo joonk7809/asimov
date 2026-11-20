@@ -263,7 +263,8 @@ class ReplayMind:
     def __init__(self, mind_events: list):
         self.record = {}
         for ev in mind_events:
-            key = mind_key(ev.tick, ev.actor, ev.data.get("attempt", 0))
+            # pace-2: a plan or reflection lands two ticks after it was filed, and is found by its filing tick
+            key = mind_key(ev.data.get("filed", ev.tick), ev.actor, ev.data.get("attempt", 0))
             if key in self.record:
                 raise ReplayDivergence(f"two mind events for agent {ev.actor} at tick {ev.tick}")
             self.record[key] = ev
