@@ -115,3 +115,30 @@ def test_the_third_person_proxy_on_the_rows_in_hand():
     for name in about:
         assert all(rep.third_person(t, name) for t in about[name])
         assert not any(rep.third_person(t, name) for t in to[name])
+
+
+def test_a_deal_after_a_reply_counts_as_goods_moved(tmp_path):
+    """A `deal` (talk-1's chip give, text-1's typed give) moves food with no receipt: the report counts it. Before
+    this, aipt3's dry run read 0 goods moved after a typed ask that moved 1 food. The deal is appended as the engine
+    writes one: the listener is its actor, the player is `to`."""
+    out = str(tmp_path / "w")
+    me, to, said = session(out)
+    path = os.path.join(out, "events.jsonl")
+    evs = [json.loads(l) for l in open(path)]
+    reply = next(e for e in evs if e["kind"] == "reply" and e["data"].get("with") == me)
+    before = rep.metrics(rep.rows(out))
+    assert before["replies_then_goods_moved"] == 0
+    deal = {"actor": to, "data": {"food": 1, "from": to, "move": "asks_food", "ok": True, "to": me, "typed": 1},
+            "id": evs[-1]["id"] + 1, "kind": "deal", "mind": None, "origin": "rule", "parents": [reply["id"]],
+            "tick": reply["tick"]}
+    with open(path, "a") as f:
+        f.write(json.dumps(deal, sort_keys=True, separators=(",", ":")) + "\n")
+    r = rep.rows(out)
+    m = rep.metrics(r)
+    assert m["replies_then_goods_moved"] == 1 and m["replies_then_acted_at_player"] >= 1
+    x = next(x for x in r["exchanges"] if x.get("reply_tick") == reply["tick"])
+    assert {"tick": reply["tick"], "kind": "deal", "ok": True, "food": 1} in x["after"]
+    failed = dict(deal, id=deal["id"] + 1, data=dict(deal["data"], ok=False, why="has none"))
+    with open(path, "a") as f:
+        f.write(json.dumps(failed, sort_keys=True, separators=(",", ":")) + "\n")
+    assert rep.metrics(rep.rows(out))["replies_then_goods_moved"] == 1, "a failed deal moves nothing"
