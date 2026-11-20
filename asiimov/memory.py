@@ -37,16 +37,22 @@ assert SCHEMA.count(f'"action":"{E9_ACTIONS}"') == 1
 ANSWER_LINE = 'For kind=answer: {"says":"...","next":"stay|carry_on|leave"}'
 # talk-1 (plan/talk-1-build-spec.md §2.4): a line said with a move (the client's chip) is answered yes or no first.
 MOVE_ANSWER_LINE = 'For kind=answer: {"answer":"yes|no","says":"...","next":"stay|carry_on|leave"}'
+# text-1 (plan/text-1-build-spec.md): a line typed with no chip may be given 1 food, where the villager already decided
+# it would (its private yes); `gives` only says whether the words ask for food. And the private decision's own kind.
+GIVES_ANSWER_LINE = 'For kind=answer: {"gives":"food|nothing","says":"...","next":"stay|carry_on|leave"}'
+DECIDE_LINE = 'For kind=decide: {"answer":"yes|no"}'
+# think-1: the private decision thinks first; the engine reads only `answer`.
+THINK_DECIDE_LINE = 'For kind=decide: {"thought":"...","answer":"yes|no"}'
 DELIBERATE_LINE = ('For kind=deliberate: {"action":"' + E9_ACTIONS + '","target":ID_or_null,"reason":"...",'
                    '"goal":"..." or "","then":[{"do":"...","target":ID_or_null}]}')
 assert SCHEMA.count(DELIBERATE_LINE) == 1
 
 
-def schema_text(actions=None, answer: bool = False, move: bool = False) -> str:
+def schema_text(actions=None, answer: bool = False, move: bool = False, gives: bool = False) -> str:
     """The SCHEMA section, with the deliberate line cut to `actions` when given, or swapped for the answer line
-    (talk-1: the move answer's line for a line said with a chip)."""
+    (talk-1: the move answer's line for a line said with a chip; text-1: the gives line for a typed one)."""
     if answer:
-        return SCHEMA.replace(DELIBERATE_LINE, MOVE_ANSWER_LINE if move else ANSWER_LINE, 1)
+        return SCHEMA.replace(DELIBERATE_LINE, MOVE_ANSWER_LINE if move else GIVES_ANSWER_LINE if gives else ANSWER_LINE, 1)
     if actions is None:
         return SCHEMA
     return SCHEMA.replace(f'"action":"{E9_ACTIONS}"', '"action":"' + "|".join(actions) + '"', 1)
@@ -264,8 +270,19 @@ def render_files(agent: dict, state: dict, named: bool = False) -> dict[str, str
     }
 
 
+def assemble_decide(agent: dict, known: str, situation: str, think: bool = False) -> tuple[str, dict]:
+    """text-1: the private decision's prompt, from text the engine wrote and nothing else: the SCHEMA with the decide
+    line, the soul, the one "People I know" line for the speaker, and the situation. No Today, Earlier, core memories,
+    beliefs, plan or intent: those can hold a quoted line or words a mind wrote, and this prompt must be the same
+    bytes whatever anyone said (Steering 2026-11-19 07:34Z, point 6)."""
+    line = THINK_DECIDE_LINE if think else DECIDE_LINE
+    sections = {"schema": SCHEMA.replace(DELIBERATE_LINE, line, 1), "soul": agent["soul"],
+                "relationships": "# People I know\n" + known, "situation": f"# Now (decide)\n{situation}"}
+    return "\n\n".join(sections.values()), {name: tokens(text) for name, text in sections.items()}
+
+
 def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=None, actions=None,
-                    move: bool = False) -> tuple[str, dict]:
+                    move: bool = False, gives: bool = False) -> tuple[str, dict]:
     """Stable sections first (prefix-cacheable), changing tail last. `actions`: a deliberation's offered
     actions, which its SCHEMA line lists.
 
@@ -274,7 +291,7 @@ def assemble_prompt(agent: dict, state: dict, kind: str, situation: str, edit=No
     files = render_files(agent, state, named=kind == "answer")
     top_episodes = sorted(agent["episodes"], key=lambda e: (-e["importance"], -e["tick"]))[:8]
     sections = {
-        "schema": schema_text(actions, answer=kind == "answer", move=move),
+        "schema": schema_text(actions, answer=kind == "answer", move=move, gives=gives),
         "soul": files["soul.md"],
         "core": files["core.md"],
         "goals": files["goals.md"],

@@ -76,29 +76,53 @@ def deal_violations(events: list[Event], start: int = 0, possessed=None) -> list
     """talk-1 (spec §3): a `deal` that moved goods cites the listener's own `mind_answer`, whose request offered
     yes and whose recorded reply says yes, and the player's `said` line that carried the move; it moves exactly
     1 food, from a villager who is never the possessed body. (With yes the only answer offered, consent nature's
-    roll, the reply only words it.) A failed deal moves nothing, so cites only."""
+    roll or a held decision, the reply only words it.) A failed deal moves nothing, so cites only.
+
+    text-1 (spec §4): a typed deal (`typed`) cites a line said with no move and an answer that was offered food and
+    whose recorded reply holds gives: food. And wherever the answer rested on a held decision (`decided`), the deal
+    cites that decision: the listener's own `mind_decide` whose recorded reply parses to yes, or its `decided` roll
+    with answer yes, made about this speaker and this move. So no line moves food without a recorded yes that was
+    made before, and apart from, the words."""
     import json
+
+    def field(mind, key):
+        try:
+            out = json.loads(mind.mind["raw_output"])
+            return out.get(key) if isinstance(out, dict) else None
+        except (ValueError, AttributeError, TypeError, RecursionError):
+            return None
+
     out = []
     for e in events[start:]:
         if e.kind != "deal":
             continue
         d = e.data
+        typed = "typed" in d
         said = next((events[p] for p in e.parents if events[p].kind == "said"), None)
         mind = next((events[p] for p in e.parents if events[p].kind == "mind_answer"), None)
-        if said is None or "move" not in said.data or said.data["move"] != d["move"]:
+        if said is None or (("move" in said.data or d["move"] != "asks_food") if typed
+                            else said.data.get("move") != d["move"]):
             out.append(f"event {e.id}: deal without a line said with its move")
-        if d.get("food") != 1 or e.actor != d["from"] or d["from"] == d["to"] or d["from"] == possessed:
+        if d.get("food") != 1 or e.actor != d["from"] or d["from"] == d["to"] or d["from"] == possessed \
+                or (typed and "coin" in d):
             out.append(f"event {e.id}: deal {d}")
         if mind is None or mind.actor != d["from"]:
             out.append(f"event {e.id}: deal without the listener's answer")
+            continue
+        basis = mind.data.get("typed" if typed else "deal", {})
+        if d["ok"] and typed:
+            if not ("food" in basis.get("offered", []) and field(mind, "gives") == "food"):
+                out.append(f"event {e.id}: typed deal on an answer that wasn't an offered give")
         elif d["ok"]:
-            try:
-                said_yes = json.loads(mind.mind["raw_output"]).get("answer") == "yes"
-            except (ValueError, AttributeError, TypeError, RecursionError):
-                said_yes = False
             offered = mind.data.get("offered", [])
-            if not ("yes" in offered and (said_yes or offered == ["yes"])):  # one answer offered is the answer
+            if not ("yes" in offered and (field(mind, "answer") == "yes" or offered == ["yes"])):  # one answer offered is the answer
                 out.append(f"event {e.id}: deal on an answer that wasn't an offered yes")
+        if "decided" in basis or typed:
+            dec = next((events[p] for p in e.parents if events[p].kind in ("mind_decide", "decided")), None)
+            yes = dec is not None and (field(dec, "answer") if dec.kind == "mind_decide" else dec.data.get("answer")) == "yes"
+            if dec is None or dec.id != basis.get("decided") or dec.actor != d["from"] or dec.data.get("with") != d["to"] \
+                    or dec.data.get("move") != d["move"] or dec.id >= mind.id or (d["ok"] and not yes):
+                out.append(f"event {e.id}: deal without the listener's own earlier yes to this speaker")
     return out
 
 
