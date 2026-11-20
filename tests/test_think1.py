@@ -195,6 +195,9 @@ def day_log(talk, seed):
 @pytest.mark.parametrize("name,seed", sorted(BEFORE))
 def test_a_world_without_the_flag_is_byte_identical_to_before_think_1(monkeypatch, name, seed):
     monkeypatch.setattr(S, "ENGINE_VERSION", "apart-1")  # the label the pins were written under; 37 since the rename
+    # pace-2 moves when a held world's plans land, which these pins predate; this test is about the think flag, so it
+    # runs with pace-2 off (the pins then still hold byte for byte). tests/test_pace2.py covers pace-2 itself.
+    monkeypatch.setattr(S.Sim, "_pace2", lambda self: False)
     talk = PRIVATE if name == "typed" else {"consent": "private"}
     log, decided = day_log(talk, seed)
     assert decided >= 2, "vacuous: no private decision in the day"

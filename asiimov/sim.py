@@ -19,9 +19,9 @@ in another process; asiimov.persist uses them to resume runs after a crash.
 import hashlib
 import re
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections import defaultdict
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from .events import Event, canonical
 from .memory import (REFLECT_ASK, assemble_decide, assemble_prompt, is_bare_value, known_people, named_people, prompt_hash,
@@ -306,7 +306,7 @@ SHARE_KIN = 200                                   # family are likelier to agree
 SHARE_MAX = 950
 # Bump on any change that alters the log for the same inputs: old logs then refuse to replay
 # with a clear message instead of diverging. tests/test_world.py pins a golden log hash per version.
-ENGINE_VERSION = "37"  # 37 = text-1 (#101): a typed ask is settled by the villager's private yes, with apart-1 (no yes is offered in talk once the two have parted) and think-1 (the private decision may think first; off by default) (Steering 2026-11-19 21:24Z)
+ENGINE_VERSION = "38"  # 38 = pace-2 (#104): in a held world with a player, plan and reflect calls fly and land at t+2 (Steering 2026-11-20 09:06Z). 37 = 37 = text-1 (#101): a typed ask is settled by the villager's private yes, with apart-1 (no yes is offered in talk once the two have parted) and think-1 (the private decision may think first; off by default) (Steering 2026-11-19 21:24Z)
 # on 36 = pace-1 (#99): a plan or reflect call waits one tick while a player's line awaits its answer (Steering 07:39Z); on 35 = talk-1g (#97): the injection guard sentence on chip lines (Steering 02:17Z); on 34 = talk-1 (#96)
 # 33 = say-3c (#88): an over-long reply is clipped at a sentence or word, not mid-word; on 32
 # 32 = say-3b (#85): answer prompts name people, leave = avoid them, ids said aloud become names; on 31.
@@ -479,6 +479,8 @@ class Sim:
         self.pending: dict[int, tuple] = {}  # agent id -> (request, parents, prompt tokens, apply)
         self.player_pending: dict[int, tuple] = {}  # agent id -> a player act to apply in _commit (no mind call)
         self.decides: dict[int, tuple] = {}  # text-1: listener id -> (request, parents, prompt tokens, data, apply)
+        self._fut: dict[int, Future] = {}  # pace-2: agent id -> its in-flight call's reply (state["inflight"] holds the rest)
+        self._bg: ThreadPoolExecutor | None = None
         self._acts: dict[int, list] = {}  # agent id -> this tick's queued player acts: (event, action, target)
         self._branch: dict[int, str] = {}  # this tick: why a body takes no act (asleep, falling asleep, bedtime)
         self._acted: set = set()  # this tick: bodies whose one act is taken
@@ -621,9 +623,62 @@ class Sim:
             ids.sort(key=lambda i: (self.rng.raw(f"order:{tick}", i), i))
         return ids
 
+    def _pace2(self) -> bool:
+        """pace-2 (Steering 2026-11-20 09:06Z): in a held world with a player in it, plan and reflect calls stop
+        blocking ticks. One filed at tick t is asked at once and lands at t+2's commit, which alone waits for it."""
+        return "player" in self.state and self._talk_held()
+
+    def _fly(self) -> dict:
+        """pace-2: send this tick's plan and reflect requests out (the player's own body never), and take back the
+        replies due now as {agent id: ((request, parents, prompt tokens, apply), reply)}. A call that a restart lost
+        (no reply kept: a snapshot or a resumed log) is asked again here; replay serves it from the record."""
+        st, tick = self.state, self.state["tick"]
+        if self._pace2():
+            for aid in sorted(self.pending):
+                req, parents, prompt_tokens, _ = self.pending[aid]
+                if req.kind in ("plan", "reflect") and not self._possessed(self.state["agents"][aid]):
+                    del self.pending[aid]
+                    # the request as one JSON string: its view holds bools and the state holds none
+                    st.setdefault("inflight", {})[str(aid)] = {"req": canonical(asdict(req)), "kind": req.kind,
+                                                               "parents": list(parents),
+                                                               "prompt_tokens": prompt_tokens, "due": tick + 2}
+                    self._fut[aid] = self._send(req)
+        due = {}
+        for key in sorted((k for k, f in st.get("inflight", {}).items() if f["due"] == tick), key=int):
+            f, aid = st["inflight"].pop(key), int(key)
+            req = MindRequest(**json.loads(f["req"]))
+            fut = self._fut.pop(aid, None)
+            try:
+                reply = fut.result() if fut is not None else self.mind.decide(req)
+            except ReplayDivergence:
+                if self.expected is not None or fut is None:
+                    raise
+                reply = self.mind.decide(req)  # filed in a resumed log's tail, recorded past it: asked live now
+            a = self.state["agents"][aid]
+            apply = ((lambda eid, out, a=a: self._apply_plan(a, eid, out)) if req.kind == "plan"
+                     else (lambda eid, out, a=a: self._fall_asleep(a, eid, out)))
+            due[aid] = ((req, f["parents"], f["prompt_tokens"], apply), reply)
+        if not st.get("inflight", True):
+            del st["inflight"]
+        return due
+
+    def _send(self, req: MindRequest) -> Future:
+        if self.workers <= 1:  # tests and rule minds: asked here, in order, so nothing depends on threads
+            fut = Future()
+            try:
+                fut.set_result(self.mind.decide(req))
+            except Exception as e:  # noqa: BLE001 - kept for the due tick, as a thread's would be
+                fut.set_exception(e)
+            return fut
+        if self._bg is None:
+            self._bg = ThreadPoolExecutor(self.workers)
+        mind = self.mind
+        return self._bg.submit(mind.decide, req)
+
     def _commit(self, late=(), during=None):
         """Ask every pending request at once, then validate and apply replies in `_order`. The tick's player
         acts apply first, while the calls are out (E4): the player goes first in contests within its tick."""
+        due = self._fly()
         aids = sorted(self.pending)
         reqs = [self.pending[i][0] for i in aids]
         if during is None:
@@ -635,39 +690,45 @@ class Sim:
                 self._play(late)
                 during(self, fut.done)
                 replies = dict(zip(aids, fut.result()))
+        # pace-2: calls filed two ticks ago land now, in _order with this tick's replies. A villager answering the
+        # player at its due tick has both: the call that lands goes first, then the answer.
+        rank = {aid: i for i, aid in enumerate(self._order(set(self.pending) | set(due)))}
+        entries = sorted([(rank[aid], 0, aid, entry, reply) for aid, (entry, reply) in due.items()]
+                         + [(rank[aid], 1, aid, self.pending[aid], replies[aid]) for aid in aids])
         # A reflection cut off at max_tokens is asked once more, with a keyed seed (the prompt-hash seed
         # repeats the same loop) and frequency penalty 1.0 (T21: 4B fiction loss 22.7% -> 7.8% in the
         # same-requests check). First asks are unchanged. Asked together, applied in _order below.
         retry = {}
-        for aid in aids:
-            req = self.pending[aid][0]
-            if req.kind == "reflect" and replies[aid].finish_reason == "length":
-                day = self.state["tick"] // TICKS_PER_DAY
-                retry[aid] = replace(req, attempt=1, seed=self.rng.raw(f"reflect-retry:{aid}:{day}", 0) % 2 ** 32,
-                                     frequency_penalty_milli=RETRY_PENALTY_MILLI)
+        for i, (_, _, aid, entry, reply) in enumerate(entries):
+            req = entry[0]
+            if req.kind == "reflect" and reply.finish_reason == "length":
+                day = req.tick // TICKS_PER_DAY  # the day it was filed (pace-2 lands a reflection two ticks on)
+                retry[i] = replace(req, attempt=1, seed=self.rng.raw(f"reflect-retry:{aid}:{day}", 0) % 2 ** 32,
+                                   frequency_penalty_milli=RETRY_PENALTY_MILLI)
         # text-1: the private decisions filed by this tick's lines (_talk_decide, from _play or a late act) are asked
         # here, in the same round as the retries, and applied after every other reply, in _order.
         r_ids, d_ids = sorted(retry), sorted(self.decides)
         second = dispatch(self.mind, [retry[i] for i in r_ids] + [self.decides[i][0] for i in d_ids], self.workers)
         retried, decided = dict(zip(r_ids, second)), dict(zip(d_ids, second[len(r_ids):]))
-        pending, self.pending = self.pending, {}
+        self.pending = {}
         decides, self.decides = self.decides, {}
-        for aid in self._order(aids):
-            req, parents, prompt_tokens, apply = pending[aid]
-            reply = replies[aid]
+        for i, (_, _, aid, (req, parents, prompt_tokens, apply), reply) in enumerate(entries):
             data = {"kind": req.kind}
+            if req.tick != self.state["tick"]:  # pace-2: filed earlier; replay finds it by the filing tick
+                data["filed"] = req.tick
             if req.kind == "deliberate":  # what the prompt didn't offer, so infeasible choices are countable
                 data["withheld"] = [x for x in DELIBERATE_ACTIONS if x not in req.view["offer"]]
             if req.kind == "answer" and "answers" in req.view:  # talk-1: what the answer could be, and the roll
                 data["offered"], data["deal"] = req.view["answers"], req.view["deal"]
             if req.kind == "answer" and "typed" in req.view:  # text-1: what a typed line could be given, and on what
                 data["typed"] = {"offered": req.view.get("gives", ["nothing"]), **req.view["typed"]}
-            if aid in retried:
+            if i in retried:
                 data["retried"] = True  # superseded by the next event; readers of reflections skip it
             eid = self._emit_mind(req, reply, data, parents, prompt_tokens)
-            if aid in retried:
-                req, reply = retry[aid], retried[aid]
-                eid = self._emit_mind(req, reply, {"kind": req.kind, "attempt": 1}, [eid], prompt_tokens)
+            if i in retried:
+                req, reply = retry[i], retried[i]
+                eid = self._emit_mind(req, reply, {"kind": req.kind, "attempt": 1,
+                                                   **({"filed": req.tick} if "filed" in data else {})}, [eid], prompt_tokens)
             apply(eid, _parse(reply))
         for aid in self._order(d_ids):
             req, parents, prompt_tokens, data, apply = decides[aid]
@@ -914,7 +975,7 @@ class Sim:
         # day's longest) waits one tick, so the say tick and the reply tick aren't paced by it (pt11: line 7 at
         # 7.8 s with the morning's plans in flight). Keyed on the log only: a say among this tick's acts, or a
         # villager the player spoke to whose answer is due. A deferred call runs the next tick, whatever then holds.
-        self._talk_hold = self._talk_due(player_actions)
+        self._talk_hold = self._talk_due(player_actions) and not self._pace2()  # pace-2 replaces it where it applies
         for aid, kind in sorted(st.pop("deferred", {}).items()):
             a = agents[int(aid)]
             if kind == "plan":
@@ -923,6 +984,17 @@ class Sim:
                 self._reflect_request(a, occupancy)
 
         for a in agents:
+            flight = st.get("inflight", {}).get(str(a["id"]))
+            # pace-2: its plan or reflection is out until its due tick; it still answers the player. A body the player
+            # took while its call was out is the player's at once (it never waits); the call still lands when due.
+            if flight is not None and not self._possessed(a):
+                self._body(a, occupancy)
+                self._branch[a["id"]] = "in flight " + flight["kind"]
+                self._refuse_acts(a, "busy")
+                occ = a["occasion"]
+                if not a["asleep"] and occ and occ["why"] == "spoken" and tick - occ["tick"] < OCCASION_TICKS:
+                    self._maybe_deliberate(a, occupancy)  # an answer only: a spoken occasion never deliberates
+                continue
             if a["id"] in self.pending:  # a deferred call filed above is this tick's one request (pace-1)
                 self._body(a, occupancy)
                 self._branch[a["id"]] = "deferred " + self.pending[a["id"]][0].kind
