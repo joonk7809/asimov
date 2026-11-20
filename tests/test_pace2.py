@@ -161,3 +161,29 @@ def test_a_villager_with_a_plan_in_flight_answers_the_player_and_its_prompt_show
     assert blocks or plan.mind["raw_output"]  # the plan had content to leak, had it been adopted
     sim.finish()
     replay(sim.events)
+
+
+# The whole log of the path joon plays: a held, typed world with a player saying lines across a dawn and a dusk, with
+# pace-2 on and text-1's hostile mind. Pinned under the branch label, so the rename at merge doesn't move it
+# (Steering 2026-11-20 09:36Z: the held path with pace-2 on, pinned byte for byte).
+HELD = {1: "c1e3551940a0218af7d08b2e864d5da2cfc9a77fd52e1707222d9e5a31d6c7a3",
+        2: "593b6b631294b23682da32020e2d44a3c92f2375e8f299857fd6e2f87abbda0d"}
+
+
+def held_log(seed):
+    import hashlib
+    from test_text1 import Hostile
+    sim, _ = talker(seed, TICKS_PER_DAY + 30, every=0.6, mind=Hostile(seed))
+    flown = sum(1 for e in sim.events if "filed" in e.data)
+    return hashlib.sha256("\n".join(e.to_json() for e in sim.events).encode()).hexdigest(), flown, sim
+
+
+@pytest.mark.parametrize("seed", sorted(HELD))
+def test_the_held_typed_path_with_pace_2_on_is_pinned(monkeypatch, seed):
+    from asiimov import sim as S
+    monkeypatch.setattr(S, "ENGINE_VERSION", "pace-2")
+    log, flown, sim = held_log(seed)
+    assert flown > 20, "not vacuous: calls flew"
+    assert any(e.kind == "mind_answer" for e in sim.events) and any(e.kind == "mind_decide" for e in sim.events)
+    assert log == HELD[seed]
+    replay(sim.events)
