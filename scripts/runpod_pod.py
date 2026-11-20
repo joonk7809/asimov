@@ -3,6 +3,7 @@
     python scripts/runpod_pod.py up --model Qwen/Qwen3-4B-Instruct-2507
     python scripts/runpod_pod.py wait POD_ID      # blocks until /v1/models answers
     python scripts/runpod_pod.py list
+    python scripts/runpod_pod.py ports POD_ID     # public IP and direct TCP port mappings (up --tcp-port)
     python scripts/runpod_pod.py down POD_ID      # terminate (stops billing)
     python scripts/runpod_pod.py down --all
 
@@ -118,7 +119,7 @@ def up(args):
         "image": IMAGE,
         "cloud": args.cloud,
         "disk": 80,
-        "ports": ["8000/http", f"{AGENT_PORT}/http"] + [f"{p}/http" for p in args.port],
+        "ports": ["8000/http", f"{AGENT_PORT}/http"] + [f"{p}/http" for p in args.port] + [f"{p}/tcp" for p in getattr(args, "tcp_port", [])],
         "entrypoint": ["bash", "-c"],
         "cmd": [cmd],
         "env": {"HF_HUB_ENABLE_HF_TRANSFER": "1"},
@@ -171,6 +172,14 @@ def wait(args):
         sys.exit("timed out waiting for the server; the pod is still billing (--keep)")
     down(argparse.Namespace(all=False, pod=args.pod))
     sys.exit("timed out waiting for the server; terminated the pod")
+
+
+def ports(args):
+    """The pod's direct TCP mappings, the fallback when the HTTP proxy fails (Steering 2026-11-20 23:21Z): a port
+    exposed with `up --tcp-port P` is reached at ws://PUBLIC_IP:MAPPED/ with no proxy and no TLS."""
+    pod = call("GET", f"/pods/{args.pod}") or {}
+    keys = [k for k in pod if any(w in k.lower() for w in ("ip", "port"))]
+    print(json.dumps({k: pod[k] for k in keys}, indent=2))
 
 
 def pod_alive(pid: str) -> bool:
@@ -236,6 +245,8 @@ def main():
     p.add_argument("--name", default=None, help="pod name after the asiimov- prefix (default: the model)")
     p.add_argument("--port", type=int, action="append", default=[],
                    help="another HTTP port to expose at https://POD_ID-PORT.proxy.runpod.net, e.g. 8765 for asiimov.live")
+    p.add_argument("--tcp-port", type=int, action="append", default=[],
+                   help="also expose this port as direct TCP (no proxy): the fallback if the proxy fails; see `ports`")
     p.add_argument("--ttl-hours", type=float, default=6.0, help="pod terminates itself this long after launch; size it to the planned run")
     p.add_argument("--stall-s", type=int, default=180,
                    help="pod terminates itself when its weight download makes no progress this long (0: off)")
@@ -246,6 +257,9 @@ def main():
     p.add_argument("--timeout", type=int, default=2700)
     p.add_argument("--keep", action="store_true", help="on a timeout, leave the pod running")
     p.set_defaults(fn=wait)
+    p = sub.add_parser("ports")
+    p.add_argument("pod")
+    p.set_defaults(fn=ports)
     sub.add_parser("list").set_defaults(fn=ls)
     p = sub.add_parser("down")
     p.add_argument("pod", nargs="?")
