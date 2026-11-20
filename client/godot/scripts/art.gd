@@ -15,8 +15,12 @@ static var _tex := {}
 
 static func tex(name: String) -> Texture2D:
 	if not _tex.has(name):
-		var img := Image.load_from_file(ProjectSettings.globalize_path("res://art/%s.png" % name))
-		_tex[name] = ImageTexture.create_from_image(img) if img != null else null
+		var path := "res://art/%s.png" % name
+		if ResourceLoader.exists(path):  # an export (or a project the editor has opened) holds the imported image
+			_tex[name] = load(path)
+		else:  # a plain checkout: straight from the file
+			var img := Image.load_from_file(ProjectSettings.globalize_path(path))
+			_tex[name] = ImageTexture.create_from_image(img) if img != null else null
 	return _tex[name]
 
 
