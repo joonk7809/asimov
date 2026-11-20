@@ -6,12 +6,17 @@ Three signals on every PR, each checkable on the PR's head commit instead of tak
   pytest, hypothesis and jsonschema. Fails on a nonzero exit or a receipt whose status is not `pass`; the
   receipt is uploaded as the `verification-receipt` artifact. Scope and limits: verification/README.md.
 - `guard` (.github/workflows/guard.yml): `scripts/pr_guard.py` diffs merge-base..head and prints JSON with
-  `protected_paths_touched`, `golden_or_engine_changed`, `weakening`, `renamed` and `new_test_skips`. Weakening
-  (the kinds are listed in the script's docstring: a deleted test file, a removed test function, fewer
-  effective asserts, a trivial or dead-branch assert, an added skip/xfail reaching an existing test, a
-  shadowed test name, fewer literal parametrize cases, a pytest collection-config change, a changed
-  `pytest_collection_modifyitems`) fails the job unless the PR has the `guard-override` label. Protected paths
-  and golden/engine changes are reported, not failed; the merge policy escalates on them.
+  `protected_paths_touched`, `golden_or_engine_changed`, `weakening`, `renamed`, `moved` and `new_test_skips`.
+  It is a tripwire: syntactic detection always has evasions, so every file that can change what pytest
+  collects or what CI installs (any conftest.py, pytest.ini, pytest.toml, .pytest.toml, setup.cfg, tox.ini,
+  pyproject.toml, `__init__.py` under tests/, requirements/constraints files, plus tests/, verification/,
+  .github/ and the gate scripts) is a protected path, and only clear weakening patterns fail the job.
+  Weakening (the kinds are listed in the script's docstring: a deleted test file, a removed or rebound test,
+  a test class given a constructor, `__test__` set, fewer effective asserts, a trivial or dead-branch assert,
+  an added skip/xfail/exit reaching an existing test, a shadowed test name, fewer literal parametrize cases, a
+  pytest collection-config change, any `pytest_*` name added, changed or removed in a conftest.py) fails the
+  job unless the PR has the `guard-override` label. Protected paths and golden/engine changes are reported,
+  not failed; the merge policy escalates on them.
 - `review/adversarial` (commit status): after an independent review of a specific head SHA, the reviewer runs
 
       python scripts/review_status.py --pr N --sha HEAD_SHA --state success|failure --blocking K --summary "..." [--url URL]
@@ -21,6 +26,25 @@ Three signals on every PR, each checkable on the PR's head commit instead of tak
   be redone for the new head.
 
 Making these required checks is a branch-protection setting on GitHub; this repo only provides them.
+
+## Checking that `guard` is the real guard
+
+A required check is matched by name. A PR can add its own workflow (say `.github/workflows/evil.yml`) with a
+job named `guard`; under `pull_request` that workflow runs from the PR's copy and can report success on the
+head SHA next to, or instead of, the real one. (Such a PR touches `.github/`, a protected path, but the
+name collision itself is invisible in the checks list.) So before merging, Dori runs
+
+    python scripts/check_guard_origin.py --sha HEAD_SHA [--repo joonk7809/asimov]
+
+which reads `repos/{o}/{r}/commits/{sha}/check-runs`, and for each check run named `guard` its check suite's
+workflow run (`repos/{o}/{r}/actions/runs?check_suite_id=ID`). It exits 0 only if at least one `guard` check
+run exists on HEAD_SHA, every one was made by `github-actions` for that SHA from a workflow run with event
+`pull_request_target` and path `.github/workflows/guard.yml` (for that event GitHub uses the base branch's
+file), at least one succeeded, the latest completed one succeeded and none is still running. Any other
+result (exit 1, or 2 when `gh` fails) blocks the merge and goes to the owner. It only issues GET requests.
+Observed on a public repository (python/cpython, 2026-11-20): a `pull_request_target` run's check suite and
+check runs sit on the PR head SHA and its workflow run reports `event` and `path` as used here; if GitHub
+changes that, the tool finds no `guard` run and fails closed.
 
 ## Who runs whose code
 
@@ -43,29 +67,42 @@ Making these required checks is a branch-protection setting on GitHub; this repo
 
 ## Known limits of pr_guard.py
 
-It compares syntax, not behaviour. Weakenings it does not see:
+It compares syntax, not behaviour, and is a tripwire: the protected-path report and owner escalation are the
+backstop for everything below. Weakenings it does not fail on:
 
-- an early `return` (or any unconditional exit) placed before asserts, and asserts after it;
+- an early `return` (or any unconditional exit, `os._exit`, `sys.exit` in a fixture) placed before asserts,
+  and asserts after it;
 - asserts wrapped in `try: ... except: pass` (or `except AssertionError`), or `with pytest.raises(...)` around
   them, or `contextlib.suppress`;
 - asserts moved into a helper (counted per file, so a helper in another file moves them out of view; a
   helper in the same file keeps the count but nothing checks it is still called);
-- dynamic skips: `pytest.skip` reached through `getattr`, a variable, a fixture in another file that the
-  guard can't tie to the test, `pytest.mark.skip` built at runtime, markers added by a plugin, `-m`/`-p`
-  given on the command line in CI rather than in config, or a skip condition changed (`skipif(False)` to
-  `skipif(True)`) without adding a reference;
+- dynamic skips: `pytest.skip` reached through `getattr`, a variable assigned anywhere but module level, a
+  function returning a marker, a fixture in another file that the guard can't tie to the test,
+  `pytest.mark.skip` built at runtime, markers added by a plugin, `-m`/`-p` given on the command line in CI
+  rather than in config (CI files are under .github/, protected), or a skip condition changed
+  (`skipif(False)` to `skipif(True)`) without adding a reference;
 - a constant condition that is not a literal (`if DEBUG:` with `DEBUG = False`, `if 1 > 2:`), and trivial
   asserts that are not literals (`assert x == x`, `assert not False`);
 - parametrize cases given by a name or call rather than a literal list (not judged), and class- or
   module-level `pytestmark` parametrize;
-- collection hooks other than `pytest_collection_modifyitems` (`pytest_ignore_collect`, `pytest_collect_file`,
-  `pytest_deselected`), and any hook or plugin outside a conftest.py;
+- collectability is judged by pytest's default rules; a changed python_functions / python_classes is caught
+  as "pytest config", but tests collected under non-default rules are judged by the defaults;
+- `__test__` set or tests rebound from outside the test file (a helper module, a conftest fixture), and
+  rebinding through `globals()`, `setattr` on the module or `exec`;
+- hooks and plugins outside a conftest.py: `pytest_generate_tests` or other hooks in a test module, a plugin
+  module imported by a conftest under a name that is not `pytest_*` and not `*` (the import of the module
+  itself is not flagged, though a conftest is a protected path), an installed plugin's entry point
+  (requirements and CI files are protected), sitecustomize/.pth files;
 - pytest.toml / pyproject.toml are only parsed structurally on Python >= 3.11 (tomllib); on older Pythons
   they fall back to a line check that misses multi-line value changes;
-- renames are matched by count only: N test functions removed and N added in one file with the effective
-  assert count not lower is reported as `renamed`, whatever the new tests test; N removed and more than N
-  added is still reported as a removal;
-- skips in newly added tests are not weakening (they can't weaken a test that existed); they are listed in
-  `new_test_skips` for the reviewer;
+- renames are matched by count only: N tests removed and at least N collectable tests added in one file with
+  the effective assert count not lower is reported as `renamed`, whatever the new tests test (an owner
+  decision: of the last 60 merges, #42 #71 #78 split one test into several and #96 renamed one);
+- moves are matched by qualified name: a test removed from one test file and added to another is `moved` when
+  the linked files' effective assert total did not drop, whatever the moved test now contains;
+- skips in newly added tests, or a module-level marker used only by them, are not weakening (they can't
+  weaken a test that existed); they are listed in `new_test_skips` for the reviewer. So is `importorskip` in
+  a conftest.py the PR adds, although at module level it skips every test under that directory when the
+  import fails: it is reported as a protected path and escalated, not failed;
 - a PR whose head isn't a descendant of a commit shared with the base (an unrelated history) fails at
   `git merge-base`.

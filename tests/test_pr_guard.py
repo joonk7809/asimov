@@ -467,3 +467,261 @@ def test_conftest_other_change_passes(repo, tmp_path, capsys):
     head = _commit(r, {"tests/conftest.py": HOOK + "\n\nimport pytest\n\n\n@pytest.fixture\ndef world():\n    return 1\n"})
     rc, out = _run(r, base, head, tmp_path, capsys=capsys)
     assert rc == 0 and out["weakening"] == []
+
+
+# --- Round 2: anything that can change what pytest collects is protected; pytest_* names in a conftest ---
+
+KEEP = "def _keep(config, items):\n    items[:] = items[:1]\n"
+
+
+@pytest.mark.parametrize("conftest", [
+    KEEP + "\n\npytest_collection_modifyitems = _keep\n",                                   # bound by assignment
+    "if True:\n    " + HOOK.replace("\n    ", "\n        "),                                 # nested under if
+    "def pytest_ignore_collect(collection_path, config):\n    return 'test_a' in str(collection_path)\n",
+    "try:\n    from helpers import pytest_collection_modifyitems\nexcept ImportError:\n    pass\n",
+    "from helpers import *\n",
+    "pytest_plugins = ['helpers']\n",
+    KEEP + "\n\nglobals()['pytest_collection_modifyitems'] = _keep\n",
+    "class Plugin:\n    def pytest_deselected(self, items):\n        pass\n",
+])
+def test_root_conftest_hook_in_any_form_fails(repo, tmp_path, capsys, conftest):
+    r, base = repo
+    head = _commit(r, {"conftest.py": conftest})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and set(_kinds(out)) == {"collection hook added or changed"}
+    assert "conftest.py" in out["protected_paths_touched"]
+
+
+def test_conftest_guard_condition_flipped_fails(repo, tmp_path, capsys):
+    r, base = repo
+    base = _commit(r, {"conftest.py": "if False:\n    " + HOOK.replace("\n    ", "\n        ")})
+    head = _commit(r, {"conftest.py": "if True:\n    " + HOOK.replace("\n    ", "\n        ")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["collection hook added or changed"] and out["weakening"][0]["change"] == "changed"
+
+
+def test_root_conftest_fixture_is_protected_not_failed(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"conftest.py": "import pytest\n\n\n@pytest.fixture\ndef world():\n    return 1\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == [] and out["protected_paths_touched"] == ["conftest.py"]
+
+
+@pytest.mark.parametrize("path", ["conftest.py", "client/conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg",
+                                  "tox.ini", "pytest.toml", ".pytest.toml", "sub/pyproject.toml",
+                                  "tests/__init__.py", "client/tests/__init__.py", "requirements.txt",
+                                  "requirements-dev.txt", "constraints.txt", "ci/requirements/test.txt",
+                                  "scripts/check_guard_origin.py"])
+def test_collection_and_install_files_are_protected(path):
+    assert pr_guard.protected(path)
+
+
+@pytest.mark.parametrize("path", ["asiimov/sim.py", "client/__init__.py", "docs/requirements.md", "README.md"])
+def test_ordinary_files_are_not_protected(path):
+    assert not pr_guard.protected(path)
+
+
+@pytest.mark.parametrize("extra", ["\n__test__ = False\n", "\nif True:\n    __test__ = 0\n",
+                                   "\ntest_two.__test__ = False\n", "\nsetattr(test_two, '__test__', False)\n"])
+def test_dunder_test_added_fails(repo, tmp_path, capsys, extra):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": TEST_A + extra})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["collection disabled by __test__"]
+
+
+CLASS_T = TEST_A + "\n\nclass TestK:\n    def test_m(self):\n        assert 4 == 4\n"
+
+
+def test_dunder_test_in_class_fails_and_existing_one_passes(repo, tmp_path, capsys):
+    r, base = repo
+    base = _commit(r, {"tests/test_a.py": CLASS_T + "\n\nclass Helper:\n    __test__ = False\n"})
+    head = _commit(r, {"tests/test_a.py": CLASS_T.replace("class TestK:\n", "class TestK:\n    __test__ = False\n")
+                       + "\n\nclass Helper:\n    __test__ = False\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["collection disabled by __test__"]
+    clean = _commit(r, {"tests/test_a.py": CLASS_T.replace("4 == 4", "4 >= 4") + "\n\nclass Helper:\n    __test__ = False\n"})
+    rc, out = _run(r, base, clean, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == []
+
+
+@pytest.mark.parametrize("extra", ["\ndel test_two\n", "\ntest_two = None\n", "\nif True:\n    del test_two\n",
+                                   "\nfrom os import sep as test_two\n", "\nclass TestK:\n    pass\n"])
+def test_test_removed_by_rebinding_fails(repo, tmp_path, capsys, extra):
+    r, base = repo
+    # The last form is a later class of the same name replacing the one that holds TestK.test_m.
+    base = _commit(r, {"tests/test_a.py": CLASS_T})
+    head = _commit(r, {"tests/test_a.py": CLASS_T + extra})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["test removed by rebinding", "test function removed"]
+
+
+def test_rebinding_other_names_passes(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": "test_two = 1\n" + TEST_A + "\nhelper = None\ndel helper\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == []
+
+
+def test_rename_to_a_rebound_name_is_not_a_rename(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": TEST_A.replace("def test_two", "def test_three") + "\ntest_three = None\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["test removed by rebinding", "test function removed"] and out["renamed"] == []
+
+
+@pytest.mark.parametrize("new", [
+    "class Helper:\n    def test_two_renamed(self):\n        assert 3 == 3\n",              # class not Test*
+    "class TestH:\n    def __init__(self):\n        pass\n\n    def test_two_renamed(self):\n        assert 3 == 3\n",
+    "def check_two():\n    assert 3 == 3\n",                                              # not test*
+])
+def test_rename_to_uncollectable_names_fails(repo, tmp_path, capsys, new):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": TEST_A.replace("def test_two():\n    assert 3 == 3\n", new)})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["test function removed"] and out["renamed"] == []
+
+
+def test_rename_into_a_test_class_passes(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": TEST_A.replace(
+        "def test_two():\n    assert 3 == 3\n", "class TestH:\n    def test_two(self):\n        assert 3 == 3\n")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["renamed"] == [{"path": "tests/test_a.py", "from": ["test_two"], "to": ["TestH.test_two"]}]
+
+
+@pytest.mark.parametrize("ctor", ["__init__", "__new__"])
+def test_test_class_gaining_a_constructor_fails(repo, tmp_path, capsys, ctor):
+    r, base = repo
+    base = _commit(r, {"tests/test_a.py": CLASS_T})
+    head = _commit(r, {"tests/test_a.py": CLASS_T.replace("class TestK:\n", f"class TestK:\n    def {ctor}(self):\n        pass\n\n")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["test class gains a constructor", "test function removed"]
+
+
+def test_unittest_testcase_with_init_stays_collectable(repo, tmp_path, capsys):
+    r, base = repo
+    case = "import unittest\n\n\nclass Cases(unittest.TestCase):\n    def test_m(self):\n        self.assertTrue(1)\n"
+    base = _commit(r, {"tests/test_u.py": case})
+    head = _commit(r, {"tests/test_u.py": case.replace("    def test_m", "    def __init__(self, *a):\n        super().__init__(*a)\n\n    def test_m")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == []
+
+
+@pytest.mark.parametrize("imp,stmt", [("from _pytest.outcomes import skip", "skip('x')"),
+                                      ("from _pytest.outcomes import Skipped", "raise Skipped('x')"),
+                                      ("import _pytest.outcomes", "_pytest.outcomes.xfail('x')"),
+                                      ("from _pytest.outcomes import XFailed", "raise XFailed('x')"),
+                                      ("from _pytest.outcomes import importorskip", "importorskip('nope')"),
+                                      ("import pytest", "pytest.exit('done', returncode=0)"),
+                                      ("from _pytest.outcomes import Exit", "raise Exit('x', 0)")])
+def test_pytest_internal_skips_fail(repo, tmp_path, capsys, imp, stmt):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": imp + "\n" + TEST_A.replace("    assert 3 == 3\n", f"    {stmt}\n    assert 3 == 3\n")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"]
+
+
+def test_pytest_internal_fail_passes(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": "from _pytest.outcomes import fail\n" + TEST_A.replace(
+        "    assert 3 == 3\n", "    if 3 != 3:\n        fail('x')\n    assert 3 == 3\n")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == []
+
+
+def test_one_removed_two_added_is_a_rename(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": TEST_A.replace(
+        "def test_two():\n    assert 3 == 3\n", "def test_two_a():\n    assert 3 == 3\n\n\ndef test_two_b():\n    assert 4 == 4\n")})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == []
+    assert out["renamed"] == [{"path": "tests/test_a.py", "from": ["test_two"], "to": ["test_two_a", "test_two_b"]}]
+    dropped = _commit(r, {"tests/test_a.py": TEST_A.replace("    assert 2 == 2\n", "").replace(
+        "def test_two():\n    assert 3 == 3\n", "def test_two_a():\n    assert 3 == 3\n\n\ndef test_two_b():\n    pass\n")})
+    rc, out = _run(r, base, dropped, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["test function removed", "asserts removed"]
+
+
+NEEDS = "\n\nneeds_env = pytest.mark.skipif(True, reason='no env')\n"
+
+
+def test_module_marker_used_only_by_new_tests_is_reported_not_failed(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"tests/test_a.py": TEST_A + NEEDS + "\n\n@needs_env\ndef test_new():\n    assert 4 == 4\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == [] and out["new_test_skips"] == [{"path": "tests/test_a.py", "count": 1}]
+    reused = _commit(r, {"tests/test_a.py": TEST_A.replace("def test_two", "@needs_env\ndef test_two") + NEEDS})
+    rc, out = _run(r, base, reused, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"]
+    unused = _commit(r, {"tests/test_a.py": TEST_A + NEEDS})
+    rc, out = _run(r, base, unused, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"]
+
+
+def test_existing_marker_applied_to_an_existing_test_fails(repo, tmp_path, capsys):
+    r, base = repo
+    base = _commit(r, {"tests/test_a.py": TEST_A + NEEDS + "\n\n@needs_env\ndef test_new():\n    assert 4 == 4\n"})
+    head = _commit(r, {"tests/test_a.py": TEST_A.replace("def test_two", "@needs_env\ndef test_two") + NEEDS
+                       + "\n\n@needs_env\ndef test_new():\n    assert 4 == 4\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"]
+
+
+def test_new_conftest_importorskip_is_reported_not_failed(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"tests/godot/conftest.py": "import pytest\n\nz3 = pytest.importorskip('z3')\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == [] and out["protected_paths_touched"] == ["tests/godot/conftest.py"]
+    assert out["new_test_skips"] == [{"path": "tests/godot/conftest.py", "count": 1, "conftest": True}]
+    skip = _commit(r, {"tests/godot/conftest.py": "import pytest\n\npytest.skip('x', allow_module_level=True)\n"})
+    rc, out = _run(r, base, skip, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"]
+
+
+def test_existing_conftest_gaining_importorskip_fails(repo, tmp_path, capsys):
+    r, base = repo
+    base = _commit(r, {"tests/conftest.py": "import pytest\n"})
+    head = _commit(r, {"tests/conftest.py": "import pytest\n\nz3 = pytest.importorskip('z3')\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"]
+
+
+TEST_B = "def test_b():\n    assert 7 == 7\n"
+TWO = "\n\ndef test_two():\n    assert 3 == 3\n"
+
+
+@pytest.mark.parametrize("dest", ["tests/test_b.py", "tests/test_new.py"])
+def test_test_moved_between_files_passes(repo, tmp_path, capsys, dest):
+    r, base = repo
+    base = _commit(r, {"tests/test_b.py": TEST_B})
+    without = TEST_A.replace(TWO, "\n")
+    head = _commit(r, {"tests/test_a.py": without, dest: (TEST_B if dest == "tests/test_b.py" else "") + TWO})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == []
+    assert out["moved"] == [{"from": "tests/test_a.py", "to": dest, "names": ["test_two"]}]
+
+
+def test_test_moved_with_asserts_dropped_fails(repo, tmp_path, capsys):
+    r, base = repo
+    base = _commit(r, {"tests/test_b.py": TEST_B})
+    head = _commit(r, {"tests/test_a.py": TEST_A.replace(TWO, "\n"),
+                       "tests/test_b.py": TEST_B + "\n\ndef test_two():\n    pass\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["test function removed", "asserts removed"] and out["moved"] == []
+
+
+def test_moved_test_keeps_its_skip_but_gains_none(repo, tmp_path, capsys):
+    r, base = repo
+    skipped = TEST_A.replace("def test_two", "@pytest.mark.slow\ndef test_two")
+    base = _commit(r, {"tests/test_a.py": skipped.replace("mark.slow", "mark.xfail"), "tests/test_b.py": TEST_B})
+    moved_two = "import pytest\n" + TEST_B + "\n\n@pytest.mark.xfail\ndef test_two():\n    assert 3 == 3\n"
+    head = _commit(r, {"tests/test_a.py": TEST_A.replace(TWO, "\n"), "tests/test_b.py": moved_two})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 0 and out["weakening"] == [] and out["moved"] != []
+    # The same move from a base where test_two had no xfail: the skip arrives with the move.
+    _git(r, "checkout", "-q", "-b", "plain", base)
+    base2 = _commit(r, {"tests/test_a.py": TEST_A})
+    head2 = _commit(r, {"tests/test_a.py": TEST_A.replace(TWO, "\n"), "tests/test_b.py": moved_two})
+    rc, out = _run(r, base2, head2, tmp_path, capsys=capsys)
+    assert rc == 1 and _kinds(out) == ["skip/xfail added"] and out["moved"] != []
