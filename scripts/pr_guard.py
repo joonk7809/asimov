@@ -9,13 +9,14 @@ only clear weakening patterns fail the job.
 Diffs merge-base(BASE, HEAD)..HEAD with rename detection (git diff -M), so a moved test file is not a deletion
 and commits that landed on the base branch after the PR forked are not counted against it. It only runs git
 and parses content (ast.parse, configparser, tomllib); nothing from the PR is executed, imported or installed.
-Only .py files and pytest config files (pytest.ini, pytest.toml, .pytest.toml, setup.cfg, tox.ini,
+Only .py files and pytest config files (pytest.ini, .pytest.ini, pytest.toml, .pytest.toml, setup.cfg, tox.ini,
 pyproject.toml, conftest.py) are read, as bytes; any other path (images, binaries) is only named. Prints a JSON
 summary (also appended to $GITHUB_STEP_SUMMARY when set):
 
 - protected_paths_touched: tests/, verification/, .github/, AGENTS.md, scripts/pr_guard.py,
   scripts/check_guard_origin.py, scripts/review_status.py, and at any depth conftest.py, pytest.ini,
-  pytest.toml, .pytest.toml, setup.cfg, tox.ini, pyproject.toml, __init__.py under a tests/ directory, and
+  .pytest.ini, pytest.toml, .pytest.toml, setup.cfg, tox.ini, pyproject.toml, __init__.py under a tests/ directory,
+  root-level .py/.pth files, new top-level directories, and
   requirements*/constraints* .txt/.in files (or anything in a requirements/ directory)
 - golden_or_engine_changed (+ golden_or_engine_detail): ENGINE_VERSION (asiimov/sim.py) or a module-level
   GOLDEN* constant (tests/test_world.py) changed
@@ -81,8 +82,12 @@ except ImportError:  # Python < 3.11: pyproject.toml falls back to the line chec
 PROTECTED_DIRS = ("tests/", "verification/", ".github/")
 PROTECTED_FILES = ("AGENTS.md", "scripts/pr_guard.py", "scripts/check_guard_origin.py", "scripts/review_status.py")
 # Anything that can change what pytest collects or what CI installs, at any depth.
-PROTECTED_BASENAMES = ("conftest.py", "pytest.ini", "pytest.toml", ".pytest.toml", "setup.cfg", "tox.ini",
-                       "pyproject.toml")
+PROTECTED_BASENAMES = ("conftest.py", "pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml", "setup.cfg",
+                       "tox.ini", "pyproject.toml")
+# `python -m pytest` puts the checkout first on sys.path, so a root-level module or a new top-level package
+# (pytest.py, _pytest/, hypothesis/, sitecustomize.py, ...) can replace what CI imports. Any root .py/.pth file
+# and any top-level directory not listed here is protected.
+TOP_LEVEL = ("asiimov", "client", "docs", "plan", "scripts", "tests", "verification", ".github")
 REQUIREMENTS = re.compile(r"(^|/)((requirements|constraints)[^/]*\.(txt|in)|requirements/[^/]+)$")
 OVERRIDE_LABEL = "guard-override"
 SKIPS = {"pytest.mark.skip", "pytest.mark.skipif", "pytest.mark.xfail", "pytest.skip", "pytest.xfail",
@@ -97,8 +102,8 @@ SKIPS = {"pytest.mark.skip", "pytest.mark.skipif", "pytest.mark.xfail", "pytest.
          "_pytest.mark.structures.MARK_GEN.xfail", "_pytest.skipping.skip", "_pytest.skipping.xfail"}
 IMPORTORSKIP = {"pytest.importorskip", "_pytest.outcomes.importorskip"}
 PARAMETRIZE = "pytest.mark.parametrize"
-PYTEST_CONFIG = ("pytest.ini", "pytest.toml", ".pytest.toml", "setup.cfg", "tox.ini", "pyproject.toml", "conftest.py")
-INI_SECTIONS = {"pytest.ini": ("pytest",), "tox.ini": ("pytest",), "setup.cfg": ("tool:pytest",)}
+PYTEST_CONFIG = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml", "setup.cfg", "tox.ini", "pyproject.toml", "conftest.py")
+INI_SECTIONS = {"pytest.ini": ("pytest",), ".pytest.ini": ("pytest",), "tox.ini": ("pytest",), "setup.cfg": ("tool:pytest",)}
 COLLECTION_KEYS = ("addopts", "testpaths", "python_files", "python_functions", "python_classes", "norecursedirs")
 COLLECTION_KEY_LINE = re.compile(r"\b(" + "|".join(COLLECTION_KEYS) + r")\b")
 DESELECT = re.compile(r"--deselect|-k\s*[\"']?\s*not\b|--ignore|collect_ignore")
@@ -139,7 +144,8 @@ def changes(repo, base, head):
 def protected(path):
     parts = path.split("/")
     return (path.startswith(PROTECTED_DIRS) or path in PROTECTED_FILES or parts[-1] in PROTECTED_BASENAMES
-            or (parts[-1] == "__init__.py" and "tests" in parts[:-1]) or bool(REQUIREMENTS.search(path)))
+            or (parts[-1] == "__init__.py" and "tests" in parts[:-1]) or bool(REQUIREMENTS.search(path))
+            or (len(parts) == 1 and path.endswith((".py", ".pth"))) or (len(parts) > 1 and parts[0] not in TOP_LEVEL))
 
 
 def is_test_file(path):

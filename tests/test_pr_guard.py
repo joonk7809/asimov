@@ -511,7 +511,8 @@ def test_root_conftest_fixture_is_protected_not_failed(repo, tmp_path, capsys):
                                   "tox.ini", "pytest.toml", ".pytest.toml", "sub/pyproject.toml",
                                   "tests/__init__.py", "client/tests/__init__.py", "requirements.txt",
                                   "requirements-dev.txt", "constraints.txt", "ci/requirements/test.txt",
-                                  "scripts/check_guard_origin.py"])
+                                  "scripts/check_guard_origin.py", ".pytest.ini", "pytest.py", "sitecustomize.py",
+                                  "x.pth", "_pytest/__init__.py", "hypothesis/__init__.py", "newpkg/mod.py"])
 def test_collection_and_install_files_are_protected(path):
     assert pr_guard.protected(path)
 
@@ -725,3 +726,17 @@ def test_moved_test_keeps_its_skip_but_gains_none(repo, tmp_path, capsys):
     head2 = _commit(r, {"tests/test_a.py": TEST_A.replace(TWO, "\n"), "tests/test_b.py": moved_two})
     rc, out = _run(r, base2, head2, tmp_path, capsys=capsys)
     assert rc == 1 and _kinds(out) == ["skip/xfail added"] and out["moved"] != []
+
+
+def test_hidden_pytest_ini_deselect_fails(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {".pytest.ini": '[pytest]\naddopts = -k "not test_one"\n'})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert rc == 1 and out["protected_paths_touched"] == [".pytest.ini"]
+
+
+def test_root_module_shadowing_pytest_is_protected(repo, tmp_path, capsys):
+    r, base = repo
+    head = _commit(r, {"pytest.py": "import sys\nprint('3 passed')\nsys.exit(0)\n"})
+    rc, out = _run(r, base, head, tmp_path, capsys=capsys)
+    assert out["protected_paths_touched"] == ["pytest.py"]

@@ -8,8 +8,9 @@ Three signals on every PR, each checkable on the PR's head commit instead of tak
 - `guard` (.github/workflows/guard.yml): `scripts/pr_guard.py` diffs merge-base..head and prints JSON with
   `protected_paths_touched`, `golden_or_engine_changed`, `weakening`, `renamed`, `moved` and `new_test_skips`.
   It is a tripwire: syntactic detection always has evasions, so every file that can change what pytest
-  collects or what CI installs (any conftest.py, pytest.ini, pytest.toml, .pytest.toml, setup.cfg, tox.ini,
-  pyproject.toml, `__init__.py` under tests/, requirements/constraints files, plus tests/, verification/,
+  collects or what CI installs (any conftest.py, pytest.ini, .pytest.ini, pytest.toml, .pytest.toml, setup.cfg,
+  tox.ini, pyproject.toml, `__init__.py` under tests/, requirements/constraints files, root-level .py/.pth files
+  and new top-level directories that could shadow pytest or its plugins, plus tests/, verification/,
   .github/ and the gate scripts) is a protected path, and only clear weakening patterns fail the job.
   Weakening (the kinds are listed in the script's docstring: a deleted test file, a removed or rebound test,
   a test class given a constructor, `__test__` set, fewer effective asserts, a trivial or dead-branch assert,
@@ -68,7 +69,9 @@ changes that, the tool finds no `guard` run and fails closed.
 ## Known limits of pr_guard.py
 
 It compares syntax, not behaviour, and is a tripwire: the protected-path report and owner escalation are the
-backstop for everything below. Weakenings it does not fail on:
+backstop for everything below. Engine code itself can neuter pytest at runtime (e.g. patching
+`_pytest.python.Function.runtest` when tests import it); no syntactic check catches that, and only review
+and the verify gate's own trusted base stand against it. Weakenings it does not fail on:
 
 - an early `return` (or any unconditional exit, `os._exit`, `sys.exit` in a fixture) placed before asserts,
   and asserts after it;

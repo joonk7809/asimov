@@ -119,6 +119,10 @@ def test_guard_workflow_security_properties():
     for b in blocks:
         assert "${{" not in b, b
     assert "ref: ${{ github.event.pull_request.base.sha }}" in text
+    # Every checkout is the base; the PR head is only ever fetched as git objects.
+    refs = re.findall(r"^\s*ref:\s*(.+)$", text, re.M)
+    assert refs and all(ref.strip() == "${{ github.event.pull_request.base.sha }}" for ref in refs), refs
+    assert "pull_request.head.ref" not in text and "head.repo" not in text
 
 
 def test_run_block_parser_sees_expressions():
