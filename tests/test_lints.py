@@ -1,7 +1,10 @@
 """The AGENTS.md rules as static checks (asiimov/lint.py). The package must be clean, and every rule is
 shown failing on a planted violation (a snippet, and the same edit made to the real sim.py) and passing
 on a compliant one: a check that has never been seen to fail proves nothing."""
+import functools
 import os
+import re
+import shutil
 import textwrap
 
 import pytest
@@ -24,14 +27,113 @@ def test_the_sim_core_is_what_the_engine_imports():
     assert lint.core_imports() == set(lint.SIM_CORE) | set(lint.MIND_SIDE)
 
 
+def test_the_mind_side_is_only_minds_py():
+    """minds.py is the far side of the mind interface (its outputs are origin "mind", recorded verbatim and
+    replayed from the log, so it may sample: NoisyMind uses os.urandom). Nothing else is exempt: moving a
+    core module here would let it drift out of every check while the import-graph test stays green."""
+    assert lint.MIND_SIDE == ("minds.py",)
+
+
+def test_every_sim_subclass_in_the_package_is_found():
+    """ArmSim is run and replayed by fork.py; ProbeSim and AuthorshipSim replay logs. Their bodies are linted."""
+    assert lint.sim_subclasses() == {"scorecard.py": ["ArmSim"], "probe.py": ["ProbeSim"],
+                                     "authorship.py": ["AuthorshipSim"]}
+
+
+# ---- every rule is applied to every file it covers (B1) ----------------------------------------------
+# The plants go into a copy of the real package, chosen from the import graph and fixed names here, not from
+# lint's own tables: editing SIM_CORE, MIND_SIDE, the per-file rules or the subclass scan must fail this.
+
+CORE_PLANT = """
+_LINT_PLANT_INT = 7 / 2
+_LINT_PLANT_RNG = hash("plant")
+def _lint_plant_keyed(rng, ids):
+    return ids[rng.at("plant", 0, 0, 1)]
+"""
+COUNTER_PLANT = """
+def _lint_plant_counter(rng):
+    return rng.draw("plant", 0, 1)
+"""
+ORDER_PLANT = """
+def _lint_plant_order(self):
+    return self.mind.decide(None)
+"""
+CLASS_PLANT = """\
+    def _lint_plant(self, ids):
+        a = 7 / 2
+        b = hash("plant")
+        c = ids[self.rng.at("plant", 0, 0, 1)]
+        d = self.rng.draw("plant", 0, 1)
+        e = self.mind.decide(None)
+"""
+GENESIS_OR_RNG = {"params.py", "rng.py"}  # counter draws there are genesis's fixed sequence, or Rng itself
+SUBCLASSES = {"scorecard.py": "ArmSim", "probe.py": "ProbeSim", "authorship.py": "AuthorshipSim"}
+
+
+def _line(text, needle):
+    lines = text.splitlines()
+    hits = [i + 1 for i, l in enumerate(lines) if needle in l]
+    assert len(hits) == 1, (needle, hits)
+    return hits[0]
+
+
+def test_a_violation_planted_in_every_covered_file_is_reported(tmp_path):
+    pkg = tmp_path / "asiimov"
+    shutil.copytree(lint.PKG, pkg, ignore=shutil.ignore_patterns("__pycache__"))
+    core = lint.core_imports(str(pkg)) - {"minds.py"}
+    assert {"sim.py", "memory.py", "params.py", "rng.py"} <= core
+    expected = set()
+    for name in sorted(core):
+        path = pkg / name
+        text = path.read_text().rstrip("\n") + "\n" + CORE_PLANT
+        if name not in GENESIS_OR_RNG:
+            text += COUNTER_PLANT
+        if name == "sim.py":
+            text += ORDER_PLANT
+        path.write_text(text)
+        rel = f"asiimov/{name}"
+        expected |= {(rel, _line(text, "7 / 2"), "int"), (rel, _line(text, 'hash("plant")'), "rng"),
+                     (rel, _line(text, 'ids[rng.at("plant"'), "keyed")}
+        if name not in GENESIS_OR_RNG:
+            expected.add((rel, _line(text, 'rng.draw("plant"'), "keyed"))
+        if name == "sim.py":
+            expected.add((rel, _line(text, "self.mind.decide(None)"), "order"))
+    for name, cls in SUBCLASSES.items():
+        path = pkg / name
+        text = path.read_text()
+        head = re.search(rf"^class {cls}\(.*\):\n", text, re.M)
+        text = text[:head.end()] + CLASS_PLANT + text[head.end():]
+        path.write_text(text)
+        rel = f"asiimov/{name}"
+        expected |= {(rel, _line(text, "a = 7 / 2"), "int"), (rel, _line(text, 'b = hash("plant")'), "rng"),
+                     (rel, _line(text, "c = ids[self.rng.at"), "keyed"), (rel, _line(text, "d = self.rng.draw"), "keyed"),
+                     (rel, _line(text, "e = self.mind.decide(None)"), "order")}
+    found = {(f.path, f.line, f.rule) for f in lint.lint_package(str(pkg))}
+    assert sorted(expected - found) == [], "planted violations not reported"
+    assert sorted(found - expected) == [], "findings beyond the plants"
+
+
 def test_each_allowed_index_pick_is_a_live_exception(monkeypatch):
     """No stale entries: without the allowlist, each entry is exactly one finding, and nothing else is."""
     allowed = dict(lint.INDEX_PICK_ALLOW)
     monkeypatch.setattr(lint, "INDEX_PICK_ALLOW", {})
-    hits = [f for f in lint.lint_package() if f.rule == "keyed"]
+    hits = []
+    for name in sorted({p for p, _, _ in allowed}):
+        with open(os.path.join(lint.PKG, name)) as fh:
+            hits += lint.lint_source(fh.read(), f"asiimov/{name}", ("keyed",))
     assert len(hits) == len(allowed)
     assert {(os.path.basename(f.path), f.message.split("`")[1].split("[")[0]) for f in hits} == \
         {(p, name) for p, _, name in allowed}
+
+
+def test_each_function_allowed_to_reach_the_mind_is_a_live_exception(monkeypatch):
+    """Without ORDER_MIND_REACH, the pace-2 in-flight functions are flagged, and nothing else newly is."""
+    src = _clean_sim()
+    monkeypatch.setattr(lint, "ORDER_MIND_REACH", {})
+    hits = lint.lint_source(src, "asiimov/sim.py", ("order",))
+    assert hits and {f.message.split("`")[-2] for f in hits if "used in" in f.message} \
+        == {"_fly", "_send"}, hits
+    assert all("used in" in f.message or "called directly" in f.message for f in hits), hits
 
 
 # ---- int --------------------------------------------------------------------------------------------
@@ -193,16 +295,259 @@ PLANTED = [
     ("keyed", "roll = self.rng.at(stream, tick, 0, 999)", "_, roll = self.rng.draw(stream, 0, 999)"),
     ("keyed", "b = agents[min((o for o in ids if o != aid), key=lambda o: (self.rng.raw(pick_stream, o), o))]",
      "b = agents[ids[self.rng.at(pick_stream, tick, 0, len(ids) - 1)]]"),
-    ("order", "for aid in self._order(aids):", "for aid in aids:"),
+    ("order", "for aid in self._order(d_ids):", "for aid in d_ids:"),
+    ("order", "enumerate(self._order(set(self.pending) | set(due)))", "enumerate(sorted(set(self.pending) | set(due)))"),
+    ("order", "due = self._fly()", "due = self._fly()\n        self._send(None)"),
 ]
+
+
+@functools.lru_cache(1)
+def _clean_sim():
+    with open(SIM) as f:
+        src = f.read()
+    assert lint.lint_source(src, "asiimov/sim.py", lint.RULES) == []
+    return src
 
 
 @pytest.mark.parametrize("rule,before,after", PLANTED, ids=[f"{r}-{i}" for i, (r, _, _) in enumerate(PLANTED)])
 def test_a_violation_planted_in_sim_py_is_flagged(rule, before, after):
-    with open(SIM) as f:
-        src = f.read()
+    src = _clean_sim()
     assert src.count(before) == 1, before
-    rules = ("int", "rng", "keyed", "order")
-    assert lint.lint_source(src, "asiimov/sim.py", rules) == []
-    hits = lint.lint_source(src.replace(before, after), "asiimov/sim.py", rules)
+    hits = lint.lint_source(src.replace(before, after), "asiimov/sim.py", lint.RULES)
     assert hits and {f.rule for f in hits} == {rule}, hits
+
+
+# ---- renamed imports, and the calls a rename used to hide (B2) --------------------------------------
+
+ALIAS_BAD = """
+import time as t
+import math as m
+import os as o
+import numpy as n
+from time import perf_counter as clock
+from math import sqrt as root
+from os import listdir as ls
+from operator import truediv as td
+import importlib as il
+a = t.time()
+b = m.sqrt(x)
+c = o.getpid()
+d = n.random.rand()
+e = clock()
+f = root(x)
+g = ls(path)
+h = td(p, q)
+i = il.import_module("random")
+"""
+
+
+def test_renamed_imports_are_resolved_before_matching():
+    int_lines = sorted(f.line for f in found(ALIAS_BAD, "int"))
+    rng_lines = sorted(f.line for f in found(ALIAS_BAD, "rng"))
+    # int: import numpy (5), from math import sqrt (7), m.sqrt (12), root (16), td (18)
+    assert int_lines == [5, 7, 12, 16, 18], int_lines
+    # rng: import numpy (5), from time import perf_counter (6), from os import listdir (8), t.time (11), o.getpid (13),
+    # n.random.rand (14), clock (15), ls (17), il.import_module (19)
+    assert rng_lines == [5, 6, 8, 11, 13, 14, 15, 17, 19], rng_lines
+
+
+def test_an_alias_of_an_allowed_name_stays_allowed():
+    src = """
+    import math as m
+    from math import isqrt as isq
+    import os as o
+    a = m.isqrt(n) + isq(n) + m.gcd(a, b)
+    fs = sorted(o.listdir(d))
+    """
+    assert found(src, "int") == [] and found(src, "rng") == []
+
+
+# ---- pow, operator division, dynamic imports, process ids -------------------------------------------
+
+MORE_BAD = """
+a = pow(x, -1)
+b = pow(x, k)
+c = operator.truediv(x, y)
+d = operator.itruediv(x, y)
+e = __import__("random")
+f = importlib.import_module("time")
+g = os.getpid()
+"""
+MORE_GOOD = """
+a = pow(x, 2) + pow(x, k, m) + pow(x, -1, m)
+b = operator.floordiv(x, y)
+"""
+
+
+def test_pow_operator_division_dynamic_imports_and_pids_are_flagged():
+    assert sorted(f.line for f in found(MORE_BAD, "int")) == [2, 3, 4, 5]
+    assert sorted(f.line for f in found(MORE_BAD, "rng")) == [6, 7, 8]
+    assert found(MORE_GOOD, "int") == [] and found(MORE_GOOD, "rng") == []
+
+
+# ---- a set reached through a local name ------------------------------------------------------------
+
+SET_BAD = """
+def f(xs, d, e):
+    s = set(xs)
+    for x in s:
+        pass
+    t = {1, 2}
+    u = list(t)
+    k = d.keys() | e.keys()
+    v = [y for y in k]
+    w = s - t
+    z = tuple(w)
+    c = {x for x in xs}
+    q = c.pop()
+    j = ", ".join(s)
+    g: set = frozenset(xs)
+    g |= s
+    for x in g:
+        pass
+    def inner():
+        for x in s:
+            pass
+"""
+SET_GOOD = """
+def f(xs, d):
+    s = set(xs)
+    ok = 3 in s and len(s)
+    for x in sorted(s):
+        pass
+    r = set(xs)
+    r = sorted(r)
+    for x in r:
+        pass
+    for k in d.keys():
+        pass
+    p = [1, 2]
+    p.pop()
+    n = s.pop if False else None
+def g(s):
+    for x in s:
+        pass
+"""
+
+
+def test_iterating_a_local_set_is_flagged():
+    lines = sorted(f.line for f in found(SET_BAD, "rng"))
+    assert lines == [4, 7, 9, 11, 13, 14, 17, 20], lines
+
+
+def test_a_local_set_that_is_sorted_or_reassigned_is_not():
+    assert found(SET_GOOD, "rng") == []
+
+
+# ---- index-pick taint, through locals and aliases ----------------------------------------------------
+
+TAINT_BAD = """
+def pick(self, ids, tick, aid):
+    a = self.rng.at("p", tick, 0, 9)
+    b = a + 1
+    c: int = b * 2
+    x = ids[c]
+    k = 0
+    k += self.rng.at("q", tick, 0, 9)
+    y = ids[k]
+    z = ids.pop(a)
+    g = getattr(self.rng, "at")
+    w = ids[g("r", tick, 0, 9)]
+    v = ids[getattr(self.rng, "at")("s", tick, 0, 9)]
+    d = self.rng.draw
+    _, r = d(f"jitter:{aid}", 0, 9)
+    u = ids[r]
+    _, m = d("mood", 0, 9)
+"""
+TAINT_GOOD = """
+def pick(self, ids, tick, aid):
+    a = self.rng.at("p", tick, 0, 9)
+    k = 0
+    k += 1
+    x = ids[k]
+    y = ids.pop()
+    b = min(ids, key=lambda o: self.rng.raw(f"p:{tick}", o))
+    z = ids[ids.index(b)]
+    d = self.rng.at
+    hit = d("q", tick, 0, 999) < 300
+"""
+
+
+def test_index_picks_are_traced_through_locals_pops_and_rng_aliases():
+    lines = sorted(f.line for f in found(TAINT_BAD, "keyed"))
+    assert lines == [6, 9, 10, 12, 13, 16, 17], lines
+
+
+def test_untainted_indexes_and_keyed_picks_pass():
+    assert found(TAINT_GOOD, "keyed") == []
+
+
+# ---- order: the pace-2 shape (engine 38) -------------------------------------------------------------
+
+PACE2_GOOD = """
+class Sim:
+    def _fly(self):
+        reply = self.mind.decide(req)
+        self._fut[aid] = self._send(req)
+        return {aid: (entry, reply)}
+    def _send(self, req):
+        mind = self.mind
+        return pool.submit(mind.decide, req)
+    def _commit(self):
+        due = self._fly()
+        replies = dict(zip(aids, dispatch(self.mind, reqs, self.workers)))
+        rank = {aid: i for i, aid in enumerate(self._order(set(self.pending) | set(due)))}
+        entries = sorted([(rank[aid], aid, replies[aid]) for aid in aids])
+        for i, (_, aid, reply) in enumerate(entries):
+            apply(eid, _parse(reply))
+"""
+PACE2_BAD = """
+class Sim:
+    def step(self):
+        due = self._fly()
+        self._send(req)
+    def _other(self):
+        return self.mind.decide(req)
+    def _commit(self):
+        rank = {aid: i for i, aid in enumerate(sorted(self.pending))}
+        entries = sorted([(rank[aid], aid, replies[aid]) for aid in aids])
+        for i, (_, aid, reply) in enumerate(entries):
+            apply(eid, _parse(reply))
+"""
+
+
+def test_order_accepts_the_pace2_in_flight_calls():
+    assert found(PACE2_GOOD, "order") == []
+
+
+def test_order_flags_in_flight_calls_reached_elsewhere_and_an_apply_loop_not_from_order():
+    lines = sorted(f.line for f in found(PACE2_BAD, "order"))
+    assert lines == [4, 5, 7, 7, 12], lines  # 7: self.mind and .decide outside _commit/_fly/_send
+
+
+# ---- inline suppressions ---------------------------------------------------------------------------
+
+def test_a_suppression_with_a_reason_silences_its_rule_on_its_line_only():
+    src = ("p = base / 'x'  # lint: allow int -- pathlib join, not a division\n"
+           "q = a / b\n"
+           "r = 2 ** bits  # lint: allow int -- bits is a non-negative int width\n")
+    assert [(f.line, f.rule) for f in lint.lint_source(src, "asiimov/sim.py", ("int",))] == [(2, "int")]
+
+
+@pytest.mark.parametrize("comment,why", [
+    ("# lint: allow int", "without a reason"),
+    ("# lint: allow int --  ", "without a reason"),
+    ("# lint: allow floats -- because", "unknown rule"),
+    ("# lint: allow rng -- not this one", "suppresses nothing"),
+    ("# lint: alow int -- typo", "unreadable"),
+])
+def test_a_bad_or_unused_suppression_is_a_finding(comment, why):
+    src = f"p = base / 'x'  {comment}\n"
+    hits = lint.lint_source(src, "asiimov/sim.py", ("int", "rng"))
+    assert any(f.rule == "suppress" and why in f.message for f in hits), hits
+    assert why != "suppresses nothing" or any(f.rule == "int" for f in hits)
+
+
+def test_suppression_text_inside_a_string_is_not_a_suppression():
+    src = 'p = a / b\ns = "# lint: allow int -- in a string"\n'
+    assert [(f.line, f.rule) for f in lint.lint_source(src, "asiimov/sim.py", ("int",))] == [(1, "int")]

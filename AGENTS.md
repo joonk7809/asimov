@@ -32,7 +32,10 @@ parameters, per-agent markdown memory, and minds behind a narrow interface.
   (`tests/test_lints.py`, or `python -m asiimov.lint`) on the sim core: integer arithmetic, randomness
   only through `Rng`, counter draws only on registered own-actor streams and no index picks (T22), and
   replies fetched and applied only in `Sim._commit` under `_order`. A new exception gets a commented
-  entry there, never a silent one; a new module the engine imports must be classed core or mind side.
+  entry there (or `# lint: allow <rule> -- <reason>` on the line), never a silent one; a new module the
+  engine imports must be classed core or mind side. It is a syntactic check with known limits (a draw or
+  float returned by a helper, taint across function calls, semantic state edits outside events); replay
+  and the invariants remain the authority.
 
 ## Run
     pip install pytest hypothesis
