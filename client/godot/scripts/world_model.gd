@@ -16,6 +16,10 @@ var ticks_per_day := 144
 var moves := {}         # agent id -> [[tick, place, route, activity], ...]: state after that tick's events
 var events := []        # every event received, in id order
 var last_tick := -1     # the newest tick with events applied
+var holdings := {}      # agent id -> [[tick, food, coin], ...]: what it holds after that tick ran. Only a playback
+						# pack has these (tools/make_playback.py, from the engine's replay): a log alone doesn't
+						# carry them, and nothing here works them out
+var engine := ""        # the engine that wrote the world, from genesis
 
 
 func load_world(world: Dictionary) -> void:
@@ -26,6 +30,7 @@ func load_world(world: Dictionary) -> void:
 	agents = world["population"]["agents"]
 	ticks_per_day = int(world.get("ticks_per_day", 144))
 	moves.clear()
+	holdings.clear()
 	for a in agents:
 		moves[int(a["id"])] = [[-1, families[int(a["family"])]["home"], null, "sleep"]]
 
@@ -36,6 +41,7 @@ func add_event(e: Dictionary) -> void:
 	if e["kind"] == "genesis":
 		events.clear()
 		load_world(d)
+		engine = str(d.get("engine", ""))
 	events.append(e)
 	last_tick = maxi(last_tick, t)
 	match e["kind"]:
@@ -74,18 +80,62 @@ func _put(aid: int, t: int, place, route, activity) -> void:
 	m.append([t, place, route, activity])
 
 
-func state_at(aid: int, view_tick: int) -> Array:
-	## [tick, place, route, activity] at view tick N: after tick N-1 ran, before tick N.
-	var m: Array = moves[aid]
+func load_file(path: String) -> String:
+	## A recorded world: a log (events.jsonl) or a playback pack (.json or .json.gz, tools/make_playback.py).
+	## Returns "" or what went wrong. A pack's holdings are the engine's own, one row per change.
+	if not FileAccess.file_exists(path):
+		return "no such file: " + path
+	var bytes := FileAccess.get_file_as_bytes(path)
+	if path.ends_with(".gz"):
+		bytes = bytes.decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP)
+	var text := bytes.get_string_from_utf8()
+	if path.ends_with(".jsonl"):
+		for line in text.split("\n", false):
+			var e = JSON.parse_string(line)
+			if typeof(e) == TYPE_DICTIONARY:  # a torn last line is skipped
+				add_event(e)
+		return "" if not events.is_empty() else "no events in " + path
+	var pack = JSON.parse_string(text)
+	if typeof(pack) != TYPE_DICTIONARY or int(pack.get("playback", 0)) != 1:
+		return "not a playback pack this client reads: " + path
+	for e in pack["events"]:
+		add_event(e)
+	for h in pack["holdings"]:
+		holdings.get_or_add(int(h[1]), []).append([int(h[0]), int(h[2]), int(h[3])])
+	last_tick = int(pack["last_tick"])
+	return ""
+
+
+static func _at(rows: Array, view_tick: int) -> Array:
+	## The last row with tick <= view_tick - 1: the state at view tick N, after tick N-1 ran and before tick N.
 	var lo := 0
-	var hi := m.size() - 1
-	while lo < hi:  # the last entry with tick <= view_tick - 1
+	var hi := rows.size() - 1
+	while lo < hi:
 		var mid := (lo + hi + 1) / 2
-		if m[mid][0] <= view_tick - 1:
+		if rows[mid][0] <= view_tick - 1:
 			lo = mid
 		else:
 			hi = mid - 1
-	return m[lo]
+	return rows[lo]
+
+
+func state_at(aid: int, view_tick: int) -> Array:
+	## [tick, place, route, activity] at view tick N.
+	return _at(moves[aid], view_tick)
+
+
+func holding_at(aid: int, view_tick: int) -> Array:
+	## [tick, food, coin] at view tick N, or [] when the world came without holdings (a bare log, a live world).
+	return _at(holdings[aid], view_tick) if holdings.has(aid) else []
+
+
+func present(place: String, view_tick: int) -> Array:
+	## Ids of everyone at a place at view tick N, in id order. Walkers are nowhere, as in the engine.
+	var out := []
+	for a in agents:
+		if state_at(int(a["id"]), view_tick)[1] == place:
+			out.append(int(a["id"]))
+	return out
 
 
 func anchor(place: String) -> Vector2i:
