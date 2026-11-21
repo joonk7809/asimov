@@ -130,3 +130,21 @@ def test_stall_watchdog_counts_filled_holes_as_progress(monkeypatch, tmp_path):
         stop.set()
         t.join()
     assert "TERMINATE" not in out, out
+
+
+def test_up_exposes_a_direct_tcp_port_beside_the_proxied_ones(monkeypatch, tmp_path):
+    """The fallback when the HTTP proxy fails (Steering 2026-11-20 23:21Z): `--tcp-port 8765` adds 8765/tcp."""
+    bodies = []
+    monkeypatch.setattr(rp, "call", lambda method, path, body=None: bodies.append(body) or {"id": "p1", "cost": 1.0})
+    monkeypatch.setattr(rp, "POD_DIR", str(tmp_path))
+    rp.up(SimpleNamespace(model="m/x", gpu=["G1"], cloud="SECURE", max_len=8192, vllm_args="", name="t",
+                          port=[8765], tcp_port=[8765], ttl_hours=0.1, stall_s=180))
+    assert bodies[0]["ports"] == ["8000/http", f"{rp.AGENT_PORT}/http", "8765/http", "8765/tcp"]
+
+
+def test_ports_prints_the_pods_ip_and_port_fields(monkeypatch, capsys):
+    pod = {"id": "p1", "publicIp": "1.2.3.4", "portMappings": {"8765": 40123}, "name": "asiimov-x", "cost": 1}
+    monkeypatch.setattr(rp, "call", lambda method, path, body=None: pod)
+    rp.ports(SimpleNamespace(pod="p1"))
+    out = capsys.readouterr().out
+    assert "1.2.3.4" in out and "40123" in out and "asiimov-x" not in out
